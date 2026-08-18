@@ -3,6 +3,8 @@ use clap::Args;
 use crate::config::MacK3dConfig;
 use crate::error::Result;
 use crate::platform::ensure_macos;
+use crate::runtime::k3d::{self, ClusterState};
+use crate::runtime::{state, Tools};
 
 #[derive(Debug, Args)]
 pub struct CleanArgs {
@@ -19,16 +21,38 @@ pub async fn run(args: CleanArgs, config: &MacK3dConfig) -> Result<()> {
     ensure_macos()?;
 
     if !args.yes {
-        tracing::warn!("clean will delete cluster {}; re-run with --yes to confirm", config.cluster.name);
+        println!(
+            "clean will delete k3d cluster '{}'. Re-run with --yes to confirm.",
+            config.cluster.name
+        );
+        if args.purge_config {
+            println!(
+                "This would also remove {}.",
+                MacK3dConfig::config_dir().display()
+            );
+        }
         return Ok(());
     }
 
-    tracing::info!(
-        cluster = %config.cluster.name,
-        purge_config = args.purge_config,
-        "clean: removing cluster and local artifacts"
-    );
+    let tools = Tools::from_config(config)?;
+    let info = k3d::inspect(&tools.k3d, &config.cluster.name).await?;
+    match info.state {
+        ClusterState::Missing => {
+            println!(
+                "k3d cluster '{}' does not exist; skipping delete.",
+                config.cluster.name
+            );
+        }
+        ClusterState::Running | ClusterState::Stopped => {
+            k3d::delete(&tools.k3d, &config.cluster.name).await?;
+        }
+    }
 
-    // TODO: k3d cluster delete, prune volumes, optional config/state purge
+    state::remove_state_dir()?;
+    if args.purge_config {
+        state::remove_config_dir()?;
+    }
+
+    println!("Clean complete.");
     Ok(())
 }

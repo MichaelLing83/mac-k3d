@@ -1,16 +1,19 @@
+use std::time::Duration;
+
 use clap::Args;
 
 use crate::config::MacK3dConfig;
 use crate::error::Result;
 use crate::platform::ensure_macos;
+use crate::runtime::{jenkins, kubectl, k3d, Tools};
 
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
-    /// Merge kubeconfig into the default kubectl context
-    #[arg(long, default_value_t = true)]
-    pub merge_kubeconfig: bool,
+    /// Do not merge kubeconfig into ~/.kube/config
+    #[arg(long)]
+    pub no_merge_kubeconfig: bool,
 
-    /// Print Jenkins URL and initial admin password hints
+    /// Print Jenkins URL and initial admin password
     #[arg(long)]
     pub show_jenkins: bool,
 }
@@ -18,16 +21,33 @@ pub struct ConfigArgs {
 pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
     ensure_macos()?;
 
-    tracing::info!(
-        merge_kubeconfig = args.merge_kubeconfig,
-        show_jenkins = args.show_jenkins,
-        "config: applying environment configuration"
-    );
+    let tools = Tools::from_config(config)?;
 
-    if config.jenkins.enabled || args.show_jenkins {
-        tracing::info!(port = config.jenkins.host_port, "jenkins UI expected on localhost");
+    if !args.no_merge_kubeconfig {
+        k3d::merge_kubeconfig(&tools.k3d, &config.cluster.name).await?;
+        kubectl::use_context(&tools.kubectl, &config.cluster.name).await?;
     }
 
-    // TODO: k3d kubeconfig merge, kubectl context, port-forward setup
+    println!("Waiting for Kubernetes API…");
+    kubectl::wait_api(&tools.kubectl, Duration::from_secs(120)).await?;
+    println!("Kubernetes API is ready.");
+
+    if config.jenkins.enabled || args.show_jenkins {
+        println!("Jenkins UI: {}", jenkins::ui_url(config));
+        match jenkins::admin_password(&tools.kubectl, config).await {
+            Ok(password) if !password.is_empty() => {
+                println!("Jenkins admin user: admin");
+                println!("Jenkins admin password: {password}");
+            }
+            Ok(_) | Err(_) => {
+                println!(
+                    "Could not read Jenkins admin password yet. Try:\n  kubectl get secret {} -n {} -o jsonpath='{{.data.jenkins-admin-password}}' | base64 -d",
+                    config.jenkins.release_name, config.jenkins.namespace
+                );
+            }
+        }
+    }
+
+    println!("Config complete.");
     Ok(())
 }

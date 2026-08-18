@@ -32,7 +32,7 @@ See [prepare-wizard.md](prepare-wizard.md) for the full questionnaire design.
 | `--init-config` | Write default `config.yaml` if missing (no wizard) |
 | `--non-interactive` | Validate existing config only; no prompts or writes |
 
-### Planned behavior
+### Behavior
 
 1. Assert macOS.
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
@@ -62,21 +62,23 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--jenkins` | `skip` | Jenkins deployment mode |
+| `--jenkins` | (config) | Override Jenkins mode for this run (`skip` or `in-cluster`) |
 | `--no-wait-docker` | false | Skip Docker Desktop readiness wait |
 
-### Planned behavior
+### Behavior
 
 1. Open Docker Desktop if not running (`open -a Docker`).
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins mode is `in-cluster`: Helm install/upgrade Jenkins chart.
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins chart.
 6. Write state file under `~/.local/state/mac-k3d/`.
+
+`--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
 
 ### Idempotency
 
-- Second `start` on a running cluster is a no-op (maybe upgrade Jenkins if chart version changed).
+- Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
 
 ---
 
@@ -85,22 +87,22 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 Apply post-start configuration: kubeconfig merge, context selection, service URLs.
 
 ```bash
-mac-k3d config [--merge-kubeconfig] [--show-jenkins]
+mac-k3d config [--no-merge-kubeconfig] [--show-jenkins]
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--merge-kubeconfig` | true | Merge k3d kubeconfig into `~/.kube/config` |
-| `--show-jenkins` | false | Print Jenkins URL and admin password hint |
+| `--no-merge-kubeconfig` | false | Skip merging k3d kubeconfig into `~/.kube/config` |
+| `--show-jenkins` | false | Print Jenkins URL and admin password |
 
-### Planned behavior
+### Behavior
 
-1. `k3d kubeconfig merge <cluster> --kubeconfig-merge-default`
+1. `k3d kubeconfig merge <cluster> --kubeconfig-merge-default --kubeconfig-switch-context`
 2. `kubectl config use-context k3d-<cluster>`
 3. Wait for API server ready (`kubectl cluster-info`).
-4. If Jenkins enabled: print `http://localhost:<host_port>` and fetch initial admin password from secret.
+4. If Jenkins enabled or `--show-jenkins`: print `http://localhost:<host_port>` and fetch initial admin password from the cluster secret.
 
 ---
 
@@ -118,7 +120,7 @@ mac-k3d teardown [--stop-docker]
 |------|-------------|
 | `--stop-docker` | Quit Docker Desktop after stopping cluster |
 
-### Planned behavior
+### Behavior
 
 1. `k3d cluster stop <name>` if running.
 2. Optionally `osascript` quit Docker Desktop.
@@ -141,13 +143,13 @@ mac-k3d clean [--purge-config] [-y|--yes]
 | `--purge-config` | Also remove `~/.config/mac-k3d/` |
 | `-y, --yes` | Skip confirmation (required to perform deletion) |
 
-### Planned behavior
+### Behavior
 
 Without `--yes`: print warning and exit 0.
 
 With `--yes`:
 
-1. `k3d cluster delete <name>` (with `--all` to remove volumes).
+1. `k3d cluster delete <name>`.
 2. Remove `~/.local/state/mac-k3d/`.
 3. If `--purge-config`: remove config directory.
 
@@ -161,7 +163,7 @@ Report current environment state (read-only).
 mac-k3d status
 ```
 
-### Planned output (example)
+### Output (example)
 
 ```text
 Docker Desktop:  running

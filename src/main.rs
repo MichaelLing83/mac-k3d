@@ -14,7 +14,9 @@ async fn main() -> mac_k3d::Result<()> {
             mac_k3d::commands::run_prepare(args, &config).await?;
         }
         mac_k3d::cli::Command::Start(args) => {
-            config.apply_jenkins_mode(args.jenkins);
+            if let Some(mode) = args.jenkins {
+                config.apply_jenkins_mode(mode);
+            }
             mac_k3d::commands::run_start(args, &config).await?;
         }
         mac_k3d::cli::Command::Config(args) => {

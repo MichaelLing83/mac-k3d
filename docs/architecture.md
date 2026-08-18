@@ -181,15 +181,16 @@ Kubernetes node roles remain internal to each Mac's own local k3d cluster (`serv
 - External command failures wrap stderr in `CommandFailed`.
 - Non-zero exit from `main` on any `Err`.
 
-## Planned modules (not yet implemented)
+## Runtime modules
 
 | Module | Responsibility |
 |--------|----------------|
-| `src/runtime/docker.rs` | Docker Desktop start/wait, `docker info` |
-| `src/runtime/k3d.rs` | Cluster create/start/stop/delete |
-| `src/runtime/kubectl.rs` | Context merge, readiness waits |
-| `src/runtime/jenkins.rs` | Helm install/status, password retrieval |
+| `src/runtime/docker.rs` | Docker Desktop start/wait/quit, `docker info` |
+| `src/runtime/k3d.rs` | Cluster create/start/stop/delete and kubeconfig merge |
+| `src/runtime/kubectl.rs` | Context switch, API readiness, secret reads |
+| `src/runtime/jenkins.rs` | Helm install/upgrade, UI URL, admin password |
 | `src/runtime/exec.rs` | Shared `tokio::process::Command` wrapper |
+| `src/runtime/state.rs` | Write/remove `~/.local/state/mac-k3d/` |
 
 ## Security considerations
 
