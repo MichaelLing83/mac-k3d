@@ -1,6 +1,6 @@
 [package]
 name = "mac-k3d"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Prepare, start, configure, and tear down k3d + Docker Desktop on macOS (optional Jenkins)"
 authors = ["MichaelLing83"]
