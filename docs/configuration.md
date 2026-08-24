@@ -12,6 +12,8 @@ Override config path with `--config /path/to/config.yaml`.
 ## Schema
 
 ```yaml
+role: standalone          # standalone | controller | worker
+
 cluster:
   name: mac-k3d           # k3d cluster name
   agents: 0               # agent node count
@@ -52,11 +54,40 @@ dependencies:
     binary: /opt/homebrew/bin/kubectl
   helm:
     source: skip
+  harbor:
+    source: skip          # install via `uv tool install harbor` or pipx
+  java:
+    source: skip          # required on workers (Jenkins agent)
+
+lolbench:
+  path: null
+  source: skip            # skip | existing | clone | release
+  git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
+
+jenkins_agent:
+  controller_url: null    # worker: Jenkins base URL
+  name: null
+  labels: [macos, docker, lolbench]
+  remote_fs: null
+  agent_jar: null
+  cpu_cores: 0            # logical cores recorded at prepare
+
+resources:
+  cpu_cores_label: CPU_CORES
+  disk_min_gb: 0          # 0 = role default (40 / 60 / 100)
 ```
 
 All fields are optional; omitted keys use defaults above.
 
 ## Field reference
+
+### `role`
+
+| Value | Meaning |
+|-------|---------|
+| `standalone` | Local k3d only |
+| `controller` | Jenkins in-cluster on this Mac |
+| `worker` | Jenkins agent + Harbor/LoLBench; no in-cluster Jenkins |
 
 ### `cluster`
 

@@ -9,47 +9,77 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MacK3dConfig {
+    /// Machine role from prepare wizard.
+    pub role: NodeRole,
     pub cluster: ClusterConfig,
     pub jenkins: JenkinsConfig,
     pub docker: DockerConfig,
     pub storage: StorageConfig,
     pub dependencies: DependenciesConfig,
+    pub lolbench: LolbenchConfig,
+    pub jenkins_agent: JenkinsAgentConfig,
+    pub resources: ResourcesConfig,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeRole {
+    #[default]
+    Standalone,
+    Controller,
+    Worker,
 }
 
 /// Where large artifacts and caches are stored (set by `prepare` wizard).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
-    /// Root directory on the volume with most free space (or user choice).
     pub base_dir: Option<PathBuf>,
-    /// Docker image/layer data (may require manual Docker Desktop relocation).
     pub docker: Option<PathBuf>,
-    /// k3d cluster and image cache.
     pub k3d: Option<PathBuf>,
-    /// Jenkins Helm charts, plugins, and persistent data.
     pub jenkins: Option<PathBuf>,
-    /// Large downloads (agent JARs, binaries).
     pub downloads: Option<PathBuf>,
 }
 
 /// How each external tool is resolved (discovered, installed, or skipped).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DependenciesConfig {
     pub docker: DependencyEntry,
     pub k3d: DependencyEntry,
     pub kubectl: DependencyEntry,
     pub helm: DependencyEntry,
+    pub harbor: DependencyEntry,
+    pub java: DependencyEntry,
+}
+
+impl Default for DependenciesConfig {
+    fn default() -> Self {
+        Self {
+            docker: DependencyEntry::default(),
+            k3d: DependencyEntry::default(),
+            kubectl: DependencyEntry::default(),
+            helm: DependencyEntry {
+                source: DependencySource::Skip,
+                ..DependencyEntry::default()
+            },
+            harbor: DependencyEntry {
+                source: DependencySource::Skip,
+                ..DependencyEntry::default()
+            },
+            java: DependencyEntry {
+                source: DependencySource::Skip,
+                ..DependencyEntry::default()
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DependencyEntry {
-    /// `existing` = use discovered/specified path; `install` = install via Homebrew; `skip` = not required.
     pub source: DependencySource,
-    /// Path to CLI binary when `source` is `existing`.
     pub binary: Option<PathBuf>,
-    /// Application bundle path (Docker Desktop only).
     pub app: Option<PathBuf>,
 }
 
@@ -65,11 +95,8 @@ pub enum DependencySource {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClusterConfig {
-    /// k3d cluster name
     pub name: String,
-    /// Number of agent nodes (in addition to the server node)
     pub agents: u8,
-    /// Host ports mapped to the cluster load balancer
     pub ports: Vec<PortMapping>,
 }
 
@@ -85,20 +112,70 @@ pub struct JenkinsConfig {
     pub enabled: bool,
     pub namespace: String,
     pub release_name: String,
-    /// Host port for Jenkins UI (via k3d port mapping)
     pub host_port: u16,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockerConfig {
-    /// Wait up to this many seconds for Docker Desktop to become ready
     pub startup_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LolbenchConfig {
+    /// Path to LoLBench-Preview checkout (optional on standalone).
+    pub path: Option<PathBuf>,
+    pub source: LolbenchSource,
+    /// Git remote used when cloning (printed/used by prepare).
+    pub git_url: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LolbenchSource {
+    #[default]
+    Skip,
+    Existing,
+    Clone,
+    Release,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JenkinsAgentConfig {
+    /// Worker only: Jenkins controller base URL.
+    pub controller_url: Option<String>,
+    pub name: Option<String>,
+    pub labels: Vec<String>,
+    pub remote_fs: Option<PathBuf>,
+    pub agent_jar: Option<PathBuf>,
+    /// Logical CPU cores recorded at prepare time.
+    pub cpu_cores: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResourcesConfig {
+    /// Jenkins Lockable Resources label for CPU capacity.
+    pub cpu_cores_label: String,
+    /// Minimum free disk (GB) required by prepare for this role (0 = use role default).
+    pub disk_min_gb: u64,
+}
+
+impl Default for ResourcesConfig {
+    fn default() -> Self {
+        Self {
+            cpu_cores_label: "CPU_CORES".into(),
+            disk_min_gb: 0,
+        }
+    }
 }
 
 impl Default for MacK3dConfig {
     fn default() -> Self {
         Self {
+            role: NodeRole::Standalone,
             cluster: ClusterConfig {
                 name: "mac-k3d".into(),
                 agents: 0,
@@ -115,13 +192,30 @@ impl Default for MacK3dConfig {
             },
             storage: StorageConfig::default(),
             dependencies: DependenciesConfig::default(),
+            lolbench: LolbenchConfig {
+                path: None,
+                source: LolbenchSource::Skip,
+                git_url: "https://github.com/MichaelLing83/LoLBench-Preview.git".into(),
+            },
+            jenkins_agent: JenkinsAgentConfig {
+                controller_url: None,
+                name: None,
+                labels: vec![
+                    "macos".into(),
+                    "docker".into(),
+                    "lolbench".into(),
+                ],
+                remote_fs: None,
+                agent_jar: None,
+                cpu_cores: 0,
+            },
+            resources: ResourcesConfig::default(),
         }
     }
 }
 
 impl StorageConfig {
-    /// Resolve a storage path: explicit override, or `base_dir/<sub>`, or None.
-    pub fn resolve<'a>(&'a self, sub: &str, explicit: &'a Option<PathBuf>) -> Option<PathBuf> {
+    pub fn resolve(&self, sub: &str, explicit: &Option<PathBuf>) -> Option<PathBuf> {
         explicit
             .clone()
             .or_else(|| self.base_dir.as_ref().map(|b| b.join(sub)))
@@ -211,16 +305,33 @@ impl MacK3dConfig {
 
     pub fn apply_jenkins_mode(&mut self, mode: JenkinsMode) {
         self.jenkins.enabled = matches!(mode, JenkinsMode::InCluster);
+        if self.jenkins.enabled {
+            self.role = NodeRole::Controller;
+        }
+    }
+
+    /// Minimum free disk in GB for prepare validation.
+    pub fn disk_min_gb(&self) -> u64 {
+        if self.resources.disk_min_gb > 0 {
+            return self.resources.disk_min_gb;
+        }
+        match self.role {
+            NodeRole::Standalone => 40,
+            NodeRole::Controller => 60,
+            NodeRole::Worker => 100,
+        }
     }
 }
 
 impl DependenciesConfig {
-    pub fn entries(&self) -> [(&str, &DependencyEntry); 4] {
+    pub fn entries(&self) -> [(&str, &DependencyEntry); 6] {
         [
             ("docker", &self.docker),
             ("k3d", &self.k3d),
             ("kubectl", &self.kubectl),
             ("helm", &self.helm),
+            ("harbor", &self.harbor),
+            ("java", &self.java),
         ]
     }
 }

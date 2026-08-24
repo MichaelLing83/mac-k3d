@@ -18,6 +18,10 @@ pub struct PrepareArgs {
     /// Write default config file if it does not exist (no wizard)
     #[arg(long, conflicts_with = "interactive")]
     pub init_config: bool,
+
+    /// Override minimum free disk (GB) for prepare validation (0 = role default)
+    #[arg(long)]
+    pub disk_min_gb: Option<u64>,
 }
 
 pub async fn run(args: PrepareArgs, config: &MacK3dConfig) -> Result<()> {
@@ -26,8 +30,13 @@ pub async fn run(args: PrepareArgs, config: &MacK3dConfig) -> Result<()> {
     let config_path = MacK3dConfig::default_config_path();
     let is_tty = atty::is(atty::Stream::Stdin);
 
+    let mut config = config.clone();
+    if let Some(min) = args.disk_min_gb {
+        config.resources.disk_min_gb = min;
+    }
+
     if args.non_interactive {
-        prepare::validate(config)?;
+        prepare::validate(&config)?;
         tracing::info!("prepare: non-interactive validation complete");
         return Ok(());
     }
@@ -45,7 +54,7 @@ pub async fn run(args: PrepareArgs, config: &MacK3dConfig) -> Result<()> {
     if config_path.exists() && is_tty && !args.interactive {
         match prepare::prompt_existing_config()? {
             ExistingConfigAction::ValidateOnly => {
-                prepare::validate(config)?;
+                prepare::validate(&config)?;
                 tracing::info!("prepare: validated existing configuration");
                 return Ok(());
             }
@@ -57,12 +66,22 @@ pub async fn run(args: PrepareArgs, config: &MacK3dConfig) -> Result<()> {
     let run_wizard = args.interactive || (is_tty && !config_path.exists());
 
     if run_wizard {
-        let generated = prepare::run_interactive()?;
+        let mut generated = prepare::run_interactive()?;
+        if let Some(min) = args.disk_min_gb {
+            generated.resources.disk_min_gb = min;
+            // Re-check after override (wizard already checked role default).
+            let disk_path = generated
+                .storage
+                .base_dir
+                .as_deref()
+                .unwrap_or(std::path::Path::new("/"));
+            prepare::resources::ensure_disk_min(disk_path, generated.disk_min_gb())?;
+        }
         generated.save(Some(&config_path))?;
         tracing::info!("wrote config to {}", config_path.display());
         prepare::validate(&generated)?;
     } else {
-        prepare::validate(config)?;
+        prepare::validate(&config)?;
         tracing::info!(cluster = %config.cluster.name, "prepare: validated existing configuration");
     }
 

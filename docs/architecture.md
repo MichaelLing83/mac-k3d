@@ -139,6 +139,7 @@ Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.
 - A Mac with Jenkins enabled is the "controller" role for CI orchestration.
 - Macs without Jenkins are "worker" role machines (local execution targets), but they are not Kubernetes worker nodes of the controller's k3d cluster.
 - This is the recommended model for v1 because it avoids cross-host k3d networking complexity.
+- When several Mac Minis share one Internet Ethernet drop, put them on a switched LAN (router + switch). See [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
 
 ### Multiple Macs as one Kubernetes cluster (not supported in v1)
 
@@ -157,6 +158,7 @@ Kubernetes node roles remain internal to each Mac's own local k3d cluster (`serv
 
 ## Cross-network operation (not necessarily LAN)
 
+- Co-located Mac Minis should use a shared switched LAN; see [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
 - Connectivity over VPN, routed corporate networks, or public internet can work if endpoints are reachable and secured.
 - Remote workers only need network access to Jenkins controller endpoints (HTTPS + agent transport), not direct membership in the controller's k3d Docker network.
 - Latency and intermittent links are expected; Jenkins agents should be configured for reconnect and retry behavior.
@@ -171,7 +173,7 @@ Kubernetes node roles remain internal to each Mac's own local k3d cluster (`serv
 ### Security baseline
 
 - Do not expose an unsecured Jenkins endpoint publicly.
-- Prefer VPN or private overlay network between Macs.
+- Prefer a shared switched LAN when Macs are co-located; otherwise prefer VPN or a private overlay.
 - Use per-agent credentials/tokens and rotate regularly.
 - Restrict inbound ports to Jenkins and required management access only.
 

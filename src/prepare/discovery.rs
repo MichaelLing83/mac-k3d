@@ -10,6 +10,10 @@ pub struct DiscoveredDeps {
     pub k3d: Option<DiscoveredTool>,
     pub kubectl: Option<DiscoveredTool>,
     pub helm: Option<DiscoveredTool>,
+    pub harbor: Option<DiscoveredTool>,
+    pub java: Option<DiscoveredTool>,
+    pub uv: Option<DiscoveredTool>,
+    pub pipx: Option<DiscoveredTool>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,10 @@ pub fn discover_all() -> DiscoveredDeps {
         k3d: discover_on_path("k3d"),
         kubectl: discover_on_path("kubectl"),
         helm: discover_on_path("helm"),
+        harbor: discover_on_path("harbor"),
+        java: discover_java(),
+        uv: discover_on_path("uv"),
+        pipx: discover_on_path("pipx"),
     }
 }
 
@@ -55,6 +63,27 @@ fn discover_docker() -> Option<DiscoveredTool> {
     }
 }
 
+fn discover_java() -> Option<DiscoveredTool> {
+    if let Some(binary) = which("java") {
+        return Some(DiscoveredTool {
+            binary,
+            app: None,
+            version_hint: version_of("java", &which("java").unwrap_or_default()),
+        });
+    }
+    let output = Command::new("/usr/libexec/java_home").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let binary = PathBuf::from(&home).join("bin/java");
+    binary.exists().then_some(DiscoveredTool {
+        binary,
+        app: None,
+        version_hint: Some(home),
+    })
+}
+
 fn discover_on_path(name: &str) -> Option<DiscoveredTool> {
     let binary = which(name)?;
     let version_hint = version_of(name, &binary);
@@ -66,11 +95,20 @@ fn discover_on_path(name: &str) -> Option<DiscoveredTool> {
 }
 
 fn version_of(name: &str, binary: &PathBuf) -> Option<String> {
-    let flag = if name == "docker" { "--version" } else { "version" };
+    if binary.as_os_str().is_empty() {
+        return None;
+    }
+    let flag = match name {
+        "docker" | "java" => "--version",
+        "harbor" => "--version",
+        _ => "version",
+    };
     let output = Command::new(binary).arg(flag).output().ok()?;
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout);
-        Some(text.lines().next()?.trim().to_string())
+        let err = String::from_utf8_lossy(&output.stderr);
+        let line = text.lines().next().or_else(|| err.lines().next())?;
+        Some(line.trim().to_string())
     } else {
         None
     }
@@ -84,6 +122,34 @@ pub fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
+/// Search common locations for a LoLBench-Preview checkout.
+pub fn find_lolbench_checkouts() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut candidates = Vec::new();
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        candidates.push(home.join("github/LoLBench-Preview"));
+        candidates.push(home.join("src/LoLBench-Preview"));
+        candidates.push(home.join("LoLBench-Preview"));
+    }
+
+    if let Ok(entries) = std::fs::read_dir("/Volumes") {
+        for entry in entries.flatten() {
+            let p = entry.path().join("github/LoLBench-Preview");
+            candidates.push(p);
+        }
+    }
+
+    for path in candidates {
+        if path.join("harbor_tasks").is_dir() || path.join("scripts/run_task.sh").is_file() {
+            if !found.contains(&path) {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
 impl DiscoveredTool {
     pub fn describe(&self) -> String {
         let mut parts = vec![format!("binary: {}", self.binary.display())];
@@ -94,18 +160,6 @@ impl DiscoveredTool {
             parts.push(format!("version: {v}"));
         }
         parts.join(", ")
-    }
-}
-
-impl DiscoveredDeps {
-    pub fn get(&self, name: &str) -> Option<&DiscoveredTool> {
-        match name {
-            "docker" => self.docker.as_ref(),
-            "k3d" => self.k3d.as_ref(),
-            "kubectl" => self.kubectl.as_ref(),
-            "helm" => self.helm.as_ref(),
-            _ => None,
-        }
     }
 }
 
@@ -130,6 +184,8 @@ pub fn to_dependencies_config(deps: &DiscoveredDeps) -> DependenciesConfig {
         k3d: default_entry(&deps.k3d),
         kubectl: default_entry(&deps.kubectl),
         helm: default_entry(&deps.helm),
+        harbor: default_entry(&deps.harbor),
+        java: default_entry(&deps.java),
     }
 }
 
@@ -139,7 +195,6 @@ mod tests {
 
     #[test]
     fn which_finds_common_tools_or_none() {
-        // Should not panic regardless of what's installed.
         let _ = which("k3d");
     }
 }

@@ -169,7 +169,17 @@ kubectl get pods -n jenkins
 
 Use this when Mac A runs Jenkins and Mac B/C run Jenkins agents with their own local k3d clusters.
 
-See [deployment.md](deployment.md) for the topology diagram.
+See [deployment.md](deployment.md) for the logical topology and the physical LAN layout.
+
+### Physical connection
+
+If the Macs are in the same place and you have **one Internet RJ45**, connect them like this:
+
+1. Put a **router** on the ISP/wall uplink (skip this if the ISP box already provides NAT/DHCP).
+2. Put an **Ethernet switch** on the router LAN.
+3. Plug **each Mac Mini's built-in RJ45** into the switch.
+
+Do not daisy-chain the Minis or use macOS Internet Sharing. Give the controller a stable DHCP reservation or static IP so workers can reach Jenkins at `http://<controller-ip>:9080`.
 
 ### Overview
 
@@ -217,17 +227,22 @@ Complete the Jenkins setup wizard at `http://localhost:9080`.
 
 Workers on other Macs must reach the Jenkins controller. Choose one:
 
-**Option 1 — VPN / private network (recommended)**
+**Option 1 — Shared LAN (recommended when co-located)**
+
+- Connect all Mac Minis through a router and Ethernet switch as in [Physical LAN](deployment.md#physical-lan-co-located-mac-minis).
+- Use Mac A's LAN IP or hostname (e.g. `http://192.168.1.10:9080` or `http://mac-a.local:9080`).
+
+**Option 2 — VPN / private overlay (recommended when not co-located)**
 
 - Put all Macs on the same VPN or routed network.
 - Use Mac A's VPN IP or hostname (e.g. `https://jenkins.internal:9080`).
 
-**Option 2 — Port forward / reverse proxy**
+**Option 3 — Port forward / reverse proxy**
 
 - Forward port 9080 on Mac A to a stable public hostname with TLS.
 - Use a reverse proxy (nginx, Caddy) with HTTPS in front of Jenkins.
 
-**Option 3 — SSH tunnel (development only)**
+**Option 4 — SSH tunnel (development only)**
 
 On each worker Mac:
 

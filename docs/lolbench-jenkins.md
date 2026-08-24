@@ -37,7 +37,7 @@ To run many tasks, trigger `lolbench_one_task` once per task (or add a separate 
        v
   Mac B/C  Jenkins agent  label: lolbench
        |  Docker Desktop + harbor CLI + LoLBench checkout
-       |  lockable resource: lolbench-large (1 per Mac)
+       |  lockable resource: CPU_CORES (quantity = logical cores on that Mac)
        v
   harbor run  (docker containers on the worker)
        |
@@ -146,9 +146,11 @@ Each task is sized like a **large** job: **4 CPUs, 8 GB RAM, ~20 GB disk**, up t
 
 Use the slot model from [deployment.md](deployment.md):
 
-| Resource label | Quantity per worker | Used by |
-|----------------|---------------------|---------|
-| `lolbench-large` | 1+ (capacity) | `lolbench_one_task` (`lock(label: 'lolbench-large', quantity: 1)` per build) |
+| Resource label | Quantity model | Used by |
+|----------------|----------------|---------|
+| `CPU_CORES` | capacity = host logical CPUs (from prepare) | `lolbench_one_task` via `lock(label: 'CPU_CORES', quantity: N)` |
+
+Prefer `CPU_CORES` over a single opaque `lolbench-large` slot so jobs can request a core budget.
 
 With `--jobs-dir` isolation, you may raise per-Mac lock quantity (e.g. 2) when RAM allows two × ~8 GB containers. Start at **1**; increase only after measuring host pressure.
 
@@ -230,7 +232,7 @@ Keep `lolbench_one_task` for single-task debug and oracle checks.
 
 ### Option B — Jenkins owns parallelism (`lolbench_one_task` × N)
 
-Many one-task builds; each build **already** isolates via `--jobs-dir` (see above). Raise per-Mac `lolbench-large` quantity when the host can run more than one container.
+Many one-task builds; each build **already** isolates via `--jobs-dir` (see above). Raise per-Mac `CPU_CORES` quantity when the host can run more concurrent Harbor containers.
 
 | Pros | Cons |
 |------|------|
@@ -332,7 +334,7 @@ pipeline {
   stages {
     stage('Evaluate') {
       steps {
-        lock(label: 'lolbench-large', quantity: 1) {
+        lock(label: 'CPU_CORES', quantity: 4) {
           sh '''
             set -euo pipefail
             test -d "harbor_tasks/${TASK}"
@@ -405,7 +407,7 @@ On each `lolbench` agent:
 2. Docker Desktop with a large disk (images 2–17 GB each).
 3. `uv tool install harbor` (or `pipx install harbor`).
 4. Jenkins agent connected, labels `macos docker lolbench`.
-5. One lockable resource with label `lolbench-large`.
+5. Lockable Resources totaling `CPU_CORES` = logical CPU count (created/documented by `mac-k3d prepare` on the worker).
 
 k3d does not need the LoLBench images imported.
 
@@ -424,7 +426,7 @@ curl -X POST "https://jenkins.example.com/job/lolbench_one_task/buildWithParamet
   --data-urlencode SUITE=union
 ```
 
-A wrapper job can fan out over a task list by triggering `lolbench_one_task` N times (each acquires `lolbench-large` on some worker).
+A wrapper job can fan out over a task list by triggering `lolbench_one_task` N times (each acquires `CPU_CORES` on some worker).
 
 ---
 

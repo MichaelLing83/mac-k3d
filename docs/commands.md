@@ -20,6 +20,7 @@ mac-k3d prepare                    # interactive wizard (TTY, no existing config
 mac-k3d prepare -i                 # force interactive wizard
 mac-k3d prepare --init-config      # write defaults, no prompts
 mac-k3d prepare --non-interactive  # validate only
+mac-k3d prepare --disk-min-gb 20   # override role disk minimum (labs only)
 ```
 
 See [prepare-wizard.md](prepare-wizard.md) for the full questionnaire design.
@@ -31,15 +32,18 @@ See [prepare-wizard.md](prepare-wizard.md) for the full questionnaire design.
 | `-i, --interactive` | Run interactive wizard to generate config |
 | `--init-config` | Write default `config.yaml` if missing (no wizard) |
 | `--non-interactive` | Validate existing config only; no prompts or writes |
+| `--disk-min-gb N` | Override minimum free disk (GB); `0` in config means role default |
 
 ### Behavior
 
 1. Assert macOS.
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
-3. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm on PATH and common locations; prompt to **use existing**, **specify path**, or **install** (never uninstall without consent).
-4. **Role**: ask controller / worker / standalone; set `jenkins.enabled` accordingly.
-5. **Cluster**: confirm name, agents, ports.
-6. Write `~/.config/mac-k3d/config.yaml` and run validation.
+3. **Role**: standalone / controller / worker; set `jenkins.enabled` for controller.
+4. **Dependencies**: discover Docker Desktop, k3d, kubectl, helm, Harbor (`uv`/`pipx`), Java; prompt to use existing, specify path, or install.
+5. **LoLBench**: prefer a found checkout; otherwise print `git clone` / release unpack commands and optionally clone.
+6. **Resources**: controller → ensure `CPU_CORES` Lockable Resources label; worker → Jenkins URL, download `agent.jar`, optional API registration, capacity = logical CPU cores.
+7. **Disk check**: fail if free space on storage volume is below role minimum (standalone 40 GB, controller 60 GB, worker 100 GB).
+8. Write `~/.config/mac-k3d/config.yaml` and run validation.
 
 ### Exit codes
 

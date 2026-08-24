@@ -31,7 +31,7 @@ Each Mac is a self-contained environment:
 ## Multi-Mac topology
 
 ```text
-                  (VPN / routed network / internet)
+                  (LAN / VPN / routed network / internet)
 +------------------------+      +------------------------+
 | Mac A (controller)     |      | Mac B (worker)         |
 | - Docker Desktop       |      | - Docker Desktop       |
@@ -52,14 +52,51 @@ Each Mac is a self-contained environment:
 
 Important: Mac B and Mac C are not Kubernetes nodes in cluster A. They are separate machines coordinated at the CI layer.
 
+## Physical LAN (co-located Mac Minis)
+
+When several Mac Minis share **one Internet Ethernet drop**, put them on a shared switched LAN. Do not daisy-chain the Minis, and do not use macOS Internet Sharing.
+
+Each current Mac Mini already has its own RJ45. The constraint is the single uplink, not a missing port on each Mini.
+
+```text
+ISP / wall RJ45  (one uplink)
+        |
+        v
+   Router               ← NAT, DHCP, firewall
+        |                 (skip if the ISP box already NATs)
+        v
+   Ethernet switch      ← unmanaged 5/8/16-port, gigabit or faster
+        |        |        |
+        v        v        v
+   Mac Mini A  Mac Mini B  Mac Mini C
+   controller  worker      worker
+```
+
+| Situation | What to buy |
+|-----------|-------------|
+| ISP box is already a router with one free LAN port | Ethernet switch only |
+| ISP box is a modem/ONT with a single public IP | Router first, then a switch if the router does not have enough LAN ports |
+
+After they are on the same LAN:
+
+- Give the controller a **DHCP reservation or static IP** (and a hostname if DNS is available).
+- Point workers at `http://<controller-ip>:<jenkins.host_port>` (HTTPS in front if exposed beyond the LAN).
+- Prefer **inbound Jenkins agents** (worker connects out to the controller).
+- Use Wi-Fi only as a fallback. Wired is the intended path for CI.
+
+A gigabit switch is enough for Jenkins agent traffic. Use 2.5G/10G only if the Minis have matching Ethernet and you need fast LAN copies. Internet speed is still limited by the single uplink.
+
+**Do not:** daisy-chain Minis, share Internet from one Mini to the others, or expose unsecured Jenkins on the public internet.
+
 ## Network assumptions
 
+- Co-located Macs share a switched LAN as described above.
 - Workers can reach the Jenkins controller endpoint.
 - DNS or static host mapping resolves the controller.
 - Firewall/NAT allows agent traffic.
 - TLS is enabled for remote access.
 
-This can work outside LAN (for example over VPN or public network) if security and routing are configured.
+This can also work outside LAN (for example over VPN or public network) if security and routing are configured. For machines in the same room, prefer the physical LAN over VPN.
 
 ## Jenkins scheduling and back pressure on worker Macs
 

@@ -1,11 +1,14 @@
 pub mod discovery;
 pub mod install;
+pub mod jenkins_agent;
+pub mod lolbench;
+pub mod resources;
 pub mod volumes;
 pub mod wizard;
 
 use std::path::Path;
 
-use crate::config::{DependencySource, MacK3dConfig};
+use crate::config::{DependencySource, LolbenchSource, MacK3dConfig, NodeRole};
 use crate::error::{Error, Result};
 
 pub use wizard::{ExistingConfigAction, MacRole};
@@ -83,6 +86,49 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
         ));
     }
 
+    if matches!(config.role, NodeRole::Worker | NodeRole::Controller)
+        || config.lolbench.source != LolbenchSource::Skip
+    {
+        if let Some(path) = &config.lolbench.path {
+            if !path.exists() {
+                problems.push(format!("lolbench.path not found: {}", path.display()));
+            } else if !lolbench::looks_like_lolbench(path) {
+                problems.push(format!(
+                    "lolbench.path does not look like LoLBench: {}",
+                    path.display()
+                ));
+            }
+        } else if matches!(config.role, NodeRole::Worker)
+            && config.dependencies.harbor.source != DependencySource::Skip
+        {
+            problems.push("worker with Harbor expects lolbench.path".into());
+        }
+    }
+
+    if matches!(config.role, NodeRole::Worker) {
+        if config
+            .jenkins_agent
+            .controller_url
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            problems.push("worker role requires jenkins_agent.controller_url".into());
+        }
+        if config.jenkins_agent.cpu_cores == 0 {
+            problems.push("worker role expects jenkins_agent.cpu_cores > 0".into());
+        }
+    }
+
+    let disk_path = config
+        .storage
+        .base_dir
+        .as_deref()
+        .unwrap_or(Path::new("/"));
+    if let Err(e) = resources::ensure_disk_min(disk_path, config.disk_min_gb()) {
+        problems.push(e.to_string());
+    }
+
     if problems.is_empty() {
         tracing::info!("validation passed");
         Ok(())
@@ -96,8 +142,18 @@ pub fn validate(config: &MacK3dConfig) -> Result<()> {
 
 fn required_dependencies(config: &MacK3dConfig) -> Vec<&'static str> {
     let mut deps = vec!["docker", "k3d", "kubectl"];
-    if config.jenkins.enabled {
+    if config.jenkins.enabled || matches!(config.role, NodeRole::Controller) {
         deps.push("helm");
+    }
+    if matches!(config.role, NodeRole::Worker)
+        || config.lolbench.source != LolbenchSource::Skip
+    {
+        if config.dependencies.harbor.source != DependencySource::Skip {
+            deps.push("harbor");
+        }
+    }
+    if matches!(config.role, NodeRole::Worker) {
+        deps.push("java");
     }
     deps
 }
