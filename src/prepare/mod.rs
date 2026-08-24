@@ -2,6 +2,7 @@ pub mod discovery;
 pub mod install;
 pub mod jenkins_agent;
 pub mod lolbench;
+pub mod path_env;
 pub mod resources;
 pub mod volumes;
 pub mod wizard;

@@ -4,6 +4,7 @@ use std::process::Command;
 use crate::config::{DependencyEntry, DependencySource};
 use crate::error::{Error, Result};
 use crate::prepare::discovery::{self, DiscoveredTool};
+use crate::prepare::path_env;
 
 /// Install a dependency and return the discovered entry afterward.
 pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
@@ -21,6 +22,9 @@ pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
 }
 
 fn install_harbor() -> Result<DependencyEntry> {
+    // uv installs shims into ~/.local/bin; put it on PATH for this process first.
+    path_env::ensure_user_local_bin_in_process()?;
+
     if discovery::which("uv").is_some() {
         tracing::info!("installing harbor via uv tool install");
         run_cmd("uv", &["tool", "install", "harbor"])?;
@@ -30,6 +34,7 @@ fn install_harbor() -> Result<DependencyEntry> {
     } else if brew_available() {
         tracing::info!("installing uv via Homebrew, then harbor");
         run_cmd("brew", &["install", "uv"])?;
+        path_env::ensure_user_local_bin_in_process()?;
         run_cmd("uv", &["tool", "install", "harbor"])?;
     } else {
         return Err(Error::DependencyMissing(
@@ -37,12 +42,27 @@ fn install_harbor() -> Result<DependencyEntry> {
         ));
     }
 
-    discovery::discover_all()
-        .harbor
+    // Persist PATH in shell RC only after a successful install (prompt once).
+    path_env::ensure_user_local_bin(true)?;
+
+    discover_harbor()
         .map(|t| tool_to_entry(&t))
         .ok_or_else(|| {
-            Error::DependencyMissing("harbor installed but binary not found on PATH".into())
+            Error::DependencyMissing(
+                "harbor installed but binary not found (checked PATH and ~/.local/bin)".into(),
+            )
         })
+}
+
+fn discover_harbor() -> Option<DiscoveredTool> {
+    discovery::discover_all().harbor.or_else(|| {
+        let bin = path_env::user_local_bin()?.join("harbor");
+        bin.exists().then(|| DiscoveredTool {
+            binary: bin,
+            app: None,
+            version_hint: None,
+        })
+    })
 }
 
 fn install_via_brew(brew_args: &[&str], name: &str) -> Result<DependencyEntry> {

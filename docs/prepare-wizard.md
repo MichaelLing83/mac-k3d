@@ -100,7 +100,16 @@ harbor: not found
 Choice [1]:
 ```
 
-If Harbor is found on PATH, offer use-existing (recommended) vs reinstall.
+If Harbor is found on PATH (or at `~/.local/bin/harbor`), offer use-existing (recommended) vs reinstall.
+
+After `uv tool install harbor`, prepare ensures `~/.local/bin` is on **this process's** `PATH`. If it is missing from the user's shell config, prepare **prompts** before appending:
+
+```bash
+# Added by mac-k3d prepare (uv/harbor tools)
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+(to `~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or `fish_add_path` for fish). Decline keeps the session PATH update only.
 
 ---
 

@@ -85,7 +85,15 @@ fn discover_java() -> Option<DiscoveredTool> {
 }
 
 fn discover_on_path(name: &str) -> Option<DiscoveredTool> {
-    let binary = which(name)?;
+    let binary = which(name).or_else(|| {
+        if name == "harbor" {
+            crate::prepare::path_env::user_local_bin()
+                .map(|d| d.join("harbor"))
+                .filter(|p| p.exists())
+        } else {
+            None
+        }
+    })?;
     let version_hint = version_of(name, &binary);
     Some(DiscoveredTool {
         binary,
