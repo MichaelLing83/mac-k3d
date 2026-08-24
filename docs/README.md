@@ -8,6 +8,7 @@
 | [deployment.md](deployment.md) | Single-Mac and multi-Mac controller/worker topology |
 | [setup.md](setup.md) | Step-by-step setup for single- and multi-Mac environments |
 | [prepare-wizard.md](prepare-wizard.md) | Interactive `prepare` questionnaire design |
+| [lolbench-jenkins.md](lolbench-jenkins.md) | `lolbench_one_task` Jenkins job (one LoLBench task per build) |
 
 ## Goals
 
