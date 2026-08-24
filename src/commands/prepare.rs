@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::Args;
 
 use crate::config::MacK3dConfig;
@@ -24,10 +26,16 @@ pub struct PrepareArgs {
     pub disk_min_gb: Option<u64>,
 }
 
-pub async fn run(args: PrepareArgs, config: &MacK3dConfig) -> Result<()> {
+pub async fn run(
+    args: PrepareArgs,
+    config: &MacK3dConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     ensure_macos()?;
 
-    let config_path = MacK3dConfig::default_config_path();
+    let config_path: PathBuf = config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(MacK3dConfig::default_config_path);
     let is_tty = atty::is(atty::Stream::Stdin);
 
     let mut config = config.clone();

@@ -11,7 +11,7 @@ async fn main() -> mac_k3d::Result<()> {
 
     match cli.command {
         mac_k3d::cli::Command::Prepare(args) => {
-            mac_k3d::commands::run_prepare(args, &config).await?;
+            mac_k3d::commands::run_prepare(args, &config, cli.config.as_deref()).await?;
         }
         mac_k3d::cli::Command::Start(args) => {
             if let Some(mode) = args.jenkins {
@@ -26,7 +26,7 @@ async fn main() -> mac_k3d::Result<()> {
             mac_k3d::commands::run_teardown(args, &config).await?;
         }
         mac_k3d::cli::Command::Clean(args) => {
-            mac_k3d::commands::run_clean(args, &config).await?;
+            mac_k3d::commands::run_clean(args, &config, cli.config.as_deref()).await?;
         }
         mac_k3d::cli::Command::Status => {
             mac_k3d::commands::run_status(&config).await?;

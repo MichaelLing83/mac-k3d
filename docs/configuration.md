@@ -71,6 +71,8 @@ jenkins_agent:
   remote_fs: null
   agent_jar: null
   cpu_cores: 0            # logical cores recorded at prepare
+  api_user: null          # plaintext for now; encrypt later
+  api_token: null         # plaintext for now; encrypt later
 
 resources:
   cpu_cores_label: CPU_CORES

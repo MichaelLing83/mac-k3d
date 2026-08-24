@@ -64,6 +64,18 @@ pub fn remove_config_dir() -> Result<()> {
     Ok(())
 }
 
+/// Remove a single config file (e.g. worker.yaml) without deleting the whole config dir.
+pub fn remove_config_file(path: &std::path::Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_file(path)
+            .map_err(|e| Error::Config(format!("failed to remove {}: {e}", path.display())))?;
+        println!("Removed {}", path.display());
+    } else {
+        println!("Config file {} not present; nothing to purge.", path.display());
+    }
+    Ok(())
+}
+
 fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let contents = serde_json::to_string_pretty(value)
         .map_err(|e| Error::Config(format!("failed to serialize {}: {e}", path.display())))?;

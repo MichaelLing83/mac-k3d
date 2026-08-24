@@ -152,6 +152,10 @@ pub struct JenkinsAgentConfig {
     pub agent_jar: Option<PathBuf>,
     /// Logical CPU cores recorded at prepare time.
     pub cpu_cores: u32,
+    /// Jenkins user for REST API (plaintext for now; encrypt later).
+    pub api_user: Option<String>,
+    /// Jenkins API token (plaintext for now; encrypt later).
+    pub api_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +212,8 @@ impl Default for MacK3dConfig {
                 remote_fs: None,
                 agent_jar: None,
                 cpu_cores: 0,
+                api_user: None,
+                api_token: None,
             },
             resources: ResourcesConfig::default(),
         }

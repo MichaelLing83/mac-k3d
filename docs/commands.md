@@ -21,6 +21,8 @@ mac-k3d prepare -i                 # force interactive wizard
 mac-k3d prepare --init-config      # write defaults, no prompts
 mac-k3d prepare --non-interactive  # validate only
 mac-k3d prepare --disk-min-gb 20   # override role disk minimum (labs only)
+# Same Mac: worker config alongside a controller (see below)
+mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 ```
 
 See [prepare-wizard.md](prepare-wizard.md) for the full questionnaire design.
@@ -33,6 +35,28 @@ See [prepare-wizard.md](prepare-wizard.md) for the full questionnaire design.
 | `--init-config` | Write default `config.yaml` if missing (no wizard) |
 | `--non-interactive` | Validate existing config only; no prompts or writes |
 | `--disk-min-gb N` | Override minimum free disk (GB); `0` in config means role default |
+
+Global `-c / --config` is honored: prepare reads and writes that path (not only the default).
+
+### Single-Mac controller + worker test
+
+To exercise **worker prepare** while Jenkins already runs on this Mac:
+
+1. Prepare/start **controller** with the default config (`role: controller` → `mac-k3d start`).
+2. Finish Jenkins UI setup; create an API token (for auto-registration) or leave token empty for manual node create.
+3. Prepare **worker** into a separate file:
+
+```bash
+mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
+# Role: CI worker
+# Jenkins URL: http://localhost:9080
+# k3d agents: 0  (optional local cluster; not required for LoLBench)
+```
+
+4. Confirm agent files under the worker remote root / downloads, and that the node appears (or launch script is ready) on the controller.
+5. Do **not** `clean --purge-config` the default controller config while testing the worker file.
+
+`mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); LoLBench only needs the host agent + Docker/Harbor.
 
 ### Behavior
 
@@ -91,7 +115,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 Apply post-start configuration: kubeconfig merge, context selection, service URLs.
 
 ```bash
-mac-k3d config [--no-merge-kubeconfig] [--show-jenkins]
+mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent]
 ```
 
 ### Flags
@@ -100,13 +124,14 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins]
 |------|---------|-------------|
 | `--no-merge-kubeconfig` | false | Skip merging k3d kubeconfig into `~/.kube/config` |
 | `--show-jenkins` | false | Print Jenkins URL and admin password |
+| `--skip-agent` | false | Worker: skip Jenkins agent register / launch-script update |
 
 ### Behavior
 
-1. `k3d kubeconfig merge <cluster> --kubeconfig-merge-default --kubeconfig-switch-context`
-2. `kubectl config use-context k3d-<cluster>`
-3. Wait for API server ready (`kubectl cluster-info`).
-4. If Jenkins enabled or `--show-jenkins`: print `http://localhost:<host_port>` and fetch initial admin password from the cluster secret.
+1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
+2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
+3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
+4. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node and rewrite `launch-agent.sh` (unless `--skip-agent`).
 
 ---
 
@@ -138,13 +163,14 @@ Remove cluster, volumes, and local artifacts.
 
 ```bash
 mac-k3d clean [--purge-config] [-y|--yes]
+mac-k3d clean -c ~/.config/mac-k3d/worker.yaml --purge-config --yes
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--purge-config` | Also remove `~/.config/mac-k3d/` |
+| `--purge-config` | Default config: remove `~/.config/mac-k3d/`. With `-c FILE`: remove **only that file** |
 | `-y, --yes` | Skip confirmation (required to perform deletion) |
 
 ### Behavior
@@ -153,9 +179,9 @@ Without `--yes`: print warning and exit 0.
 
 With `--yes`:
 
-1. `k3d cluster delete <name>`.
-2. Remove `~/.local/state/mac-k3d/`.
-3. If `--purge-config`: remove config directory.
+1. `k3d cluster delete <name>` from the loaded config.
+2. Without `-c`: remove `~/.local/state/mac-k3d/`. With `-c`: leave shared state intact.
+3. If `--purge-config`: remove the `-c` file only, or the whole config directory when using the default path.
 
 ---
 

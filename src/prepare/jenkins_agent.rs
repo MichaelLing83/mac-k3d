@@ -104,27 +104,30 @@ pub fn try_register_node(
     let auth = format!("{user}:{token}");
     let labels_joined = labels.join(" ");
 
-    let crumb = fetch_crumb(base, &auth);
+    let cookie_file = tempfile_path("mac-k3d-jenkins-cookies")?;
+    let crumb = fetch_crumb(base, &auth, &cookie_file);
 
     // Skip create if node already exists.
-    let exists = curl_status(base, &auth, &format!("/computer/{agent_name}/api/json"), &crumb)
+    let exists = curl_status(base, &auth, &format!("/computer/{agent_name}/api/json"), &crumb, &cookie_file)
         .map(|c| c == 200)
         .unwrap_or(false);
 
     if !exists {
         let xml = agent_config_xml(agent_name, remote_fs, &labels_joined);
+        // Modern Jenkins: POST /computer/createItem?name=… with XML body.
+        // (doCreateItem expects a Stapler form submission and returns HTTP 400 for raw XML.)
         let create_url = format!(
-            "{base}/computer/doCreateItem?name={}&type=hudson.slaves.DumbSlave",
+            "{base}/computer/createItem?name={}",
             urlencoding_simple(agent_name)
         );
         println!("Registering Jenkins agent '{agent_name}' on {base} …");
         let mut cmd = Command::new("curl");
         cmd.args([
             "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
+            "-b",
+            &cookie_file.display().to_string(),
+            "-c",
+            &cookie_file.display().to_string(),
             "-u",
             &auth,
             "-H",
@@ -134,26 +137,44 @@ pub fn try_register_node(
             &create_url,
             "--data-binary",
             &xml,
+            "-w",
+            "\n%{http_code}",
         ]);
         if let Some((field, value)) = &crumb {
             cmd.args(["-H", &format!("{field}: {value}")]);
         }
         let output = cmd.output().map_err(|e| Error::CommandFailed {
-            cmd: "curl doCreateItem".into(),
+            cmd: "curl computer/createItem".into(),
             source: e.into(),
         })?;
-        let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if code != "200" && code != "302" && code != "303" {
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let code = raw.lines().last().unwrap_or("").trim().to_string();
+        if code != "200" && code != "201" && code != "302" && code != "303" {
+            let body: String = raw
+                .lines()
+                .rev()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let snippet: String = body.chars().take(240).collect();
             println!(
-                "Warning: failed to create agent via API (HTTP {code}). Create the node in the UI, then paste the secret into the launch script."
+                "Warning: failed to create agent via API (HTTP {code}). {snippet}\n\
+                 Create the node in the UI, then paste the secret into the launch script."
             );
+            let _ = std::fs::remove_file(&cookie_file);
             return Ok(None);
         }
     } else {
         println!("Jenkins agent '{agent_name}' already exists on controller.");
     }
 
-    match fetch_jnlp_secret(base, &auth, agent_name, &crumb) {
+    let secret = fetch_jnlp_secret(base, &auth, agent_name, &crumb, &cookie_file);
+    let _ = std::fs::remove_file(&cookie_file);
+
+    match secret {
         Some(secret) => {
             println!("Retrieved agent connection secret.");
             Ok(Some(secret))
@@ -194,9 +215,26 @@ fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str) -> String {
     )
 }
 
-fn fetch_crumb(base: &str, auth: &str) -> Option<(String, String)> {
+fn tempfile_path(prefix: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("{prefix}-{}", std::process::id()));
+    // Ensure file exists for curl -c
+    std::fs::File::create(&path).map_err(|e| Error::Config(e.to_string()))?;
+    Ok(path)
+}
+
+fn fetch_crumb(base: &str, auth: &str, cookie_file: &Path) -> Option<(String, String)> {
     let output = Command::new("curl")
-        .args(["-fsS", "-u", auth, &format!("{base}/crumbIssuer/api/json")])
+        .args([
+            "-fsS",
+            "-b",
+            &cookie_file.display().to_string(),
+            "-c",
+            &cookie_file.display().to_string(),
+            "-u",
+            auth,
+            &format!("{base}/crumbIssuer/api/json"),
+        ])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -208,13 +246,23 @@ fn fetch_crumb(base: &str, auth: &str) -> Option<(String, String)> {
     Some((field, crumb))
 }
 
-fn curl_status(base: &str, auth: &str, path: &str, crumb: &Option<(String, String)>) -> Option<i32> {
+fn curl_status(
+    base: &str,
+    auth: &str,
+    path: &str,
+    crumb: &Option<(String, String)>,
+    cookie_file: &Path,
+) -> Option<i32> {
     let mut args = vec![
         "-sS".into(),
         "-o".into(),
         "/dev/null".into(),
         "-w".into(),
         "%{http_code}".into(),
+        "-b".into(),
+        cookie_file.display().to_string(),
+        "-c".into(),
+        cookie_file.display().to_string(),
         "-u".into(),
         auth.to_string(),
         format!("{base}{path}"),
@@ -232,9 +280,19 @@ fn fetch_jnlp_secret(
     auth: &str,
     agent_name: &str,
     crumb: &Option<(String, String)>,
+    cookie_file: &Path,
 ) -> Option<String> {
     let mut cmd = Command::new("curl");
-    cmd.args(["-fsS", "-u", auth, &format!("{base}/computer/{agent_name}/slave-agent.jnlp")]);
+    cmd.args([
+        "-fsS",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        auth,
+        &format!("{base}/computer/{agent_name}/slave-agent.jnlp"),
+    ]);
     if let Some((field, value)) = crumb {
         cmd.args(["-H", &format!("{field}: {value}")]);
     }
@@ -242,13 +300,27 @@ fn fetch_jnlp_secret(
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    // <argument>-secret</argument><argument>HEX</argument> or <secret>HEX</secret>
+    parse_jnlp_secret(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse inbound-agent secret from slave-agent.jnlp XML.
+pub fn parse_jnlp_secret(text: &str) -> Option<String> {
+    // Modern: <argument>SECRET</argument><argument>NAME</argument>…
+    if let Some(idx) = text.find("<argument>") {
+        let rest = &text[idx + "<argument>".len()..];
+        let end = rest.find("</argument>")?;
+        let first = rest[..end].trim();
+        if !first.is_empty() && !first.starts_with('-') {
+            return Some(first.to_string());
+        }
+    }
+    // Legacy: <secret>HEX</secret>
     if let Some(idx) = text.find("<secret>") {
         let rest = &text[idx + "<secret>".len()..];
         let end = rest.find("</secret>")?;
         return Some(rest[..end].trim().to_string());
     }
+    // Legacy: <argument>-secret</argument><argument>HEX</argument>
     if let Some(idx) = text.find("-secret</argument>") {
         let after = &text[idx + "-secret</argument>".len()..];
         let start = after.find("<argument>")? + "<argument>".len();
@@ -297,4 +369,80 @@ pub fn default_remote_fs() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("jenkins-agent")
+}
+
+/// Download jar, register node (if credentials present), write launch script.
+pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
+    use crate::config::NodeRole;
+    use crate::prepare::resources;
+
+    if !matches!(config.role, NodeRole::Worker) {
+        return Ok(());
+    }
+    let Some(url) = config.jenkins_agent.controller_url.clone() else {
+        return Ok(());
+    };
+    let name = config
+        .jenkins_agent
+        .name
+        .clone()
+        .unwrap_or_else(default_agent_name);
+    let jar = config.jenkins_agent.agent_jar.clone().unwrap_or_else(|| {
+        config
+            .storage
+            .downloads_dir()
+            .unwrap_or_else(|| PathBuf::from("downloads"))
+            .join("jenkins-agent")
+            .join("agent.jar")
+    });
+    let remote_fs = config
+        .jenkins_agent
+        .remote_fs
+        .clone()
+        .unwrap_or_else(default_remote_fs);
+
+    download_agent_jar(&url, &jar)?;
+
+    let secret = try_register_node(
+        &url,
+        &name,
+        &remote_fs,
+        &config.jenkins_agent.labels,
+        config.jenkins_agent.api_user.as_deref(),
+        config.jenkins_agent.api_token.as_deref(),
+    )?;
+    let secret_placeholder = secret.unwrap_or_else(|| "REPLACE_ME".into());
+
+    let script = remote_fs.join("launch-agent.sh");
+    write_launch_script(&script, &url, &name, &jar, &secret_placeholder)?;
+    println!("Wrote agent launch script: {}", script.display());
+    if secret_placeholder != "REPLACE_ME" {
+        println!("Start the agent with:\n  {script}", script = script.display());
+    }
+
+    resources::register_agent_cpu_cores(
+        &url,
+        &name,
+        &config.resources.cpu_cores_label,
+        config.jenkins_agent.cpu_cores,
+    )?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_modern_jnlp_secret() {
+        let xml = r#"<jnlp><application-desc><argument>abc123secret</argument><argument>mac-host</argument><argument>-webSocket</argument></application-desc></jnlp>"#;
+        assert_eq!(parse_jnlp_secret(xml).as_deref(), Some("abc123secret"));
+    }
+
+    #[test]
+    fn parse_legacy_secret_tag() {
+        let xml = r#"<jnlp><secret>deadbeef</secret></jnlp>"#;
+        assert_eq!(parse_jnlp_secret(xml).as_deref(), Some("deadbeef"));
+    }
 }

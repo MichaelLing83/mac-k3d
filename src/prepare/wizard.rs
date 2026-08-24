@@ -568,8 +568,6 @@ fn prompt_lolbench(base_dir: &PathBuf) -> Result<LolbenchConfig> {
 
 struct WorkerAgentPrompt {
     config: JenkinsAgentConfig,
-    api_user: Option<String>,
-    api_token: Option<String>,
 }
 
 fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgentPrompt> {
@@ -592,13 +590,14 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
         None
     } else {
         let token = Password::with_theme(&ColorfulTheme::default())
-            .with_prompt("Jenkins API token")
+            .with_prompt("Jenkins API token (stored plaintext in config for now)")
             .allow_empty_password(true)
             .interact()
             .map_err(|_| Error::Cancelled)?;
         if token.trim().is_empty() {
             None
         } else {
+            println!("Note: API token will be written to config in plaintext until encryption is added.");
             Some(token)
         }
     };
@@ -641,13 +640,13 @@ fn prompt_worker_agent(base_dir: &PathBuf, cpu_cores: u32) -> Result<WorkerAgent
             remote_fs: Some(PathBuf::from(remote_fs.trim())),
             agent_jar: Some(agent_jar),
             cpu_cores,
+            api_user: if api_user.trim().is_empty() {
+                None
+            } else {
+                Some(api_user.trim().to_string())
+            },
+            api_token,
         },
-        api_user: if api_user.trim().is_empty() {
-            None
-        } else {
-            Some(api_user.trim().to_string())
-        },
-        api_token,
     })
 }
 
@@ -677,64 +676,9 @@ fn apply_lolbench_checkout(config: &mut MacK3dConfig) -> Result<()> {
     Ok(())
 }
 
-fn apply_worker_agent(config: &mut MacK3dConfig, creds: Option<&WorkerAgentPrompt>) -> Result<()> {
-    if !matches!(config.role, NodeRole::Worker) {
-        return Ok(());
-    }
-    let Some(url) = config.jenkins_agent.controller_url.clone() else {
-        return Ok(());
-    };
-    let name = config
-        .jenkins_agent
-        .name
-        .clone()
-        .unwrap_or_else(jenkins_agent::default_agent_name);
-    let jar = config
-        .jenkins_agent
-        .agent_jar
-        .clone()
-        .unwrap_or_else(|| {
-            config
-                .storage
-                .downloads_dir()
-                .unwrap_or_else(|| PathBuf::from("downloads"))
-                .join("jenkins-agent")
-                .join("agent.jar")
-        });
-    let remote_fs = config
-        .jenkins_agent
-        .remote_fs
-        .clone()
-        .unwrap_or_else(jenkins_agent::default_remote_fs);
-
-    jenkins_agent::download_agent_jar(&url, &jar)?;
-
-    let (user, token) = match creds {
-        Some(c) => (c.api_user.as_deref(), c.api_token.as_deref()),
-        None => (None, None),
-    };
-    let secret = jenkins_agent::try_register_node(
-        &url,
-        &name,
-        &remote_fs,
-        &config.jenkins_agent.labels,
-        user,
-        token,
-    )?;
-    let secret_placeholder = secret.unwrap_or_else(|| "REPLACE_ME".into());
-
-    let script = remote_fs.join("launch-agent.sh");
-    jenkins_agent::write_launch_script(&script, &url, &name, &jar, &secret_placeholder)?;
-    println!("Wrote agent launch script: {}", script.display());
-
-    resources::register_agent_cpu_cores(
-        &url,
-        &name,
-        &config.resources.cpu_cores_label,
-        config.jenkins_agent.cpu_cores,
-    )?;
-
-    Ok(())
+fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentPrompt>) -> Result<()> {
+    // Credentials are stored on config.jenkins_agent (plaintext for now).
+    jenkins_agent::ensure_worker_agent(config)
 }
 
 fn prompt_cluster_settings(role: MacRole) -> Result<(String, u8, u16)> {

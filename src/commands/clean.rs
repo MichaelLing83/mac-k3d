@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::Args;
 
 use crate::config::MacK3dConfig;
@@ -8,7 +10,7 @@ use crate::runtime::{state, Tools};
 
 #[derive(Debug, Args)]
 pub struct CleanArgs {
-    /// Remove local config and state directories
+    /// Remove config: the `-c` file if set, otherwise the whole `~/.config/mac-k3d/` directory
     #[arg(long)]
     pub purge_config: bool,
 
@@ -17,8 +19,17 @@ pub struct CleanArgs {
     pub yes: bool,
 }
 
-pub async fn run(args: CleanArgs, config: &MacK3dConfig) -> Result<()> {
+pub async fn run(
+    args: CleanArgs,
+    config: &MacK3dConfig,
+    config_path: Option<&Path>,
+) -> Result<()> {
     ensure_macos()?;
+
+    let resolved_config = config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(MacK3dConfig::default_config_path);
+    let using_alternate_config = config_path.is_some();
 
     if !args.yes {
         println!(
@@ -26,10 +37,14 @@ pub async fn run(args: CleanArgs, config: &MacK3dConfig) -> Result<()> {
             config.cluster.name
         );
         if args.purge_config {
-            println!(
-                "This would also remove {}.",
-                MacK3dConfig::config_dir().display()
-            );
+            if using_alternate_config {
+                println!("This would also remove {}.", resolved_config.display());
+            } else {
+                println!(
+                    "This would also remove {}.",
+                    MacK3dConfig::config_dir().display()
+                );
+            }
         }
         return Ok(());
     }
@@ -48,9 +63,24 @@ pub async fn run(args: CleanArgs, config: &MacK3dConfig) -> Result<()> {
         }
     }
 
-    state::remove_state_dir()?;
+    // Shared state dir is for the default/controller workflow; don't wipe it when
+    // cleaning an alternate config (e.g. worker.yaml) on the same Mac.
+    if using_alternate_config {
+        println!(
+            "Leaving {} intact (shared state; not tied to {}).",
+            MacK3dConfig::state_dir().display(),
+            resolved_config.display()
+        );
+    } else {
+        state::remove_state_dir()?;
+    }
+
     if args.purge_config {
-        state::remove_config_dir()?;
+        if using_alternate_config {
+            state::remove_config_file(&resolved_config)?;
+        } else {
+            state::remove_config_dir()?;
+        }
     }
 
     println!("Clean complete.");

@@ -205,10 +205,10 @@ Then prepare:
 
 1. Requires **Java** (prompt install if missing).
 2. Downloads `agent.jar` from `{url}/jnlpJars/agent.jar` into `{storage.downloads}/jenkins-agent/` (or `lolbench` storage).
-3. **Registers the node on the controller** via Jenkins REST API (needs API token with Overall/Administer or Computer/Configure):
+3. **Registers the node on the controller** via Jenkins REST API (`POST /computer/createItem` with agent XML; needs API token with Computer/Configure):
 
    - Create node if missing: name, remote FS, labels (`macos docker lolbench`), executors, launch method **Inbound**.
-   - Read connection secret / jnlp URL from the node.
+   - Read connection secret from `slave-agent.jnlp`.
 4. Writes a local launch script / launchd plist stub to start:
 
    ```bash
@@ -217,19 +217,7 @@ Then prepare:
 
 5. Marks capacity: create Lockable Resources on the controller for this agent totaling **`CPU_CORES` = host logical CPU count** (one resource unit per core, or a single resource with quantity = cores — plugin model TBD; document as `quantity = hw.logicalcpu` under label `CPU_CORES`).
 
-#### Is auto-registration possible?
-
-**Yes, with an API token** (or Jenkins Swarm plugin). Without credentials, prepare can only:
-
-- download `agent.jar`
-- print the exact “New Node” UI steps and the `java -jar agent.jar …` command
-
-Prepare will:
-
-1. Prefer API registration when URL + user + token are provided.
-2. Otherwise print copy-paste instructions and still write local agent files.
-
-Never store the API token in `config.yaml` in plaintext if avoidable — prefer macOS Keychain or prompt each time; v1 may store under `~/.local/state/mac-k3d/secrets/` with `0600` and warn the user.
+`api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs registration using those fields.
 
 ---
 
