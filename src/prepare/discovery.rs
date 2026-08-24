@@ -64,24 +64,42 @@ fn discover_docker() -> Option<DiscoveredTool> {
 }
 
 fn discover_java() -> Option<DiscoveredTool> {
+    // Prefer a real JDK from java_home; /usr/bin/java is often Apple's stub.
+    if let Ok(output) = Command::new("/usr/libexec/java_home").output() {
+        if output.status.success() {
+            let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !home.is_empty() {
+                let binary = PathBuf::from(&home).join("bin/java");
+                if java_runtime_works(&binary) {
+                    return Some(DiscoveredTool {
+                        binary,
+                        app: None,
+                        version_hint: Some(home),
+                    });
+                }
+            }
+        }
+    }
+
     if let Some(binary) = which("java") {
-        return Some(DiscoveredTool {
-            binary,
-            app: None,
-            version_hint: version_of("java", &which("java").unwrap_or_default()),
-        });
+        if java_runtime_works(&binary) {
+            return Some(DiscoveredTool {
+                binary: binary.clone(),
+                app: None,
+                version_hint: version_of("java", &binary),
+            });
+        }
     }
-    let output = Command::new("/usr/libexec/java_home").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let binary = PathBuf::from(&home).join("bin/java");
-    binary.exists().then_some(DiscoveredTool {
-        binary,
-        app: None,
-        version_hint: Some(home),
-    })
+    None
+}
+
+/// True when `java -version` succeeds (rejects macOS stub without a JDK).
+fn java_runtime_works(binary: &PathBuf) -> bool {
+    Command::new(binary)
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn discover_on_path(name: &str) -> Option<DiscoveredTool> {

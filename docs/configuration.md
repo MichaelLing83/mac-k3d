@@ -121,15 +121,17 @@ When enabled, `start` adds a port mapping:
 -p "9080:8080@loadbalancer"
 ```
 
-Helm values (planned defaults):
+Helm values applied by `mac-k3d start` (controller):
 
 ```yaml
 controller:
   serviceType: LoadBalancer
-  installPlugins:
-    - kubernetes
-    - workflow-aggregator
+  installLatestPlugins: true
+  additionalPlugins:
+    - lockable-resources   # CPU_CORES capacity locks for workers
 ```
+
+Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code.
 
 ### `docker`
 

@@ -120,7 +120,7 @@ State is written after successful `start` and updated by `config`. `clean --purg
 When `--jenkins in-cluster` (or `jenkins.enabled: true` in config):
 
 1. Ensure Helm repo `jenkins` is added.
-2. Install chart `jenkinsci/jenkins` into namespace `jenkins`.
+2. Install chart `jenkins/jenkins` into namespace `jenkins`, including **lockable-resources** via `controller.additionalPlugins`.
 3. Map `jenkins.host_port` → Service port 8080 via k3d `--port`.
 
 Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.

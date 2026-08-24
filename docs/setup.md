@@ -146,15 +146,13 @@ mac-k3d config --show-jenkins
 
 Open `http://localhost:9080` and complete the Jenkins setup wizard.
 
-### 4. Install required Jenkins plugins
+### 4. Jenkins plugins
 
-In **Manage Jenkins → Plugins**, install:
+`mac-k3d start` installs **Lockable Resources** via Helm (`controller.additionalPlugins`) in addition to the chart defaults (Kubernetes, Pipeline, Git, Configuration as Code).
 
-- **Kubernetes** (for in-cluster agents, optional)
-- **Lockable Resources** (for capacity-based scheduling on workers)
-- **Pipeline** / **Workflow Aggregator** (if not already present)
+After first login you still create the actual `CPU_CORES` lock entries under **Manage Jenkins → Lockable Resources** (plugin is present; resources are operator-defined).
 
-Restart Jenkins when prompted.
+Optional extras (UI): Credentials Binding, etc.
 
 ### 5. Verify
 

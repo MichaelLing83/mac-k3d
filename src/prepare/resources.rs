@@ -66,9 +66,9 @@ pub fn ensure_cpu_cores_label_on_controller(jenkins_url: &str, label: &str) -> R
     );
     println!(
         "\nOn the Jenkins controller ({jenkins_url}):\n\
-         1. Install/enable the Lockable Resources plugin.\n\
-         2. Ensure resources (or a resource type) use label '{label}'.\n\
-         Worker Macs register capacity under this label during prepare.\n"
+         1. Confirm Lockable Resources plugin is installed (mac-k3d Helm install adds it).\n\
+         2. Manage Jenkins → Lockable Resources → create capacity under label '{label}'.\n\
+         Worker Macs register intended capacity under this label during prepare.\n"
     );
     Ok(())
 }
