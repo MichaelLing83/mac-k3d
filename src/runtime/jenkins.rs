@@ -15,6 +15,10 @@ const ADDITIONAL_PLUGINS: &[&str] = &[
 ];
 
 pub async fn install_or_upgrade(helm: &Path, config: &MacK3dConfig) -> Result<()> {
+    // Pin Helm to this config's cluster — never use whatever happens to be the current context.
+    let kube_context = kubectl::context_name(&config.cluster.name);
+    println!("Using Helm kube-context '{kube_context}'…");
+
     println!("Adding Helm repo '{HELM_REPO_NAME}'…");
     exec::visible(
         helm,
@@ -51,6 +55,8 @@ pub async fn install_or_upgrade(helm: &Path, config: &MacK3dConfig) -> Result<()
             "--namespace",
             &config.jenkins.namespace,
             "--create-namespace",
+            "--kube-context",
+            &kube_context,
             "-f",
             &values_path,
             "--wait",
@@ -78,6 +84,8 @@ fn write_helm_values() -> Result<std::path::PathBuf> {
 controller:
   serviceType: LoadBalancer
   installLatestPlugins: true
+  # Force plugin list onto existing PVCs / upgrades (otherwise additionalPlugins may never land).
+  overwritePlugins: true
   additionalPlugins:
 {plugins}
 "#
@@ -113,5 +121,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(text.contains("lockable-resources"));
         assert!(text.contains("serviceType: LoadBalancer"));
+        assert!(text.contains("overwritePlugins: true"));
     }
 }

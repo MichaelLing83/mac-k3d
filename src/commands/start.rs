@@ -8,6 +8,7 @@ use crate::error::Result;
 use crate::platform::ensure_macos;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
+use crate::runtime::kubectl;
 use crate::runtime::{jenkins, state, Tools};
 
 #[derive(Debug, Args)]
@@ -51,6 +52,14 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
                 config.cluster.name
             );
         }
+    }
+
+    // Keep kubeconfig pointed at this config's cluster before any Helm/kubectl work.
+    // (A prior `config -c worker.yaml` can leave the shell on another context.)
+    if let Err(err) = kubectl::use_context(&tools.kubectl, &config.cluster.name).await {
+        tracing::warn!(error = %err, "kubectl use-context failed; merging kubeconfig");
+        k3d::merge_kubeconfig(&tools.k3d, &config.cluster.name).await?;
+        kubectl::use_context(&tools.kubectl, &config.cluster.name).await?;
     }
 
     if config.jenkins.enabled {
