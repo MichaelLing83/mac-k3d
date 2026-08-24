@@ -215,9 +215,9 @@ Then prepare:
    java -jar agent.jar -url "$JENKINS_URL" -secret "$SECRET" -name "$AGENT_NAME" -webSocket
    ```
 
-5. Marks capacity: create Lockable Resources on the controller for this agent totaling **`CPU_CORES` = host logical CPU count** (one resource unit per core, or a single resource with quantity = cores — plugin model TBD; document as `quantity = hw.logicalcpu` under label `CPU_CORES`).
+5. **Creates Lockable Resources** on the controller: `{agent}-core-1` … `{agent}-core-N` with labels `CPU_CORES {agent}` (N = logical CPU count), via Jenkins Script Console API when `api_user` / `api_token` are set.
 
-`api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs registration using those fields.
+`api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs agent registration **and** Lockable Resources create using those fields. The token needs permission to run `/scriptText` (admin is fine).
 
 ---
 

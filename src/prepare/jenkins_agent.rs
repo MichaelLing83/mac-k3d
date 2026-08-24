@@ -473,8 +473,115 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         &name,
         &config.resources.cpu_cores_label,
         config.jenkins_agent.cpu_cores,
+        config.jenkins_agent.api_user.as_deref(),
+        config.jenkins_agent.api_token.as_deref(),
     )?;
 
+    Ok(())
+}
+
+/// Remove Jenkins node + CPU_CORES lockable resources created for this worker.
+pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
+    use crate::config::NodeRole;
+    use crate::prepare::resources;
+
+    if !matches!(config.role, NodeRole::Worker) {
+        return Ok(());
+    }
+    let Some(url) = config.jenkins_agent.controller_url.as_deref() else {
+        return Ok(());
+    };
+    let name = config
+        .jenkins_agent
+        .name
+        .clone()
+        .unwrap_or_else(default_agent_name);
+
+    let user = config.jenkins_agent.api_user.as_deref();
+    let token = config.jenkins_agent.api_token.as_deref();
+
+    delete_node(url, &name, user, token)?;
+    resources::remove_agent_cpu_cores(
+        url,
+        &name,
+        &config.resources.cpu_cores_label,
+        config.jenkins_agent.cpu_cores,
+        user,
+        token,
+    )?;
+    Ok(())
+}
+
+/// Delete a permanent agent via `POST /computer/{name}/doDelete`.
+pub fn delete_node(
+    controller_url: &str,
+    agent_name: &str,
+    api_user: Option<&str>,
+    api_token: Option<&str>,
+) -> Result<()> {
+    let (Some(user), Some(token)) = (api_user, api_token) else {
+        println!(
+            "No Jenkins API token — skipping node delete for '{agent_name}'.\n\
+             Remove it manually under Manage Jenkins → Nodes on {controller_url}."
+        );
+        return Ok(());
+    };
+
+    let base = controller_url.trim_end_matches('/');
+    let auth = format!("{user}:{token}");
+    let cookie_file = tempfile_path("mac-k3d-jenkins-delete")?;
+    let crumb = fetch_crumb(base, &auth, &cookie_file);
+
+    let exists = curl_status(
+        base,
+        &auth,
+        &format!("/computer/{agent_name}/api/json"),
+        &crumb,
+        &cookie_file,
+    )
+    .map(|c| c == 200)
+    .unwrap_or(false);
+
+    if !exists {
+        println!("Jenkins agent '{agent_name}' not present on {base}; nothing to delete.");
+        let _ = std::fs::remove_file(&cookie_file);
+        return Ok(());
+    }
+
+    println!("Deleting Jenkins agent '{agent_name}' on {base} …");
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-o",
+        "/dev/null",
+        "-w",
+        "%{http_code}",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        &auth,
+        "-X",
+        "POST",
+        &format!("{base}/computer/{agent_name}/doDelete"),
+    ]);
+    if let Some((field, value)) = &crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: "curl computer/doDelete".into(),
+        source: e.into(),
+    })?;
+    let _ = std::fs::remove_file(&cookie_file);
+    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if code == "200" || code == "302" || code == "303" {
+        println!("Deleted Jenkins agent '{agent_name}'.");
+    } else {
+        println!(
+            "Warning: failed to delete agent '{agent_name}' (HTTP {code}). Remove it in the Jenkins UI if it remains."
+        );
+    }
     Ok(())
 }
 

@@ -140,7 +140,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent]
 Stop the cluster and services without deleting data.
 
 ```bash
-mac-k3d teardown [--stop-docker]
+mac-k3d teardown [--stop-docker] [--deregister-agent]
 ```
 
 ### Flags
@@ -148,12 +148,14 @@ mac-k3d teardown [--stop-docker]
 | Flag | Description |
 |------|-------------|
 | `--stop-docker` | Quit Docker Desktop after stopping cluster |
+| `--deregister-agent` | Worker: also delete Jenkins node + CPU_CORES lockable resources |
 
 ### Behavior
 
 1. `k3d cluster stop <name>` if running.
 2. Optionally `osascript` quit Docker Desktop.
 3. Leave config and state files intact.
+4. Worker without `--deregister-agent`: Jenkins agent stays registered (only k3d is stopped).
 
 ---
 
@@ -179,9 +181,10 @@ Without `--yes`: print warning and exit 0.
 
 With `--yes`:
 
-1. `k3d cluster delete <name>` from the loaded config.
-2. Without `-c`: remove `~/.local/state/mac-k3d/`. With `-c`: leave shared state intact.
-3. If `--purge-config`: remove the `-c` file only, or the whole config directory when using the default path.
+1. **Worker:** deregister Jenkins agent node and delete `{agent}-core-*` Lockable Resources (needs `api_token` in config).
+2. `k3d cluster delete <name>` from the loaded config.
+3. Without `-c`: remove `~/.local/state/mac-k3d/`. With `-c`: leave shared state intact.
+4. If `--purge-config`: remove the `-c` file only, or the whole config directory when using the default path.
 
 ---
 

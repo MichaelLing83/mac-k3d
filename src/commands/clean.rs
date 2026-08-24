@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 
-use crate::config::MacK3dConfig;
+use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_macos;
+use crate::prepare::jenkins_agent;
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::{state, Tools};
 
@@ -36,6 +37,11 @@ pub async fn run(
             "clean will delete k3d cluster '{}'. Re-run with --yes to confirm.",
             config.cluster.name
         );
+        if matches!(config.role, NodeRole::Worker) {
+            println!(
+                "For workers, this also deregisters the Jenkins agent and CPU_CORES lockable resources (when api_token is set)."
+            );
+        }
         if args.purge_config {
             if using_alternate_config {
                 println!("This would also remove {}.", resolved_config.display());
@@ -47,6 +53,11 @@ pub async fn run(
             }
         }
         return Ok(());
+    }
+
+    // Deregister before deleting local cluster / config (needs api_token from config).
+    if matches!(config.role, NodeRole::Worker) {
+        jenkins_agent::remove_worker_agent(config)?;
     }
 
     let tools = Tools::from_config(config)?;

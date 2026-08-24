@@ -1,8 +1,9 @@
 use clap::Args;
 
-use crate::config::MacK3dConfig;
+use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_macos;
+use crate::prepare::jenkins_agent;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::Tools;
@@ -12,6 +13,10 @@ pub struct TeardownArgs {
     /// Also stop Docker Desktop (default: leave Docker running)
     #[arg(long)]
     pub stop_docker: bool,
+
+    /// Worker: also delete Jenkins agent node + CPU_CORES resources on the controller
+    #[arg(long)]
+    pub deregister_agent: bool,
 }
 
 pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
@@ -41,6 +46,19 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
             DockerStatus::Running => docker::quit().await?,
             other => println!("Docker Desktop is {other}; nothing to quit."),
         }
+    }
+
+    if args.deregister_agent {
+        if matches!(config.role, NodeRole::Worker) {
+            jenkins_agent::remove_worker_agent(config)?;
+        } else {
+            println!("--deregister-agent applies to worker role only; ignoring.");
+        }
+    } else if matches!(config.role, NodeRole::Worker) {
+        println!(
+            "Jenkins agent left registered (teardown only stops k3d).\n\
+             Use `mac-k3d clean --yes` or `teardown --deregister-agent` to remove the node."
+        );
     }
 
     println!("Teardown complete. Cluster data is preserved; use `mac-k3d clean --yes` to delete.");
