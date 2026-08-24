@@ -55,9 +55,11 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
             println!("--deregister-agent applies to worker role only; ignoring.");
         }
     } else if matches!(config.role, NodeRole::Worker) {
+        // Stop local agent process; leave Jenkins node registered for later reconnect.
+        jenkins_agent::stop_worker_agent_process()?;
         println!(
-            "Jenkins agent left registered (teardown only stops k3d).\n\
-             Use `mac-k3d clean --yes` or `teardown --deregister-agent` to remove the node."
+            "Jenkins agent process stopped (LaunchAgent unloaded).\n\
+             Node left registered on the controller — use `teardown --deregister-agent` or `clean --yes` to delete it."
         );
     }
 

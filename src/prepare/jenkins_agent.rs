@@ -464,9 +464,6 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         &java_bin,
     )?;
     println!("Wrote agent launch script: {} (java: {java_bin})", script.display());
-    if secret_placeholder != "REPLACE_ME" {
-        println!("Start the agent with:\n  {}", script.display());
-    }
 
     resources::register_agent_cpu_cores(
         &url,
@@ -477,10 +474,13 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         config.jenkins_agent.api_token.as_deref(),
     )?;
 
+    // Background + KeepAlive via launchd until teardown/clean.
+    crate::prepare::agent_service::install_and_start(&script, &remote_fs)?;
+
     Ok(())
 }
 
-/// Remove Jenkins node + CPU_CORES lockable resources created for this worker.
+/// Stop LaunchAgent, then remove Jenkins node + CPU_CORES lockable resources.
 pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     use crate::config::NodeRole;
     use crate::prepare::resources;
@@ -488,6 +488,10 @@ pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
     if !matches!(config.role, NodeRole::Worker) {
         return Ok(());
     }
+
+    // Always stop local agent process first.
+    let _ = crate::prepare::agent_service::stop_and_uninstall();
+
     let Some(url) = config.jenkins_agent.controller_url.as_deref() else {
         return Ok(());
     };
@@ -510,6 +514,11 @@ pub fn remove_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         token,
     )?;
     Ok(())
+}
+
+/// Stop only the local LaunchAgent (leave Jenkins node registered).
+pub fn stop_worker_agent_process() -> Result<()> {
+    crate::prepare::agent_service::stop_and_uninstall()
 }
 
 /// Delete a permanent agent via `POST /computer/{name}/doDelete`.

@@ -131,7 +131,9 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent]
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node and rewrite `launch-agent.sh` (unless `--skip-agent`).
+4. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
+
+The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
 
 ---
 
@@ -155,8 +157,7 @@ mac-k3d teardown [--stop-docker] [--deregister-agent]
 1. `k3d cluster stop <name>` if running.
 2. Optionally `osascript` quit Docker Desktop.
 3. Leave config and state files intact.
-4. Worker without `--deregister-agent`: Jenkins agent stays registered (only k3d is stopped).
-
+4. **Worker:** unload LaunchAgent (stop agent process). With `--deregister-agent`, also delete the Jenkins node and locks.
 ---
 
 ## `clean`
@@ -181,7 +182,7 @@ Without `--yes`: print warning and exit 0.
 
 With `--yes`:
 
-1. **Worker:** deregister Jenkins agent node and delete `{agent}-core-*` Lockable Resources (needs `api_token` in config).
+1. **Worker:** stop LaunchAgent; deregister Jenkins agent node and delete `{agent}-core-*` Lockable Resources (needs `api_token` in config).
 2. `k3d cluster delete <name>` from the loaded config.
 3. Without `-c`: remove `~/.local/state/mac-k3d/`. With `-c`: leave shared state intact.
 4. If `--purge-config`: remove the `-c` file only, or the whole config directory when using the default path.

@@ -1,3 +1,4 @@
+pub mod agent_service;
 pub mod discovery;
 pub mod install;
 pub mod jenkins_agent;

@@ -39,7 +39,7 @@ pub async fn run(
         );
         if matches!(config.role, NodeRole::Worker) {
             println!(
-                "For workers, this also deregisters the Jenkins agent and CPU_CORES lockable resources (when api_token is set)."
+                "For workers, this also stops the LaunchAgent and deregisters the Jenkins agent + CPU_CORES resources (when api_token is set)."
             );
         }
         if args.purge_config {

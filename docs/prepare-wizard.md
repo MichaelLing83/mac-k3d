@@ -209,12 +209,7 @@ Then prepare:
 
    - Create node if missing: name, remote FS, labels (`macos docker lolbench`), executors, launch method **Inbound**.
    - Read connection secret from `slave-agent.jnlp`.
-4. Writes a local launch script / launchd plist stub to start:
-
-   ```bash
-   java -jar agent.jar -url "$JENKINS_URL" -secret "$SECRET" -name "$AGENT_NAME" -webSocket
-   ```
-
+4. Writes a local launch script and installs a **LaunchAgent** (`com.mac-k3d.jenkins-agent`) with `KeepAlive` so the agent runs in the background until `teardown` / `clean`.
 5. **Creates Lockable Resources** on the controller: `{agent}-core-1` … `{agent}-core-N` with labels `CPU_CORES {agent}` (N = logical CPU count), via Jenkins Script Console API when `api_user` / `api_token` are set.
 
 `api_user` / `api_token` are saved in config (plaintext for now; encrypt later). `mac-k3d config` on a worker re-runs agent registration **and** Lockable Resources create using those fields. The token needs permission to run `/scriptText` (admin is fine).
