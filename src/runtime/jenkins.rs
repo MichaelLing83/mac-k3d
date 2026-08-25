@@ -9,7 +9,9 @@ const HELM_REPO_NAME: &str = "jenkins";
 const HELM_REPO_URL: &str = "https://charts.jenkins.io";
 const HELM_CHART: &str = "jenkins/jenkins";
 
-/// Extra plugins installed on every controller deploy (chart defaults kept via additionalPlugins).
+/// Extra plugins beyond the Jenkins chart's default `installPlugins` list.
+/// Do **not** list plugins already in chart defaults (e.g. `git`, `workflow-aggregator`) —
+/// Helm fails with `[PLUGIN CONFLICT]`.
 const ADDITIONAL_PLUGINS: &[&str] = &[
     "lockable-resources", // CPU_CORES / capacity locks for LoLBench workers
 ];
@@ -120,6 +122,8 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(text.contains("lockable-resources"));
+        assert!(!text.contains("- git"));
+        assert!(!text.contains("workflow-aggregator"));
         assert!(text.contains("serviceType: LoadBalancer"));
         assert!(text.contains("overwritePlugins: true"));
     }

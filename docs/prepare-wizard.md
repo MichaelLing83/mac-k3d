@@ -184,10 +184,11 @@ Detect host cores via `sysctl -n hw.logicalcpu` (fallback `hw.ncpu`).
 
 ### Controller (`role: controller`)
 
-After Jenkins is up (`mac-k3d start` / first login), prepare records intent and `start`/`config` (or a prepare post-step when Jenkins is reachable) will:
+After Jenkins is up (`mac-k3d start` / `config`), prepare records intent and those commands:
 
-1. Ensure **Lockable Resources** plugin is present (Helm values / plugin list).
-2. Create / ensure a resource **type/label** `CPU_CORES` on the controller (documentation + optional Jenkins CLI/API once admin credentials exist).
+1. Ensure **Lockable Resources** (+ Pipeline / Git) plugins via Helm `additionalPlugins`.
+2. Create / ensure a resource **type/label** `CPU_CORES` on the controller (workers create capacity; plugin is on the controller).
+3. Create Pipeline job **`lolbench_one_task`** if missing (inline Jenkinsfile; see [lolbench-jenkins.md](lolbench-jenkins.md)).
 
 Controller Mac itself usually does **not** run LoLBench agents; it hosts the queue.
 
@@ -299,6 +300,7 @@ resources:
 | `src/prepare/install.rs` | brew, `uv tool install harbor`, `pipx install harbor` |
 | `src/prepare/lolbench.rs` | clone / release unpack helpers |
 | `src/prepare/jenkins_agent.rs` | download agent.jar, REST create node, write launch script |
+| `src/prepare/jenkins_job.rs` | create Pipeline job `lolbench_one_task` on controller |
 | `src/prepare/resources.rs` | CPU_CORES detection + Jenkins lockable-resource API (controller) |
 
 ---

@@ -59,19 +59,27 @@ pub async fn get_secret_decoded(
     Ok(stdout.trim().to_string())
 }
 
-pub async fn jenkins_pod_phase(kubectl: &Path, namespace: &str) -> Option<String> {
+pub async fn jenkins_pod_phase(
+    kubectl: &Path,
+    namespace: &str,
+    kube_context: Option<&str>,
+) -> Option<String> {
+    let mut args = vec![
+        "get".into(),
+        "pods".into(),
+        "-n".into(),
+        namespace.to_string(),
+        "-l".into(),
+        "app.kubernetes.io/component=jenkins-controller".into(),
+        "-o".into(),
+        "jsonpath={.items[0].status.phase}".into(),
+    ];
+    if let Some(ctx) = kube_context {
+        args.insert(1, format!("--context={ctx}"));
+    }
     let stdout = exec::capture_ok(
         kubectl,
-        &[
-            "get",
-            "pods",
-            "-n",
-            namespace,
-            "-l",
-            "app.kubernetes.io/component=jenkins-controller",
-            "-o",
-            "jsonpath={.items[0].status.phase}",
-        ],
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
     )
     .await?;
     let phase = stdout.trim();

@@ -9,6 +9,7 @@ use crate::platform::ensure_macos;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
+use crate::prepare::jenkins_job;
 use crate::runtime::{jenkins, state, Tools};
 
 #[derive(Debug, Args)]
@@ -20,6 +21,10 @@ pub struct StartArgs {
     /// Skip waiting for Docker Desktop to become ready
     #[arg(long)]
     pub no_wait_docker: bool,
+
+    /// Skip creating the `lolbench_one_task` Pipeline job after Jenkins install
+    #[arg(long)]
+    pub skip_job: bool,
 }
 
 pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
@@ -66,6 +71,18 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
         let helm = tools.helm_required()?;
         jenkins::install_or_upgrade(helm, config).await?;
         println!("Jenkins UI: {}", jenkins::ui_url(config));
+        if !args.skip_job {
+            println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
+            // Best-effort: config will retry if Jenkins is still warming up.
+            if let Err(err) =
+                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config).await
+            {
+                println!(
+                    "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",
+                    jenkins_job::LOLBENCH_ONE_TASK
+                );
+            }
+        }
     }
 
     state::write_after_start(config)?;

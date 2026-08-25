@@ -83,7 +83,7 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 Start Docker Desktop (if needed), create or start the k3d cluster, optionally deploy Jenkins.
 
 ```bash
-mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
+mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 ```
 
 ### Flags
@@ -92,6 +92,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 |------|---------|-------------|
 | `--jenkins` | (config) | Override Jenkins mode for this run (`skip` or `in-cluster`) |
 | `--no-wait-docker` | false | Skip Docker Desktop readiness wait |
+| `--skip-job` | false | Skip creating Pipeline job `lolbench_one_task` after Jenkins install |
 
 ### Behavior
 
@@ -99,7 +100,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins chart.
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins chart, then create Pipeline job `lolbench_one_task` if missing (unless `--skip-job`).
 6. Write state file under `~/.local/state/mac-k3d/`.
 
 `--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
@@ -107,6 +108,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 ### Idempotency
 
 - Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
+- Job create is skipped when `lolbench_one_task` already exists.
 
 ---
 
@@ -115,7 +117,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker]
 Apply post-start configuration: kubeconfig merge, context selection, service URLs.
 
 ```bash
-mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent]
+mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-job]
 ```
 
 ### Flags
@@ -125,13 +127,15 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent]
 | `--no-merge-kubeconfig` | false | Skip merging k3d kubeconfig into `~/.kube/config` |
 | `--show-jenkins` | false | Print Jenkins URL and admin password |
 | `--skip-agent` | false | Worker: skip Jenkins agent register / launch-script update |
+| `--skip-job` | false | Skip creating Pipeline job `lolbench_one_task` when Jenkins is enabled |
 
 ### Behavior
 
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
+4. **Controller / Jenkins enabled:** create Pipeline job `lolbench_one_task` if missing (inline Jenkinsfile; uses admin password from the cluster secret). Idempotent — does not overwrite an existing job.
+5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.
 
@@ -203,9 +207,17 @@ mac-k3d status
 Docker Desktop:  running
 k3d cluster:     mac-k3d (running, 1 server, 0 agents)
 kubectl context: k3d-mac-k3d
-Jenkins:         enabled, pod Running, http://localhost:9080
+Jenkins:         configured, pod Running, http://localhost:9080
 ```
 
+After `clean` / while the cluster is gone, Jenkins still shows as **configured** from the YAML (so the next `start` will redeploy it), not as live:
+
+```text
+k3d cluster:     ci-controller (missing, 0 server, 0 agents)
+Jenkins:         configured, not running (cluster missing), http://localhost:9080
+```
+
+Pod lookup uses `--context k3d-<cluster>` from the loaded config, not whatever the shell’s current kubectl context happens to be.
 ---
 
 ## Typical workflows

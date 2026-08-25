@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
 
@@ -131,8 +131,12 @@ pub fn stop_and_uninstall() -> Result<()> {
 
 fn bootstrap(plist: &Path) -> Result<()> {
     let domain = gui_domain();
+    // Silence launchctl chatter (e.g. "Bootstrap failed: 5: Input/output error") —
+    // we fall back to load/kickstart when needed.
     let status = Command::new("launchctl")
         .args(["bootstrap", &domain, &plist.display().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: "launchctl bootstrap".into(),
@@ -141,9 +145,27 @@ fn bootstrap(plist: &Path) -> Result<()> {
     if status.success() {
         return Ok(());
     }
-    // Fallback for older macOS / already-loaded edge cases.
+
+    // Already loaded or transient I/O: force a restart of the existing job.
+    let service = format!("{domain}/{LAUNCH_AGENT_LABEL}");
+    let kick = Command::new("launchctl")
+        .args(["kickstart", "-k", &service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| Error::CommandFailed {
+            cmd: "launchctl kickstart".into(),
+            source: e.into(),
+        })?;
+    if kick.success() {
+        return Ok(());
+    }
+
+    // Fallback for older macOS / edge cases.
     let status = Command::new("launchctl")
         .args(["load", "-w", &plist.display().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|e| Error::CommandFailed {
             cmd: "launchctl load".into(),
@@ -153,7 +175,7 @@ fn bootstrap(plist: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(Error::CommandFailed {
-            cmd: "launchctl bootstrap/load".into(),
+            cmd: "launchctl bootstrap/kickstart/load".into(),
             source: anyhow::anyhow!("exit {:?}", status.code()),
         })
     }
@@ -164,11 +186,15 @@ fn bootout() -> Result<()> {
     let service = format!("{domain}/{LAUNCH_AGENT_LABEL}");
     let _ = Command::new("launchctl")
         .args(["bootout", &service])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
     let plist = plist_path();
     if plist.exists() {
         let _ = Command::new("launchctl")
             .args(["unload", "-w", &plist.display().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
     }
     Ok(())

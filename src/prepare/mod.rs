@@ -2,6 +2,7 @@ pub mod agent_service;
 pub mod discovery;
 pub mod install;
 pub mod jenkins_agent;
+pub mod jenkins_job;
 pub mod lolbench;
 pub mod path_env;
 pub mod resources;

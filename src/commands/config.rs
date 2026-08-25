@@ -5,7 +5,7 @@ use clap::Args;
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_macos;
-use crate::prepare::jenkins_agent;
+use crate::prepare::{jenkins_agent, jenkins_job};
 use crate::runtime::{jenkins, kubectl, k3d, Tools};
 
 #[derive(Debug, Args)]
@@ -21,6 +21,10 @@ pub struct ConfigArgs {
     /// Skip Jenkins agent register/launch-script update (worker only)
     #[arg(long)]
     pub skip_agent: bool,
+
+    /// Skip creating the `lolbench_one_task` Pipeline job (controller / Jenkins enabled)
+    #[arg(long)]
+    pub skip_job: bool,
 }
 
 pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
@@ -68,6 +72,18 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
                     config.jenkins.release_name, config.jenkins.namespace
                 );
             }
+        }
+    }
+
+    if config.jenkins.enabled && !args.skip_job {
+        println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
+        if let Err(err) =
+            jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config).await
+        {
+            println!(
+                "Warning: could not ensure '{}' ({err}).",
+                jenkins_job::LOLBENCH_ONE_TASK
+            );
         }
     }
 

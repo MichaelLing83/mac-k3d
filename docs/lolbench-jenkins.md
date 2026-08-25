@@ -395,7 +395,9 @@ pipeline {
 }
 ```
 
-Keep this Jenkinsfile in **LoLBench-Preview** (for example `Jenkinsfile.lolbench_one_task`) and point the Jenkins job named `lolbench_one_task` at it via SCM.
+Keep this Jenkinsfile in **LoLBench-Preview** (for example `Jenkinsfile.lolbench_one_task`) if you prefer SCM-driven jobs later.
+
+**mac-k3d:** `start` / `config` on a controller with Jenkins enabled create an inline Pipeline job named `lolbench_one_task` automatically (idempotent; existing jobs are left alone). Override the LoLBench checkout URL via job parameter `LOLBENCH_GIT_URL` (defaults to `lolbench.git_url` from config). Credentials are **not** required for `HARNESS=oracle`; for model runs, add secret-text credentials or export keys on the agent.
 
 ---
 
@@ -444,9 +446,9 @@ A wrapper job can fan out over a task list by triggering `lolbench_one_task` N t
 
 ## Implementation order
 
-1. Create lockable resource + worker labels.
-2. Add `Jenkinsfile.lolbench_one_task` with per-build `--jobs-dir` / `--job-name`; create Pipeline job `lolbench_one_task` from SCM.
-3. Add API key credentials.
+1. Create lockable resource + worker labels (`prepare` / `config` on workers).
+2. `mac-k3d start` / `config` on the controller creates Pipeline job `lolbench_one_task` (inline Jenkinsfile with per-build `--jobs-dir` / `--job-name`).
+3. Add API key credentials (or agent env) for non-oracle harnesses.
 4. Run `HARNESS=oracle` on `ruff_1` (no model cost) — expect SUCCESS / reward 1.0; confirm artifacts under `harbor_runs/jenkins-<n>/ruff_1/`.
 5. Trigger two builds of the same task; confirm separate `JOBS_DIR` trees and no overwrite.
 6. Optionally: Slack notification and a separate `lolbench_tasks` wrapper job.
