@@ -443,7 +443,8 @@ if not paths:
     raise SystemExit(f"no reward.json under {{jobs_dir}}")
 data = json.load(open(paths[0]))
 reward = data.get("reward")
-pathlib.Path("lolbench.properties").write_text(f"REWARD={{reward}}\n")
+# Avoid \\n in the Groovy/shell pipeline string (Groovy would turn it into a real newline).
+pathlib.Path("lolbench.properties").write_text(f"REWARD={{reward}}" + chr(10))
 print(data)
 PY
         '''
@@ -582,7 +583,8 @@ mod tests {
     fn jenkinsfile_python_fstring_is_valid() {
         let jf = jenkinsfile("https://example.com/x.git");
         assert!(jf.contains(r#"glob.glob(f"{jobs_dir}/**/verifier/reward.json""#));
-        assert!(jf.contains(r#"f"REWARD={reward}\n""#));
+        assert!(jf.contains(r#"f"REWARD={reward}" + chr(10)"#));
+        assert!(!jf.contains(r#"write_text(f"REWARD={reward}\n")"#));
     }
 
     #[test]
