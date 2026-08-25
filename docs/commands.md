@@ -108,7 +108,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 ### Idempotency
 
 - Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
-- Job create is skipped when `lolbench_one_task` already exists.
+- Job create/update refreshes `lolbench_one_task` Pipeline definition on each `start`/`config`.
 
 ---
 
@@ -134,7 +134,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** create Pipeline job `lolbench_one_task` if missing (inline Jenkinsfile; uses admin password from the cluster secret). Idempotent — does not overwrite an existing job.
+4. **Controller / Jenkins enabled:** create or **update** Pipeline job `lolbench_one_task` (inline Jenkinsfile; uses admin password from the cluster secret).
 5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.

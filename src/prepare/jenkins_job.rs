@@ -7,10 +7,10 @@ use crate::error::{Error, Result};
 
 pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 
-/// Ensure Pipeline job `lolbench_one_task` exists on the controller (idempotent).
+/// Ensure Pipeline job `lolbench_one_task` exists on the controller (create or update).
 ///
-/// Uses admin basic auth (typically the chart-generated password). Skips create when
-/// the job already exists so local UI edits are not overwritten.
+/// Uses admin basic auth (typically the chart-generated password). When the job already
+/// exists, refreshes the inline Pipeline definition so Jenkinsfile fixes ship on `config`.
 pub fn ensure_lolbench_one_task(
     jenkins_url: &str,
     api_user: &str,
@@ -36,7 +36,14 @@ pub fn ensure_lolbench_one_task(
     .unwrap_or(false);
 
     if exists {
-        println!("Jenkins job '{LOLBENCH_ONE_TASK}' already exists — leaving it unchanged.");
+        println!("Updating Jenkins job '{LOLBENCH_ONE_TASK}' Pipeline definition…");
+        match update_job_script(base, &auth, &crumb, &cookie_file, lolbench_git_url) {
+            Ok(()) => println!("Updated job '{LOLBENCH_ONE_TASK}'."),
+            Err(err) => println!(
+                "Warning: failed to update job '{LOLBENCH_ONE_TASK}' ({err}).\n\
+                 Delete the job in the UI and re-run `mac-k3d config`, or see docs/lolbench-jenkins.md."
+            ),
+        }
         let _ = std::fs::remove_file(&cookie_file);
         return Ok(());
     }
@@ -58,7 +65,7 @@ pub fn ensure_lolbench_one_task(
         "-u",
         &auth,
         "-H",
-        "Content-Type: application/xml",
+        "Content-Type: text/xml",
         "-X",
         "POST",
         &create_url,
@@ -103,6 +110,98 @@ pub fn ensure_lolbench_one_task(
          Add secret-text credentials (openrouter-api-key, …) or export keys on the agent for non-oracle runs."
     );
     Ok(())
+}
+
+/// Replace the WorkflowJob inline script via Script Console (more reliable than config.xml POST).
+fn update_job_script(
+    base: &str,
+    auth: &str,
+    crumb: &Option<(String, String)>,
+    cookie_file: &Path,
+    lolbench_git_url: &str,
+) -> Result<()> {
+    let script = jenkinsfile(lolbench_git_url);
+    let b64 = base64_encode(script.as_bytes());
+    let groovy = format!(
+        r#"
+import jenkins.model.Jenkins
+import org.jenkinsci.plugins.workflow.job.WorkflowJob
+import org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition
+import java.util.Base64
+def name = '{name}'
+def body = new String(Base64.decoder.decode('{b64}'), 'UTF-8')
+def job = Jenkins.instance.getItemByFullName(name, WorkflowJob.class)
+if (job == null) {{
+  throw new IllegalStateException('missing job ' + name)
+}}
+job.setDefinition(new CpsFlowDefinition(body, true))
+job.save()
+println('updated-script')
+"#,
+        name = LOLBENCH_ONE_TASK,
+        b64 = b64,
+    );
+
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-b",
+        &cookie_file.display().to_string(),
+        "-c",
+        &cookie_file.display().to_string(),
+        "-u",
+        auth,
+        "-X",
+        "POST",
+        &format!("{base}/scriptText"),
+        "--data-urlencode",
+        &format!("script={groovy}"),
+    ]);
+    if let Some((field, value)) = crumb {
+        cmd.args(["-H", &format!("{field}: {value}")]);
+    }
+    let output = cmd.output().map_err(|e| Error::CommandFailed {
+        cmd: "curl scriptText update job".into(),
+        source: e.into(),
+    })?;
+    let body = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.status.success() || !body.contains("updated-script") {
+        return Err(Error::Config(truncate(&body, 300)));
+    }
+    Ok(())
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((n >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(n & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let t: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        format!("{t}…")
+    } else {
+        t
+    }
 }
 
 /// Create the job using the in-cluster Jenkins admin password from kubectl.
@@ -268,7 +367,6 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
   agent {{ label params.AGENT_LABEL }}
 
   options {{
-    timestamps()
     timeout(time: 7, unit: 'HOURS')
   }}
 
@@ -302,7 +400,8 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
     }}
     stage('Evaluate') {{
       steps {{
-        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer) {{
+        // resource: null — Declarative requires the DataBound field even when locking by label.
+        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
           sh '''
             set -euo pipefail
             test -d "harbor_tasks/${{TASK}}"
@@ -457,6 +556,8 @@ mod tests {
         let jf = jenkinsfile("https://github.com/example/LoLBench-Preview.git");
         assert!(jf.contains("harbor_runs/jenkins-"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
+        assert!(jf.contains("resource: null"));
+        assert!(!jf.contains("timestamps()"));
         assert!(jf.contains("LOLBENCH_GIT_URL"));
         assert!(jf.contains("https://github.com/example/LoLBench-Preview.git"));
         assert!(!jf.contains("credentials('openrouter-api-key')"));
@@ -478,5 +579,12 @@ mod tests {
         let jf = jenkinsfile("https://example.com/x.git");
         assert!(jf.contains(r#"glob.glob(f"{jobs_dir}/**/verifier/reward.json""#));
         assert!(jf.contains(r#"f"REWARD={reward}\n""#));
+    }
+
+    #[test]
+    fn base64_roundtrip_ascii() {
+        let s = "hello pipeline";
+        let enc = base64_encode(s.as_bytes());
+        assert_eq!(enc, "aGVsbG8gcGlwZWxpbmU=");
     }
 }
