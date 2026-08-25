@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
+use crate::prepare::path_env;
 
 const LAUNCH_AGENT_LABEL: &str = "com.mac-k3d.jenkins-agent";
 
@@ -36,6 +37,13 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// PATH for the Jenkins agent process (LaunchAgents default to /usr/bin:/bin only).
+///
+/// Merges the configuring shell's PATH with dirs needed for Docker Desktop + Harbor.
+pub fn agent_path() -> String {
+    path_env::agent_tool_path()
+}
+
 /// Install LaunchAgent plist and load it (KeepAlive + RunAtLoad).
 pub fn install_and_start(launch_script: &Path, working_dir: &Path) -> Result<()> {
     if !launch_script.exists() {
@@ -66,6 +74,7 @@ pub fn install_and_start(launch_script: &Path, working_dir: &Path) -> Result<()>
 
     let log_out = working_dir.join("jenkins-agent.stdout.log");
     let log_err = working_dir.join("jenkins-agent.stderr.log");
+    let path = agent_path();
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -80,6 +89,11 @@ pub fn install_and_start(launch_script: &Path, working_dir: &Path) -> Result<()>
   </array>
   <key>WorkingDirectory</key>
   <string>{cwd}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{path}</string>
+  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -94,6 +108,7 @@ pub fn install_and_start(launch_script: &Path, working_dir: &Path) -> Result<()>
         label = LAUNCH_AGENT_LABEL,
         script = xml_escape(&launch_script.display().to_string()),
         cwd = xml_escape(&working_dir.display().to_string()),
+        path = xml_escape(&path),
         stdout = xml_escape(&log_out.display().to_string()),
         stderr = xml_escape(&log_err.display().to_string()),
     );
@@ -214,5 +229,11 @@ mod tests {
     #[test]
     fn xml_escape_ampersand() {
         assert_eq!(xml_escape("a&b"), "a&amp;b");
+    }
+
+    #[test]
+    fn agent_path_nonempty() {
+        assert!(!agent_path().is_empty());
+        assert!(agent_path().contains('/'));
     }
 }

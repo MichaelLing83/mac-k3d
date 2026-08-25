@@ -404,7 +404,11 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
         lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
           sh '''
             set -euo pipefail
+            # LaunchAgent PATH can be minimal; keep Docker/Harbor visible in the build shell.
+            export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${{PATH}}"
             test -d "harbor_tasks/${{TASK}}"
+            command -v docker >/dev/null
+            command -v harbor >/dev/null
             docker info >/dev/null
             harbor --version
 

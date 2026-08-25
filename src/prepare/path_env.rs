@@ -174,6 +174,56 @@ fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// PATH for Jenkins agent / LaunchAgent: configuring shell PATH + Docker/Harbor dirs.
+///
+/// LaunchAgents otherwise only get `/usr/bin:/bin:/usr/sbin:/sbin`, so `docker` and
+/// `harbor` (often under `/usr/local/bin` or `~/.local/bin`) are missing in builds.
+pub fn agent_tool_path() -> String {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    let mut push_unique = |p: PathBuf| {
+        if p.as_os_str().is_empty() {
+            return;
+        }
+        if !dirs.iter().any(|d| d == &p) {
+            dirs.push(p);
+        }
+    };
+
+    // Prefer dirs from the shell that ran `mac-k3d config`.
+    if let Ok(path) = env::var("PATH") {
+        for p in env::split_paths(&path) {
+            push_unique(p);
+        }
+    }
+
+    // Guaranteed extras (even if not on the configuring shell PATH).
+    if let Some(local) = user_local_bin() {
+        push_unique(local);
+    }
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        push_unique(home.join("homebrew/bin"));
+        push_unique(home.join(".cargo/bin"));
+    }
+    for extra in [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/Applications/Docker.app/Contents/Resources/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ] {
+        push_unique(PathBuf::from(extra));
+    }
+
+    env::join_paths(&dirs)
+        .map(|os| os.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| {
+            "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".into()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +233,13 @@ mod tests {
         if let Some(p) = user_local_bin() {
             assert!(p.ends_with(".local/bin"));
         }
+    }
+
+    #[test]
+    fn agent_tool_path_includes_docker_and_local_bin() {
+        let p = agent_tool_path();
+        assert!(p.contains("/usr/local/bin") || p.contains("/opt/homebrew/bin"));
+        assert!(p.contains(".local/bin") || p.contains("/usr/bin"));
+        assert!(p.contains("Docker.app") || p.contains("/usr/local/bin"));
     }
 }
