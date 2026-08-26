@@ -71,8 +71,8 @@ jenkins_agent:
   remote_fs: null
   agent_jar: null
   cpu_cores: 0            # logical cores recorded at prepare
-  api_user: null          # plaintext for now; encrypt later
-  api_token: null         # plaintext for now; encrypt later
+  api_user: null          # CLI registration only; plaintext for now → Keychain later
+  api_token: null         # not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
 
 resources:
   cpu_cores_label: CPU_CORES
@@ -218,6 +218,12 @@ CLI flag `--jenkins` overrides config for that invocation only (does not write b
 }
 ```
 
+## Secrets (CI)
+
+LLM API keys and forge PATs are **not** fields in `config.yaml`. Configure them once in the Jenkins Credentials store on the controller so every agent can use them — see [secrets.md](secrets.md).
+
+`jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys.
+
 ## Environment variables
 
 | Variable | Description |
@@ -233,6 +239,7 @@ CLI flag `--jenkins` overrides config for that invocation only (does not write b
 1. Choose one Mac as Jenkins controller (`jenkins.enabled: true`).
 2. Keep other Macs with `jenkins.enabled: false`.
 3. Register those Macs to Jenkins as build workers using Jenkins-native agent setup.
+4. Put shared CI secrets (LLM keys, Git PATs) on the controller only — see [secrets.md](secrets.md).
 
 This keeps Kubernetes local on each Mac while still enabling centralized CI orchestration.
 

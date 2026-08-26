@@ -253,7 +253,9 @@ Do **not** fork Harbor — `--jobs-dir` is the isolation argument.
 
 ## Credentials
 
-Store keys in Jenkins credentials (secret text), inject on the agent:
+See **[secrets.md](secrets.md)** for the full design. Short version for this job:
+
+**Configure secrets once on the Jenkins controller** (global Credentials store). Every agent that runs `lolbench_one_task` receives injected env for that build — do **not** install LLM/Git keys on each worker.
 
 | Credential ID | Env var |
 |---------------|---------|
@@ -261,8 +263,10 @@ Store keys in Jenkins credentials (secret text), inject on the agent:
 | `openai-api-key` | `OPENAI_API_KEY` |
 | `anthropic-api-key` | `ANTHROPIC_API_KEY` |
 | `deepseek-api-key` | `DEEPSEEK_API_KEY` |
+| `openlux-api-key` | `OPENLUX_API_KEY` |
+| `github-pat` / `gitcode-pat` | forge tokens for clone/push/comments (when jobs need them) |
 
-Bind all of them; Harbor uses whichever matches `-m`. Never put keys in job parameters.
+Bind keys in the Pipeline by credential ID. Harbor uses whichever env matches `-m`. Never put keys in job parameters. `HARNESS=oracle` / `nop` should run without LLM credentials.
 
 ---
 
@@ -397,7 +401,7 @@ pipeline {
 
 Keep this Jenkinsfile in **LoLBench-Preview** (for example `Jenkinsfile.lolbench_one_task`) if you prefer SCM-driven jobs later.
 
-**mac-k3d:** `start` / `config` on a controller with Jenkins enabled create an inline Pipeline job named `lolbench_one_task` automatically (idempotent; existing jobs are left alone). Override the LoLBench checkout URL via job parameter `LOLBENCH_GIT_URL` (defaults to `lolbench.git_url` from config). Credentials are **not** required for `HARNESS=oracle`; for model runs, add secret-text credentials or export keys on the agent.
+**mac-k3d:** `start` / `config` on a controller with Jenkins enabled create/update an inline Pipeline job named `lolbench_one_task`. Override the LoLBench checkout URL via job parameter `LOLBENCH_GIT_URL` (defaults to `lolbench.git_url` from config). Credentials are **not** required for `HARNESS=oracle`; for model runs, add Secret text credentials on the **controller** (see [secrets.md](secrets.md)) — not on each agent.
 
 ---
 
@@ -448,7 +452,7 @@ A wrapper job can fan out over a task list by triggering `lolbench_one_task` N t
 
 1. Create lockable resource + worker labels (`prepare` / `config` on workers).
 2. `mac-k3d start` / `config` on the controller creates Pipeline job `lolbench_one_task` (inline Jenkinsfile with per-build `--jobs-dir` / `--job-name`).
-3. Add API key credentials (or agent env) for non-oracle harnesses.
+3. Add API key credentials on the Jenkins controller (see [secrets.md](secrets.md)) for non-oracle harnesses.
 4. Run `HARNESS=oracle` on `ruff_1` (no model cost) — expect SUCCESS / reward 1.0; confirm artifacts under `harbor_runs/jenkins-<n>/ruff_1/`.
 5. Trigger two builds of the same task; confirm separate `JOBS_DIR` trees and no overwrite.
 6. Optionally: Slack notification and a separate `lolbench_tasks` wrapper job.

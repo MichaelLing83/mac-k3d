@@ -198,6 +198,8 @@ Kubernetes node roles remain internal to each Mac's own local k3d cluster (`serv
 
 - No secrets in repo or default config.
 - Jenkins initial admin password read from cluster secret at `config` time only.
+- **CI secrets (LLM API keys, forge PATs):** store once in the Jenkins Credentials store on the controller; inject into builds on any agent — see [secrets.md](secrets.md). Do not copy these onto workers.
+- `jenkins_agent.api_token` in YAML is transitional plaintext for CLI registration; prefer Keychain later.
 - `clean` requires explicit `--yes` to prevent accidental data loss.
 
 ## Testing strategy (planned)

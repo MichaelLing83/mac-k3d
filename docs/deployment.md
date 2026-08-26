@@ -19,7 +19,7 @@ Each Mac is a self-contained environment:
 ### Controller role (Jenkins enabled)
 
 - One Mac runs Jenkins inside its local k3d cluster.
-- Jenkins is the CI orchestration point (pipeline definitions, queue, credentials, plugins).
+- Jenkins is the CI orchestration point (pipeline definitions, queue, **credentials**, plugins). LLM/Git secrets are configured once on the controller and injected into builds on every agent — see [secrets.md](secrets.md).
 - This controller can coordinate builds that run on other Macs.
 
 ### Worker role (Jenkins disabled)

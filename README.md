@@ -68,6 +68,7 @@ See [docs/configuration.md](docs/configuration.md) for the full schema.
 - [Setup guide](docs/setup.md)
 - [Prepare wizard](docs/prepare-wizard.md)
 - [LoLBench Jenkins job (`lolbench_one_task`)](docs/lolbench-jenkins.md)
+- [Secrets (Jenkins credentials on controller)](docs/secrets.md)
 
 ## License
 
