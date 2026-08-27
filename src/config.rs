@@ -18,6 +18,7 @@ pub struct MacK3dConfig {
     pub dependencies: DependenciesConfig,
     pub lolbench: LolbenchConfig,
     pub jenkins_agent: JenkinsAgentConfig,
+    pub jenkins_job: JenkinsJobConfig,
     pub resources: ResourcesConfig,
 }
 
@@ -158,6 +159,27 @@ pub struct JenkinsAgentConfig {
     pub api_token: Option<String>,
 }
 
+/// Non-secret defaults for the `lolbench_one_task` Pipeline job (controller).
+///
+/// Secrets are never stored here — see `docs/secrets.md` and pending credentials file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JenkinsJobConfig {
+    pub default_harness: String,
+    pub default_task: String,
+    pub default_model: String,
+}
+
+impl Default for JenkinsJobConfig {
+    fn default() -> Self {
+        Self {
+            default_harness: "oracle".into(),
+            default_task: "ruff_1".into(),
+            default_model: "openrouter/deepseek/deepseek-v4-pro".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResourcesConfig {
@@ -215,6 +237,7 @@ impl Default for MacK3dConfig {
                 api_user: None,
                 api_token: None,
             },
+            jenkins_job: JenkinsJobConfig::default(),
             resources: ResourcesConfig::default(),
         }
     }
@@ -266,6 +289,11 @@ impl MacK3dConfig {
 
     pub fn default_config_path() -> PathBuf {
         Self::config_dir().join("config.yaml")
+    }
+
+    /// Pending CI secrets from prepare (0600 YAML); consumed by `config` into Jenkins Credentials.
+    pub fn pending_credentials_path() -> PathBuf {
+        Self::config_dir().join("credentials.pending.yaml")
     }
 
     pub fn state_dir() -> PathBuf {

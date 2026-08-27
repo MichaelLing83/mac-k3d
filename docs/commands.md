@@ -117,7 +117,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 Apply post-start configuration: kubeconfig merge, context selection, service URLs.
 
 ```bash
-mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-job]
+mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-job] [--skip-secrets] [--update-secrets]
 ```
 
 ### Flags
@@ -128,13 +128,15 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 | `--show-jenkins` | false | Print Jenkins URL and admin password |
 | `--skip-agent` | false | Worker: skip Jenkins agent register / launch-script update |
 | `--skip-job` | false | Skip creating Pipeline job `lolbench_one_task` when Jenkins is enabled |
+| `--skip-secrets` | false | Skip creating/updating Jenkins Credentials from pending secrets |
+| `--update-secrets` | false | Re-prompt for CI secrets even if credentials already exist |
 
 ### Behavior
 
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** create or **update** Pipeline job `lolbench_one_task` (inline Jenkinsfile; uses admin password from the cluster secret).
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with harness map (`icode` / `dsh` / `chrys` / built-ins), credential bindings for IDs that exist, and parameter defaults from `jenkins_job.*`.
 5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.

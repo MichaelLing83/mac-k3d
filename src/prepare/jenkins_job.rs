@@ -7,15 +7,40 @@ use crate::error::{Error, Result};
 
 pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 
+/// Options used when rendering / updating `lolbench_one_task`.
+#[derive(Debug, Clone)]
+pub struct JobOpts {
+    pub lolbench_git_url: String,
+    pub default_harness: String,
+    pub default_task: String,
+    pub default_model: String,
+    /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
+    pub credential_ids: Vec<String>,
+}
+
+impl JobOpts {
+    pub fn from_config(config: &crate::config::MacK3dConfig, credential_ids: Vec<String>) -> Self {
+        let git_url = if config.lolbench.git_url.trim().is_empty() {
+            crate::config::MacK3dConfig::default().lolbench.git_url
+        } else {
+            config.lolbench.git_url.clone()
+        };
+        Self {
+            lolbench_git_url: git_url,
+            default_harness: config.jenkins_job.default_harness.clone(),
+            default_task: config.jenkins_job.default_task.clone(),
+            default_model: config.jenkins_job.default_model.clone(),
+            credential_ids,
+        }
+    }
+}
+
 /// Ensure Pipeline job `lolbench_one_task` exists on the controller (create or update).
-///
-/// Uses admin basic auth (typically the chart-generated password). When the job already
-/// exists, refreshes the inline Pipeline definition so Jenkinsfile fixes ship on `config`.
 pub fn ensure_lolbench_one_task(
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
-    lolbench_git_url: &str,
+    opts: &JobOpts,
 ) -> Result<()> {
     let base = jenkins_url.trim_end_matches('/');
     let auth = format!("{api_user}:{api_token_or_password}");
@@ -37,7 +62,7 @@ pub fn ensure_lolbench_one_task(
 
     if exists {
         println!("Updating Jenkins job '{LOLBENCH_ONE_TASK}' Pipeline definition…");
-        match update_job_script(base, &auth, &crumb, &cookie_file, lolbench_git_url) {
+        match update_job_script(base, &auth, &crumb, &cookie_file, opts) {
             Ok(()) => println!("Updated job '{LOLBENCH_ONE_TASK}'."),
             Err(err) => println!(
                 "Warning: failed to update job '{LOLBENCH_ONE_TASK}' ({err}).\n\
@@ -48,7 +73,7 @@ pub fn ensure_lolbench_one_task(
         return Ok(());
     }
 
-    let xml = job_config_xml(lolbench_git_url);
+    let xml = job_config_xml(opts);
     let create_url = format!(
         "{base}/createItem?name={}",
         urlencoding_simple(LOLBENCH_ONE_TASK)
@@ -106,21 +131,19 @@ pub fn ensure_lolbench_one_task(
 
     println!(
         "Created job '{LOLBENCH_ONE_TASK}'.\n\
-         Trigger: {base}/job/{LOLBENCH_ONE_TASK}/buildWithParameters\n\
-         Add secret-text credentials (openrouter-api-key, …) or export keys on the agent for non-oracle runs."
+         Trigger: {base}/job/{LOLBENCH_ONE_TASK}/buildWithParameters"
     );
     Ok(())
 }
 
-/// Replace the WorkflowJob inline script via Script Console (more reliable than config.xml POST).
 fn update_job_script(
     base: &str,
     auth: &str,
     crumb: &Option<(String, String)>,
     cookie_file: &Path,
-    lolbench_git_url: &str,
+    opts: &JobOpts,
 ) -> Result<()> {
-    let script = jenkinsfile(lolbench_git_url);
+    let script = jenkinsfile(opts);
     let b64 = base64_encode(script.as_bytes());
     let groovy = format!(
         r#"
@@ -204,10 +227,11 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Create the job using the in-cluster Jenkins admin password from kubectl.
+/// Create/update the job using the in-cluster Jenkins admin password from kubectl.
 pub async fn ensure_lolbench_one_task_from_cluster(
     kubectl: &Path,
     config: &crate::config::MacK3dConfig,
+    credential_ids: Vec<String>,
 ) -> Result<()> {
     if !config.jenkins.enabled {
         return Ok(());
@@ -222,12 +246,8 @@ pub async fn ensure_lolbench_one_task_from_cluster(
             return Ok(());
         }
     };
-    let git_url = if config.lolbench.git_url.trim().is_empty() {
-        crate::config::MacK3dConfig::default().lolbench.git_url
-    } else {
-        config.lolbench.git_url.clone()
-    };
-    ensure_lolbench_one_task(&url, "admin", &password, &git_url)
+    let opts = JobOpts::from_config(config, credential_ids);
+    ensure_lolbench_one_task(&url, "admin", &password, &opts)
 }
 
 fn wait_for_jenkins(base: &str, auth: &str, timeout: Duration) -> Result<()> {
@@ -264,9 +284,72 @@ fn wait_for_jenkins(base: &str, auth: &str, timeout: Duration) -> Result<()> {
     }
 }
 
-fn job_config_xml(lolbench_git_url: &str) -> String {
-    let script = jenkinsfile(lolbench_git_url);
-    let git_xml = xml_escape(lolbench_git_url.trim());
+fn harness_choices(default_harness: &str) -> Vec<&'static str> {
+    let all = [
+        "oracle",
+        "icode",
+        "dsh",
+        "chrys",
+        "opencode",
+        "codex",
+        "claude-code",
+        "nop",
+    ];
+    let mut out = Vec::new();
+    if all.contains(&default_harness) {
+        out.push(match default_harness {
+            "oracle" => "oracle",
+            "icode" => "icode",
+            "dsh" => "dsh",
+            "chrys" => "chrys",
+            "opencode" => "opencode",
+            "codex" => "codex",
+            "claude-code" => "claude-code",
+            "nop" => "nop",
+            _ => "oracle",
+        });
+    }
+    for h in all {
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    if out.is_empty() {
+        out.push("oracle");
+    }
+    out
+}
+
+fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
+    use crate::prepare::jenkins_credentials::CREDENTIAL_DEFS;
+    let mut binds = Vec::new();
+    for def in CREDENTIAL_DEFS {
+        if credential_ids.iter().any(|id| id == def.id) {
+            binds.push(format!(
+                "string(credentialsId: '{}', variable: '{}')",
+                def.id, def.env_var
+            ));
+        }
+    }
+    if binds.is_empty() {
+        return (String::new(), String::new());
+    }
+    let open = format!("        withCredentials([{}]) {{\n", binds.join(", "));
+    let close = "        }\n".to_string();
+    (open, close)
+}
+
+fn job_config_xml(opts: &JobOpts) -> String {
+    let script = jenkinsfile(opts);
+    let git_xml = xml_escape(opts.lolbench_git_url.trim());
+    let task_xml = xml_escape(&opts.default_task);
+    let model_xml = xml_escape(&opts.default_model);
+    let harnesses = harness_choices(&opts.default_harness);
+    let harness_xml: String = harnesses
+        .iter()
+        .map(|h| format!("              <string>{h}</string>"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -278,26 +361,22 @@ fn job_config_xml(lolbench_git_url: &str) -> String {
         <hudson.model.StringParameterDefinition>
           <name>TASK</name>
           <description>LoLBench task id (harbor_tasks/TASK)</description>
-          <defaultValue>ruff_1</defaultValue>
+          <defaultValue>{task_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
           <name>HARNESS</name>
-          <description>Harbor agent</description>
+          <description>Harbor agent or custom LoLBench adapter alias</description>
           <choices class="java.util.Arrays$ArrayList">
             <a class="string-array">
-              <string>opencode</string>
-              <string>codex</string>
-              <string>claude-code</string>
-              <string>oracle</string>
-              <string>nop</string>
+{harness_xml}
             </a>
           </choices>
         </hudson.model.ChoiceParameterDefinition>
         <hudson.model.StringParameterDefinition>
           <name>MODEL</name>
-          <description>provider/model (ignored for oracle/nop)</description>
-          <defaultValue>openrouter/deepseek/deepseek-v4-pro</defaultValue>
+          <description>provider/model (ignored for oracle/nop/icode/dsh)</description>
+          <defaultValue>{model_xml}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
         <hudson.model.ChoiceParameterDefinition>
@@ -358,10 +437,18 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Declarative Pipeline embedded in the job (inline; no SCM required for the job itself).
-fn jenkinsfile(lolbench_git_url: &str) -> String {
-    // Escape nothing special inside CDATA except "]]>" which we avoid.
-    let git = lolbench_git_url.trim();
+fn jenkinsfile(opts: &JobOpts) -> String {
+    let git = opts.lolbench_git_url.trim().replace('\\', "\\\\").replace('\'', "\\'");
+    let task = opts.default_task.replace('\\', "\\\\").replace('\'', "\\'");
+    let model = opts.default_model.replace('\\', "\\\\").replace('\'', "\\'");
+    let harnesses = harness_choices(&opts.default_harness);
+    let harness_list = harnesses
+        .iter()
+        .map(|h| format!("'{h}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
+
     format!(
         r#"pipeline {{
   agent {{ label params.AGENT_LABEL }}
@@ -371,9 +458,9 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
   }}
 
   parameters {{
-    string(name: 'TASK', defaultValue: 'ruff_1', description: 'LoLBench task id (harbor_tasks/<TASK>)')
-    choice(name: 'HARNESS', choices: ['opencode', 'codex', 'claude-code', 'oracle', 'nop'], description: 'Harbor agent')
-    string(name: 'MODEL', defaultValue: 'openrouter/deepseek/deepseek-v4-pro', description: 'provider/model (ignored for oracle/nop)')
+    string(name: 'TASK', defaultValue: '{task}', description: 'LoLBench task id (harbor_tasks/<TASK>)')
+    choice(name: 'HARNESS', choices: [{harness_list}], description: 'Harbor agent or custom adapter alias')
+    string(name: 'MODEL', defaultValue: '{model}', description: 'provider/model (ignored for oracle/nop/icode/dsh)')
     choice(name: 'SUITE', choices: ['union', 'orig', 'aug'])
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'MAX_RETRIES', defaultValue: '2')
@@ -400,12 +487,11 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
     }}
     stage('Evaluate') {{
       steps {{
-        // resource: null — Declarative requires the DataBound field even when locking by label.
-        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+{cred_open}        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
           sh '''
             set -euo pipefail
-            # LaunchAgent PATH can be minimal; keep Docker/Harbor visible in the build shell.
             export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${{PATH}}"
+            export PYTHONPATH=.
             test -d "harbor_tasks/${{TASK}}"
             command -v docker >/dev/null
             command -v harbor >/dev/null
@@ -413,16 +499,44 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
             harbor --version
 
             mkdir -p "${{JOBS_DIR}}"
+            agent_spec="$HARNESS"
             model_args=()
-            if [ "$HARNESS" != oracle ] && [ "$HARNESS" != nop ]; then
-              model_args=(-m "$MODEL")
-            fi
+            ae_args=()
             extra=()
+            case "$HARNESS" in
+              icode)
+                agent_spec="agents.icode_agent:ICodeAgent"
+                extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
+                [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
+                [ -n "${{GITCODE_TOKEN:-}}" ] && ae_args+=(--ae "GITCODE_TOKEN=${{GITCODE_TOKEN}}")
+                ;;
+              dsh)
+                agent_spec="agents.dsh_agent:DshAgent"
+                extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
+                [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
+                ;;
+              chrys)
+                agent_spec="agents.chrys_agent:ChrysAgent"
+                extra+=(--agent-setup-timeout-multiplier 10)
+                [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
+                [ -n "${{GITHUB_TOKEN:-}}" ] && ae_args+=(--ae "GITHUB_TOKEN=${{GITHUB_TOKEN}}")
+                [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
+                ;;
+              oracle|nop)
+                ;;
+              *)
+                [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
+                [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
+                [ -n "${{OPENAI_API_KEY:-}}" ] && ae_args+=(--ae "OPENAI_API_KEY=${{OPENAI_API_KEY}}")
+                [ -n "${{ANTHROPIC_API_KEY:-}}" ] && ae_args+=(--ae "ANTHROPIC_API_KEY=${{ANTHROPIC_API_KEY}}")
+                ;;
+            esac
             [ "$MAX_RETRIES" != "0" ] && extra+=(--max-retries "$MAX_RETRIES")
 
             harbor run \
               -p "harbor_tasks/${{TASK}}" \
-              -a "${{HARNESS}}" ${{model_args[@]+"${{model_args[@]}}"}} \
+              -a "${{agent_spec}}" ${{model_args[@]+"${{model_args[@]}}"}} \
+              ${{ae_args[@]+"${{ae_args[@]}}"}} \
               --job-name "${{HARBOR_JOB_NAME}}" \
               --jobs-dir "${{JOBS_DIR}}" \
               --no-delete -n 1 -y \
@@ -430,7 +544,7 @@ fn jenkinsfile(lolbench_git_url: &str) -> String {
               "${{extra[@]}}"
           '''
         }}
-      }}
+{cred_close}      }}
     }}
     stage('Report') {{
       steps {{
@@ -443,7 +557,6 @@ if not paths:
     raise SystemExit(f"no reward.json under {{jobs_dir}}")
 data = json.load(open(paths[0]))
 reward = data.get("reward")
-# Avoid \\n in the Groovy/shell pipeline string (Groovy would turn it into a real newline).
 pathlib.Path("lolbench.properties").write_text(f"REWARD={{reward}}" + chr(10))
 print(data)
 PY
@@ -467,7 +580,12 @@ PY
   }}
 }}
 "#,
-        git = git.replace('\\', "\\\\").replace('\'', "\\'")
+        task = task,
+        model = model,
+        harness_list = harness_list,
+        git = git,
+        cred_open = cred_open,
+        cred_close = cred_close,
     )
 }
 
@@ -556,35 +674,45 @@ fn urlencoding_simple(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn sample_opts() -> JobOpts {
+        JobOpts {
+            lolbench_git_url: "https://github.com/example/LoLBench-Preview.git".into(),
+            default_harness: "icode".into(),
+            default_task: "ruff_1".into(),
+            default_model: "openrouter/deepseek/deepseek-v4-pro".into(),
+            credential_ids: vec![
+                "deepseek-api-key".into(),
+                "gitcode-pat".into(),
+            ],
+        }
+    }
+
     #[test]
-    fn jenkinsfile_contains_isolation_and_lock() {
-        let jf = jenkinsfile("https://github.com/example/LoLBench-Preview.git");
+    fn jenkinsfile_contains_isolation_and_icode() {
+        let jf = jenkinsfile(&sample_opts());
         assert!(jf.contains("harbor_runs/jenkins-"));
         assert!(jf.contains("lock(label: 'CPU_CORES'"));
         assert!(jf.contains("resource: null"));
+        assert!(jf.contains("agents.icode_agent:ICodeAgent"));
+        assert!(jf.contains("withCredentials"));
+        assert!(jf.contains("deepseek-api-key"));
         assert!(!jf.contains("timestamps()"));
-        assert!(jf.contains("LOLBENCH_GIT_URL"));
-        assert!(jf.contains("https://github.com/example/LoLBench-Preview.git"));
-        assert!(!jf.contains("credentials('openrouter-api-key')"));
     }
 
     #[test]
     fn job_xml_wraps_pipeline_in_cdata() {
-        let xml = job_config_xml("https://example.com/lolbench.git");
+        let xml = job_config_xml(&sample_opts());
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("flow-definition"));
-        assert!(xml.contains("ParametersDefinitionProperty"));
-        assert!(xml.contains("<name>TASK</name>"));
-        assert!(xml.contains("https://example.com/lolbench.git"));
+        assert!(xml.contains("<string>icode</string>"));
         assert!(xml.contains("pipeline {"));
     }
 
     #[test]
     fn jenkinsfile_python_fstring_is_valid() {
-        let jf = jenkinsfile("https://example.com/x.git");
+        let jf = jenkinsfile(&sample_opts());
         assert!(jf.contains(r#"glob.glob(f"{jobs_dir}/**/verifier/reward.json""#));
         assert!(jf.contains(r#"f"REWARD={reward}" + chr(10)"#));
-        assert!(!jf.contains(r#"write_text(f"REWARD={reward}\n")"#));
     }
 
     #[test]
@@ -592,5 +720,12 @@ mod tests {
         let s = "hello pipeline";
         let enc = base64_encode(s.as_bytes());
         assert_eq!(enc, "aGVsbG8gcGlwZWxpbmU=");
+    }
+
+    #[test]
+    fn harness_default_sorted_first() {
+        let h = harness_choices("icode");
+        assert_eq!(h[0], "icode");
+        assert!(h.contains(&"oracle"));
     }
 }

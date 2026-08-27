@@ -4,12 +4,12 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 
 use crate::config::{
     ClusterConfig, DependenciesConfig, DependencyEntry, DependencySource, JenkinsAgentConfig,
-    LolbenchConfig, LolbenchSource, MacK3dConfig, NodeRole, StorageConfig,
+    JenkinsJobConfig, LolbenchConfig, LolbenchSource, MacK3dConfig, NodeRole, StorageConfig,
 };
 use crate::error::{Error, Result};
 use crate::prepare::discovery::{self, DiscoveredDeps, DiscoveredTool};
 use crate::prepare::install::{self, entry_from_path};
-use crate::prepare::{jenkins_agent, lolbench, resources};
+use crate::prepare::{jenkins_agent, jenkins_credentials, lolbench, resources};
 use crate::prepare::volumes::VolumeCandidate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +119,17 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
 
     let (cluster_name, agents, jenkins_port) = prompt_cluster_settings(role)?;
 
+    let jenkins_job_cfg = if matches!(role, MacRole::Controller) {
+        prompt_jenkins_job_defaults()?
+    } else {
+        JenkinsJobConfig::default()
+    };
+
+    // Collect CI secrets into pending file before confirm (uploaded on `config`).
+    if matches!(role, MacRole::Controller) {
+        let _ = jenkins_credentials::prompt_pending_credentials();
+    }
+
     let storage = StorageConfig {
         base_dir: Some(base_dir.clone()),
         docker: Some(base_dir.join("docker")),
@@ -151,6 +162,7 @@ pub fn run(volumes: Vec<VolumeCandidate>, discovered: DiscoveredDeps) -> Result<
         },
         lolbench: lolbench_cfg,
         jenkins_agent: jenkins_agent_cfg,
+        jenkins_job: jenkins_job_cfg,
         ..MacK3dConfig::default()
     };
 
@@ -681,6 +693,49 @@ fn apply_worker_agent(config: &mut MacK3dConfig, _creds: Option<&WorkerAgentProm
     jenkins_agent::ensure_worker_agent(config)
 }
 
+fn prompt_jenkins_job_defaults() -> Result<JenkinsJobConfig> {
+    println!(
+        "\n`lolbench_one_task` parameter defaults (non-secret).\n\
+         Secrets are collected separately and stored in Jenkins Credentials.\n"
+    );
+    let harnesses = [
+        "oracle",
+        "icode",
+        "dsh",
+        "chrys",
+        "opencode",
+        "codex",
+        "claude-code",
+        "nop",
+    ];
+    let default_idx = harnesses.iter().position(|h| *h == "oracle").unwrap_or(0);
+    let hi = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default HARNESS")
+        .items(&harnesses)
+        .default(default_idx)
+        .interact()
+        .map_err(|_| Error::Cancelled)?;
+    let default_harness = harnesses[hi].to_string();
+
+    let default_task: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default TASK")
+        .default("ruff_1".into())
+        .interact_text()
+        .map_err(|_| Error::Cancelled)?;
+
+    let default_model: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Default MODEL (built-in harnesses / chrys)")
+        .default("openrouter/deepseek/deepseek-v4-pro".into())
+        .interact_text()
+        .map_err(|_| Error::Cancelled)?;
+
+    Ok(JenkinsJobConfig {
+        default_harness,
+        default_task,
+        default_model,
+    })
+}
+
 fn prompt_cluster_settings(role: MacRole) -> Result<(String, u8, u16)> {
     let default_name = match role {
         MacRole::Controller => "ci-controller",
@@ -762,6 +817,14 @@ fn print_summary(config: &MacK3dConfig, role: MacRole) {
                 .as_deref()
                 .unwrap_or("?"),
             config.jenkins_agent.cpu_cores
+        );
+    }
+    if matches!(role, MacRole::Controller) {
+        println!(
+            "  Job defaults:  harness={} task={} model={}",
+            config.jenkins_job.default_harness,
+            config.jenkins_job.default_task,
+            config.jenkins_job.default_model
         );
     }
     println!("  Disk minimum:  {} GB", config.disk_min_gb());

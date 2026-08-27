@@ -75,7 +75,8 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig) -> Result<()> {
             println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
             // Best-effort: config will retry if Jenkins is still warming up.
             if let Err(err) =
-                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config).await
+                jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config, Vec::new())
+                    .await
             {
                 println!(
                     "Note: could not create '{}' yet ({err}). Re-run `mac-k3d config`.",

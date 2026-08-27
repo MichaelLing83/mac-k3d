@@ -58,8 +58,13 @@ jenkins_agent:
   remote_fs: null
   agent_jar: null
   cpu_cores: 0
-  api_user: null          # plaintext for now; encrypt later
-  api_token: null         # plaintext for now; encrypt later
+  api_user: null          # CLI registration only
+  api_token: null         # not for LLM/Git — see docs/secrets.md
+
+jenkins_job:              # controller: lolbench_one_task parameter defaults (non-secret)
+  default_harness: oracle
+  default_task: ruff_1
+  default_model: openrouter/deepseek/deepseek-v4-pro
 
 resources:
   cpu_cores_label: CPU_CORES

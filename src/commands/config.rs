@@ -5,7 +5,7 @@ use clap::Args;
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
 use crate::platform::ensure_macos;
-use crate::prepare::{jenkins_agent, jenkins_job};
+use crate::prepare::{jenkins_agent, jenkins_credentials, jenkins_job};
 use crate::runtime::{jenkins, kubectl, k3d, Tools};
 
 #[derive(Debug, Args)]
@@ -25,6 +25,14 @@ pub struct ConfigArgs {
     /// Skip creating the `lolbench_one_task` Pipeline job (controller / Jenkins enabled)
     #[arg(long)]
     pub skip_job: bool,
+
+    /// Skip creating/updating Jenkins Credentials from pending secrets
+    #[arg(long)]
+    pub skip_secrets: bool,
+
+    /// Re-prompt for CI secrets even if Jenkins credentials already exist
+    #[arg(long)]
+    pub update_secrets: bool,
 }
 
 pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
@@ -59,12 +67,14 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
         println!("Kubernetes API is ready.");
     }
 
+    let mut admin_password: Option<String> = None;
     if config.jenkins.enabled || args.show_jenkins {
         println!("Jenkins UI: {}", jenkins::ui_url(config));
         match jenkins::admin_password(&tools.kubectl, config).await {
             Ok(password) if !password.is_empty() => {
                 println!("Jenkins admin user: admin");
                 println!("Jenkins admin password: {password}");
+                admin_password = Some(password);
             }
             Ok(_) | Err(_) => {
                 println!(
@@ -75,10 +85,40 @@ pub async fn run(args: ConfigArgs, config: &MacK3dConfig) -> Result<()> {
         }
     }
 
+    let mut credential_ids = Vec::new();
+    if config.jenkins.enabled && !args.skip_secrets {
+        if let Some(password) = admin_password.as_deref() {
+            println!("Ensuring Jenkins Credentials…");
+            match jenkins_credentials::ensure_credentials_on_controller(
+                &jenkins::ui_url(config),
+                "admin",
+                password,
+                args.update_secrets,
+            ) {
+                Ok(ids) => {
+                    credential_ids = ids;
+                    if credential_ids.is_empty() {
+                        println!(
+                            "No CI credentials in Jenkins yet (oracle still works).\n\
+                             Re-run with `--update-secrets` or set pending secrets — see docs/secrets.md."
+                        );
+                    }
+                }
+                Err(err) => {
+                    println!("Warning: could not ensure Jenkins Credentials ({err}).");
+                }
+            }
+        }
+    }
+
     if config.jenkins.enabled && !args.skip_job {
         println!("Ensuring Jenkins job '{}'…", jenkins_job::LOLBENCH_ONE_TASK);
-        if let Err(err) =
-            jenkins_job::ensure_lolbench_one_task_from_cluster(&tools.kubectl, config).await
+        if let Err(err) = jenkins_job::ensure_lolbench_one_task_from_cluster(
+            &tools.kubectl,
+            config,
+            credential_ids,
+        )
+        .await
         {
             println!(
                 "Warning: could not ensure '{}' ({err}).",

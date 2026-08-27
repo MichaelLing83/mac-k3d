@@ -222,7 +222,17 @@ CLI flag `--jenkins` overrides config for that invocation only (does not write b
 
 LLM API keys and forge PATs are **not** fields in `config.yaml`. Configure them once in the Jenkins Credentials store on the controller so every agent can use them — see [secrets.md](secrets.md).
 
+Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600); `mac-k3d config` creates Jenkins Secret text credentials and clears uploaded entries.
+
 `jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys.
+
+### `jenkins_job` (controller)
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `default_harness` | `oracle` | `lolbench_one_task` HARNESS parameter default (first choice) |
+| `default_task` | `ruff_1` | TASK parameter default |
+| `default_model` | `openrouter/deepseek/deepseek-v4-pro` | MODEL parameter default |
 
 ## Environment variables
 

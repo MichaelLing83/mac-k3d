@@ -86,9 +86,23 @@ These stay **off** the shared CI credential list (or are node-local by nature):
 
 Possible later enhancements (not required for the model above):
 
-1. Controller `config`: ensure credential **IDs** exist (prompt once for values; write only into Jenkins, never into YAML).
+1. ~~Controller `config`: ensure credential **IDs** exist~~ — **implemented**: prepare can write `~/.config/mac-k3d/credentials.pending.yaml` (0600); `config` creates Secret text credentials in Jenkins and binds present IDs into `lolbench_one_task`. Use `--update-secrets` to re-prompt.
 2. Move `jenkins_agent.api_token` from plaintext YAML into macOS Keychain.
 3. Document rotation checklist (Jenkins UI + revoke at provider).
+
+### What prepare / config ask (controller)
+
+**Non-secret job defaults** (saved in `config.yaml` → `jenkins_job`):
+
+- Default `HARNESS` (e.g. `oracle`, `icode`)
+- Default `TASK`
+- Default `MODEL`
+
+**Secrets** (never in `config.yaml`):
+
+- Optional password prompts for OpenRouter, DeepSeek, OpenLux, OpenAI, Anthropic, GitCode PAT, GitHub PAT
+- Or env vars `MAC_K3D_OPENROUTER_API_KEY`, `MAC_K3D_DEEPSEEK_API_KEY`, `MAC_K3D_GITCODE_PAT`, …
+- Pending file uploaded on `mac-k3d config`; job parameter **defaults** are only harness/task/model — secrets are bound by credential ID
 
 ## Related docs
 
