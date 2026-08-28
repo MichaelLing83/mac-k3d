@@ -47,9 +47,9 @@ dependencies:
     source: skip
 
 lolbench:
-  path: null
+  path: null              # when set, lolbench_one_task uses this local checkout (no git clone)
   source: skip   # skip | existing | clone | release
-  git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
+  git_url: https://github.com/MichaelLing83/LoLBench-Preview.git  # used only if path is empty
 
 jenkins_agent:
   controller_url: null

@@ -16,8 +16,8 @@ Logging uses `tracing`; override with `RUST_LOG=debug`.
 Verify prerequisites and generate configuration via an interactive wizard.
 
 ```bash
-mac-k3d prepare                    # interactive wizard (TTY, no existing config)
-mac-k3d prepare -i                 # force interactive wizard
+mac-k3d prepare                    # wizard if no config; else prompt (see below)
+mac-k3d prepare -i                 # force interactive wizard (overwrite)
 mac-k3d prepare --init-config      # write defaults, no prompts
 mac-k3d prepare --non-interactive  # validate only
 mac-k3d prepare --disk-min-gb 20   # override role disk minimum (labs only)
@@ -59,6 +59,8 @@ mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
 `mac-k3d start -c ~/.config/mac-k3d/worker.yaml` is optional (second local k3d); LoLBench only needs the host agent + Docker/Harbor.
 
 ### Behavior
+
+If `config.yaml` already exists and stdin is a TTY, `prepare` (without `-i`) prompts: **re-run wizard (overwrite)**, **validate only**, or **cancel**. Choosing re-run wizard runs the full questionnaire and overwrites the file. Use `prepare -i` to skip that menu and always overwrite.
 
 1. Assert macOS.
 2. **Storage**: scan volumes, default to the one with most free space, prompt for base directory under that volume.
@@ -136,7 +138,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with harness map (`icode` / `dsh` / `chrys` / built-ins), credential bindings for IDs that exist, and parameter defaults from `jenkins_job.*`.
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update Pipeline job `lolbench_one_task` with harness map (`icode` / `dsh` / `chrys` / built-ins), credential bindings for IDs that exist, and parameter defaults from `jenkins_job.*`. When `lolbench.path` is set, the job uses that local checkout (`LOLBENCH_PATH`); otherwise it clones via `LOLBENCH_GIT_URL`.
 5. **Worker:** using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node, rewrite `launch-agent.sh`, create `CPU_CORES` locks, and **start a macOS LaunchAgent** (`com.mac-k3d.jenkins-agent`) with KeepAlive (unless `--skip-agent`).
 
 The LaunchAgent survives closing the terminal and restarts if the Java process exits. Logs: `{remote_fs}/jenkins-agent.stdout.log`.

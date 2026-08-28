@@ -10,6 +10,9 @@ pub const LOLBENCH_ONE_TASK: &str = "lolbench_one_task";
 /// Options used when rendering / updating `lolbench_one_task`.
 #[derive(Debug, Clone)]
 pub struct JobOpts {
+    /// Absolute path to LoLBench-Preview on the agent Mac (`lolbench.path`).
+    /// When set, the job uses this checkout instead of cloning.
+    pub lolbench_path: Option<String>,
     pub lolbench_git_url: String,
     pub default_harness: String,
     pub default_task: String,
@@ -25,13 +28,26 @@ impl JobOpts {
         } else {
             config.lolbench.git_url.clone()
         };
+        let lolbench_path = config
+            .lolbench
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .filter(|s| !s.trim().is_empty());
         Self {
+            lolbench_path,
             lolbench_git_url: git_url,
             default_harness: config.jenkins_job.default_harness.clone(),
             default_task: config.jenkins_job.default_task.clone(),
             default_model: config.jenkins_job.default_model.clone(),
             credential_ids,
         }
+    }
+
+    fn uses_local_checkout(&self) -> bool {
+        self.lolbench_path
+            .as_ref()
+            .is_some_and(|p| !p.trim().is_empty())
     }
 }
 
@@ -334,14 +350,14 @@ fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
     if binds.is_empty() {
         return (String::new(), String::new());
     }
-    let open = format!("        withCredentials([{}]) {{\n", binds.join(", "));
-    let close = "        }\n".to_string();
+    // Indent inside `dir(...) {` under Evaluate steps.
+    let open = format!("          withCredentials([{}]) {{\n", binds.join(", "));
+    let close = "          }\n".to_string();
     (open, close)
 }
 
 fn job_config_xml(opts: &JobOpts) -> String {
     let script = jenkinsfile(opts);
-    let git_xml = xml_escape(opts.lolbench_git_url.trim());
     let task_xml = xml_escape(&opts.default_task);
     let model_xml = xml_escape(&opts.default_model);
     let harnesses = harness_choices(&opts.default_harness);
@@ -350,6 +366,33 @@ fn job_config_xml(opts: &JobOpts) -> String {
         .map(|h| format!("              <string>{h}</string>"))
         .collect::<Vec<_>>()
         .join("\n");
+
+    let source_params = if opts.uses_local_checkout() {
+        let path_xml = xml_escape(opts.lolbench_path.as_deref().unwrap_or("").trim());
+        format!(
+            r#"        <hudson.model.StringParameterDefinition>
+          <name>LOLBENCH_PATH</name>
+          <description>Absolute path to LoLBench-Preview on the agent Mac (from lolbench.path)</description>
+          <defaultValue>{path_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>"#
+        )
+    } else {
+        let git_xml = xml_escape(opts.lolbench_git_url.trim());
+        format!(
+            r#"        <hudson.model.StringParameterDefinition>
+          <name>LOLBENCH_GIT_URL</name>
+          <defaultValue>{git_xml}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>LOLBENCH_GIT_REF</name>
+          <defaultValue>main</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>"#
+        )
+    };
+
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job">
@@ -405,16 +448,7 @@ fn job_config_xml(opts: &JobOpts) -> String {
           <defaultValue>4</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_GIT_URL</name>
-          <defaultValue>{git_xml}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-        <hudson.model.StringParameterDefinition>
-          <name>LOLBENCH_GIT_REF</name>
-          <defaultValue>main</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
+{source_params}
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
@@ -438,7 +472,6 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn jenkinsfile(opts: &JobOpts) -> String {
-    let git = opts.lolbench_git_url.trim().replace('\\', "\\\\").replace('\'', "\\'");
     let task = opts.default_task.replace('\\', "\\\\").replace('\'', "\\'");
     let model = opts.default_model.replace('\\', "\\\\").replace('\'', "\\'");
     let harnesses = harness_choices(&opts.default_harness);
@@ -448,6 +481,77 @@ fn jenkinsfile(opts: &JobOpts) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let (cred_open, cred_close) = with_credentials_block(&opts.credential_ids);
+
+    let (source_params, prepare_stage, work_dir_expr, archive_root) =
+        if opts.uses_local_checkout() {
+            let path = opts
+                .lolbench_path
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'");
+            (
+                format!(
+                    "    string(name: 'LOLBENCH_PATH', defaultValue: '{path}', description: 'Absolute LoLBench-Preview path on the agent Mac')"
+                ),
+                r#"    stage('Prepare') {
+      steps {
+        sh '''
+          set -euo pipefail
+          test -d "${LOLBENCH_PATH}"
+          test -d "${LOLBENCH_PATH}/harbor_tasks"
+        '''
+      }
+    }"#
+                .to_string(),
+                "params.LOLBENCH_PATH".to_string(),
+                // archiveArtifacts is workspace-relative; copy via shell first.
+                r#"sh '''
+        set +e
+        rm -rf "${WORKSPACE}/_lolbench_artifacts"
+        mkdir -p "${WORKSPACE}/_lolbench_artifacts"
+        if [ -d "${LOLBENCH_PATH}/${JOBS_DIR}" ]; then
+          cp -R "${LOLBENCH_PATH}/${JOBS_DIR}" "${WORKSPACE}/_lolbench_artifacts/"
+        fi
+      '''
+      archiveArtifacts artifacts: "_lolbench_artifacts/**/verifier/*.json", allowEmptyArchive: true"#
+                    .to_string(),
+            )
+        } else {
+            let git = opts
+                .lolbench_git_url
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'");
+            (
+                format!(
+                    "    string(name: 'LOLBENCH_GIT_URL', defaultValue: '{git}')\n    string(name: 'LOLBENCH_GIT_REF', defaultValue: 'main')"
+                ),
+                r#"    stage('Checkout') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: "*/${params.LOLBENCH_GIT_REF}"]],
+          userRemoteConfigs: [[url: params.LOLBENCH_GIT_URL]],
+          extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true]]
+        ])
+      }
+    }"#
+                .to_string(),
+                "env.WORKSPACE".to_string(),
+                r#"archiveArtifacts artifacts: "${env.JOBS_DIR}/**/verifier/*.json", allowEmptyArchive: true"#
+                    .to_string(),
+            )
+        };
+
+    // readFile is relative to the Jenkins workspace unless given an absolute path.
+    let reward_read = if opts.uses_local_checkout() {
+        r#"def line = readFile("${params.LOLBENCH_PATH}/lolbench.properties").trim()"#
+            .to_string()
+    } else {
+        r#"def line = readFile('lolbench.properties').trim()"#.to_string()
+    };
 
     format!(
         r#"pipeline {{
@@ -465,8 +569,7 @@ fn jenkinsfile(opts: &JobOpts) -> String {
     string(name: 'AGENT_LABEL', defaultValue: 'lolbench')
     string(name: 'MAX_RETRIES', defaultValue: '2')
     string(name: 'CPU_LOCK_QTY', defaultValue: '4', description: 'CPU_CORES lock quantity')
-    string(name: 'LOLBENCH_GIT_URL', defaultValue: '{git}')
-    string(name: 'LOLBENCH_GIT_REF', defaultValue: 'main')
+{source_params}
   }}
 
   environment {{
@@ -475,81 +578,75 @@ fn jenkinsfile(opts: &JobOpts) -> String {
   }}
 
   stages {{
-    stage('Checkout') {{
-      steps {{
-        checkout([
-          $class: 'GitSCM',
-          branches: [[name: "*/${{params.LOLBENCH_GIT_REF}}"]],
-          userRemoteConfigs: [[url: params.LOLBENCH_GIT_URL]],
-          extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true]]
-        ])
-      }}
-    }}
+{prepare_stage}
     stage('Evaluate') {{
       steps {{
-{cred_open}        lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
-          sh '''
-            set -euo pipefail
-            export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${{PATH}}"
-            export PYTHONPATH=.
-            test -d "harbor_tasks/${{TASK}}"
-            command -v docker >/dev/null
-            command -v harbor >/dev/null
-            docker info >/dev/null
-            harbor --version
+        dir({work_dir_expr}) {{
+{cred_open}          lock(label: 'CPU_CORES', quantity: params.CPU_LOCK_QTY as Integer, resource: null) {{
+            sh '''
+              set -euo pipefail
+              export PATH="/usr/local/bin:/opt/homebrew/bin:${{HOME}}/.local/bin:${{HOME}}/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:${{PATH}}"
+              export PYTHONPATH=.
+              test -d "harbor_tasks/${{TASK}}"
+              command -v docker >/dev/null
+              command -v harbor >/dev/null
+              docker info >/dev/null
+              harbor --version
 
-            mkdir -p "${{JOBS_DIR}}"
-            agent_spec="$HARNESS"
-            model_args=()
-            ae_args=()
-            extra=()
-            case "$HARNESS" in
-              icode)
-                agent_spec="agents.icode_agent:ICodeAgent"
-                extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
-                [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
-                [ -n "${{GITCODE_TOKEN:-}}" ] && ae_args+=(--ae "GITCODE_TOKEN=${{GITCODE_TOKEN}}")
-                ;;
-              dsh)
-                agent_spec="agents.dsh_agent:DshAgent"
-                extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
-                [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
-                ;;
-              chrys)
-                agent_spec="agents.chrys_agent:ChrysAgent"
-                extra+=(--agent-setup-timeout-multiplier 10)
-                [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
-                [ -n "${{GITHUB_TOKEN:-}}" ] && ae_args+=(--ae "GITHUB_TOKEN=${{GITHUB_TOKEN}}")
-                [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
-                ;;
-              oracle|nop)
-                ;;
-              *)
-                [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
-                [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
-                [ -n "${{OPENAI_API_KEY:-}}" ] && ae_args+=(--ae "OPENAI_API_KEY=${{OPENAI_API_KEY}}")
-                [ -n "${{ANTHROPIC_API_KEY:-}}" ] && ae_args+=(--ae "ANTHROPIC_API_KEY=${{ANTHROPIC_API_KEY}}")
-                ;;
-            esac
-            [ "$MAX_RETRIES" != "0" ] && extra+=(--max-retries "$MAX_RETRIES")
+              mkdir -p "${{JOBS_DIR}}"
+              agent_spec="$HARNESS"
+              model_args=()
+              ae_args=()
+              extra=()
+              case "$HARNESS" in
+                icode)
+                  agent_spec="agents.icode_agent:ICodeAgent"
+                  extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
+                  [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
+                  [ -n "${{GITCODE_TOKEN:-}}" ] && ae_args+=(--ae "GITCODE_TOKEN=${{GITCODE_TOKEN}}")
+                  ;;
+                dsh)
+                  agent_spec="agents.dsh_agent:DshAgent"
+                  extra+=(--allow-agent-host api.deepseek.com --agent-setup-timeout-multiplier 10)
+                  [ -n "${{DEEPSEEK_API_KEY:-}}" ] && ae_args+=(--ae "DEEPSEEK_API_KEY=${{DEEPSEEK_API_KEY}}")
+                  ;;
+                chrys)
+                  agent_spec="agents.chrys_agent:ChrysAgent"
+                  extra+=(--agent-setup-timeout-multiplier 10)
+                  [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
+                  [ -n "${{GITHUB_TOKEN:-}}" ] && ae_args+=(--ae "GITHUB_TOKEN=${{GITHUB_TOKEN}}")
+                  [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
+                  ;;
+                oracle|nop)
+                  ;;
+                *)
+                  [ -n "$MODEL" ] && [ "$MODEL" != "-" ] && model_args=(-m "$MODEL")
+                  [ -n "${{OPENROUTER_API_KEY:-}}" ] && ae_args+=(--ae "OPENROUTER_API_KEY=${{OPENROUTER_API_KEY}}")
+                  [ -n "${{OPENAI_API_KEY:-}}" ] && ae_args+=(--ae "OPENAI_API_KEY=${{OPENAI_API_KEY}}")
+                  [ -n "${{ANTHROPIC_API_KEY:-}}" ] && ae_args+=(--ae "ANTHROPIC_API_KEY=${{ANTHROPIC_API_KEY}}")
+                  ;;
+              esac
+              [ "$MAX_RETRIES" != "0" ] && extra+=(--max-retries "$MAX_RETRIES")
 
-            harbor run \
-              -p "harbor_tasks/${{TASK}}" \
-              -a "${{agent_spec}}" ${{model_args[@]+"${{model_args[@]}}"}} \
-              ${{ae_args[@]+"${{ae_args[@]}}"}} \
-              --job-name "${{HARBOR_JOB_NAME}}" \
-              --jobs-dir "${{JOBS_DIR}}" \
-              --no-delete -n 1 -y \
-              --ve "LOLBENCH_SUITE=${{SUITE}}" \
-              "${{extra[@]}}"
-          '''
-        }}
-{cred_close}      }}
+              harbor run \
+                -p "harbor_tasks/${{TASK}}" \
+                -a "${{agent_spec}}" ${{model_args[@]+"${{model_args[@]}}"}} \
+                ${{ae_args[@]+"${{ae_args[@]}}"}} \
+                --job-name "${{HARBOR_JOB_NAME}}" \
+                --jobs-dir "${{JOBS_DIR}}" \
+                --no-delete -n 1 -y \
+                --ve "LOLBENCH_SUITE=${{SUITE}}" \
+                "${{extra[@]}}"
+            '''
+          }}
+{cred_close}        }}
+      }}
     }}
     stage('Report') {{
       steps {{
-        sh '''
-          python3 - <<'PY'
+        dir({work_dir_expr}) {{
+          sh '''
+            python3 - <<'PY'
 import json, glob, os, pathlib
 jobs_dir = os.environ["JOBS_DIR"]
 paths = glob.glob(f"{{jobs_dir}}/**/verifier/reward.json", recursive=True)
@@ -560,9 +657,10 @@ reward = data.get("reward")
 pathlib.Path("lolbench.properties").write_text(f"REWARD={{reward}}" + chr(10))
 print(data)
 PY
-        '''
+          '''
+        }}
         script {{
-          def line = readFile('lolbench.properties').trim()
+          {reward_read}
           def reward = line.contains('=') ? line.split('=', 2)[1].trim() : line
           currentBuild.description = "${{params.TASK}} | ${{params.HARNESS}} | ${{params.MODEL}} | reward=${{reward}}"
           if (reward != '1.0') {{
@@ -575,7 +673,7 @@ PY
 
   post {{
     always {{
-      archiveArtifacts artifacts: "${{env.JOBS_DIR}}/**/verifier/*.json", allowEmptyArchive: true
+      {archive_root}
     }}
   }}
 }}
@@ -583,7 +681,11 @@ PY
         task = task,
         model = model,
         harness_list = harness_list,
-        git = git,
+        source_params = source_params,
+        prepare_stage = prepare_stage,
+        work_dir_expr = work_dir_expr,
+        reward_read = reward_read,
+        archive_root = archive_root,
         cred_open = cred_open,
         cred_close = cred_close,
     )
@@ -676,6 +778,7 @@ mod tests {
 
     fn sample_opts() -> JobOpts {
         JobOpts {
+            lolbench_path: Some("/Volumes/1TB.large/github/LoLBench-Preview".into()),
             lolbench_git_url: "https://github.com/example/LoLBench-Preview.git".into(),
             default_harness: "icode".into(),
             default_task: "ruff_1".into(),
@@ -685,6 +788,36 @@ mod tests {
                 "gitcode-pat".into(),
             ],
         }
+    }
+
+    fn sample_opts_git() -> JobOpts {
+        JobOpts {
+            lolbench_path: None,
+            ..sample_opts()
+        }
+    }
+
+    #[test]
+    fn jenkinsfile_uses_local_path_when_configured() {
+        let jf = jenkinsfile(&sample_opts());
+        assert!(jf.contains("LOLBENCH_PATH"));
+        assert!(jf.contains("/Volumes/1TB.large/github/LoLBench-Preview"));
+        assert!(jf.contains("dir(params.LOLBENCH_PATH)"));
+        assert!(jf.contains("stage('Prepare')"));
+        assert!(!jf.contains("GitSCM"));
+        assert!(jf.contains("agents.icode_agent:ICodeAgent"));
+        assert!(jf.contains("withCredentials"));
+        assert!(jf.contains("harbor_runs/jenkins-"));
+        assert!(jf.contains("lock(label: 'CPU_CORES'"));
+    }
+
+    #[test]
+    fn jenkinsfile_falls_back_to_git_when_no_path() {
+        let jf = jenkinsfile(&sample_opts_git());
+        assert!(jf.contains("GitSCM"));
+        assert!(jf.contains("LOLBENCH_GIT_URL"));
+        assert!(!jf.contains("LOLBENCH_PATH"));
+        assert!(jf.contains("dir(env.WORKSPACE)"));
     }
 
     #[test]
@@ -705,6 +838,8 @@ mod tests {
         assert!(xml.contains("<![CDATA["));
         assert!(xml.contains("flow-definition"));
         assert!(xml.contains("<string>icode</string>"));
+        assert!(xml.contains("<name>LOLBENCH_PATH</name>"));
+        assert!(!xml.contains("<name>LOLBENCH_GIT_URL</name>"));
         assert!(xml.contains("pipeline {"));
     }
 

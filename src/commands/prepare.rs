@@ -59,6 +59,8 @@ pub async fn run(
         return Ok(());
     }
 
+    let mut rerun_wizard = args.interactive;
+
     if config_path.exists() && is_tty && !args.interactive {
         match prepare::prompt_existing_config()? {
             ExistingConfigAction::ValidateOnly => {
@@ -67,11 +69,11 @@ pub async fn run(
                 return Ok(());
             }
             ExistingConfigAction::Cancel => return Err(Error::Cancelled),
-            ExistingConfigAction::RerunWizard => {}
+            ExistingConfigAction::RerunWizard => rerun_wizard = true,
         }
     }
 
-    let run_wizard = args.interactive || (is_tty && !config_path.exists());
+    let run_wizard = rerun_wizard || (is_tty && !config_path.exists());
 
     if run_wizard {
         let mut generated = prepare::run_interactive()?;

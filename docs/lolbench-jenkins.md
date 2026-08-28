@@ -401,7 +401,13 @@ pipeline {
 
 Keep this Jenkinsfile in **LoLBench-Preview** (for example `Jenkinsfile.lolbench_one_task`) if you prefer SCM-driven jobs later.
 
-**mac-k3d:** `start` / `config` on a controller with Jenkins enabled create/update an inline Pipeline job named `lolbench_one_task`. Override the LoLBench checkout URL via job parameter `LOLBENCH_GIT_URL` (defaults to `lolbench.git_url` from config). Parameter defaults come from `jenkins_job.*` in config. Credentials are **not** required for `HARNESS=oracle`; for model runs, `config` can create Secret text credentials on the **controller** from prepare’s pending file (see [secrets.md](secrets.md)) — not on each agent.
+**mac-k3d:** `start` / `config` on a controller with Jenkins enabled create/update an inline Pipeline job named `lolbench_one_task`.
+
+When `lolbench.path` is set in config, the job uses that **local checkout on the agent Mac** (`LOLBENCH_PATH` parameter; Harbor runs under `dir(params.LOLBENCH_PATH)`). No per-build git clone. Override the path per build if a worker’s checkout lives elsewhere.
+
+When `lolbench.path` is empty, the job falls back to cloning via `LOLBENCH_GIT_URL` / `LOLBENCH_GIT_REF` (default URL from `lolbench.git_url`).
+
+Parameter defaults for harness/task/model come from `jenkins_job.*`. Credentials are **not** required for `HARNESS=oracle`; for model runs, `config` can create Secret text credentials on the **controller** from prepare’s pending file (see [secrets.md](secrets.md)) — not on each agent.
 
 **Harness map** (job choice → Harbor argv): `icode` → adapter `agents.icode_agent:ICodeAgent` with `PYTHONPATH=.`, `--ae DEEPSEEK_API_KEY` / `GITCODE_TOKEN`, DeepSeek host allowlist, and a longer agent-setup timeout; `dsh` / `chrys` → similarly mapped adapters; other values pass through as `-a <name>`.
 
