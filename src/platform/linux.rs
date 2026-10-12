@@ -421,6 +421,35 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// systemd user unit. `OOMScoreAdjust=-1000` makes the host out-of-memory killer
+/// skip this process, so a full machine does not take the Jenkins node offline.
+fn agent_unit_text(working_dir: &Path, path_env: &str, launch_script: &Path, log_out: &Path) -> String {
+    format!(
+        r#"[Unit]
+Description=mac-k3d Jenkins agent
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={cwd}
+Environment=PATH={path}
+ExecStart=/bin/bash {script}
+Restart=always
+RestartSec=5
+OOMScoreAdjust=-1000
+StandardOutput=append:{stdout}
+StandardError=append:{stdout}
+
+[Install]
+WantedBy=default.target
+"#,
+        cwd = working_dir.display(),
+        path = path_env.replace('%', "%%").replace(' ', "\\x20"),
+        script = launch_script.display(),
+        stdout = log_out.display(),
+    )
+}
+
 fn unit_path() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -458,29 +487,7 @@ pub fn install_agent_daemon(
     }
 
     let log_out = working_dir.join("jenkins-agent.stdout.log");
-    let content = format!(
-        r#"[Unit]
-Description=mac-k3d Jenkins agent
-After=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory={cwd}
-Environment=PATH={path}
-ExecStart=/bin/bash {script}
-Restart=always
-RestartSec=5
-StandardOutput=append:{stdout}
-StandardError=append:{stdout}
-
-[Install]
-WantedBy=default.target
-"#,
-        cwd = working_dir.display(),
-        path = path_env.replace('%', "%%").replace(' ', "\\x20"),
-        script = launch_script.display(),
-        stdout = log_out.display(),
-    );
+    let content = agent_unit_text(working_dir, path_env, launch_script, &log_out);
 
     let unit_changed = std::fs::read_to_string(&unit).ok().as_deref() != Some(content.as_str());
     if unit_changed {
@@ -554,6 +561,18 @@ mod tests {
         assert!(unit_path()
             .to_string_lossy()
             .contains("mac-k3d-jenkins-agent.service"));
+    }
+
+    #[test]
+    fn the_agent_unit_is_never_chosen_by_the_oom_killer() {
+        let text = agent_unit_text(
+            Path::new("/var/lib/jenkins-agent"),
+            "/usr/bin",
+            Path::new("/var/lib/jenkins-agent/launch-agent.sh"),
+            Path::new("/var/lib/jenkins-agent/jenkins-agent.stdout.log"),
+        );
+        assert!(text.contains("OOMScoreAdjust=-1000\n"));
+        assert!(text.contains("Restart=always\n"));
     }
 
     #[test]
