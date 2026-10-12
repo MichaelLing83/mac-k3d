@@ -440,7 +440,7 @@ On each `lolbench` agent:
 
 1. `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml`: Docker, Java, git, and Harbor at the pin in `pipeline/config/toolchain.env` (no k3d; `start -c worker.yaml` is rejected).
 2. Docker with a large disk (images 2–17 GB each).
-3. Jenkins agent connected (`mac-k3d config -c worker.yaml`), labels `macos docker lolbench` or `linux docker lolbench`, one executor.
+3. Jenkins agent connected (`mac-k3d config -c worker.yaml`), labels `macos docker lolbench` or `linux docker lolbench`, plus `fits-*` and `executors-<n>`. Executors are `cpu_cores / 2`.
 4. Lockable Resources `<agent>-core-1..N` (N = logical CPU count), created by that `config`.
 
 k3d does not need the LoLBench images imported.

@@ -16,12 +16,12 @@ Pass/fail table and stage detail stay in [testing-eval-pipeline.md](testing-eval
 
 Jobs must **not** run inside the controller’s k3d nodes. Cloud Jenkins only queues. This PC (Docker + Harbor + iCode) executes.
 
-```text
-Cloud VM (SSH as root): k3d + Jenkins :17070
-    └── queue deepswe_one_task (label lolbench)
-This PC (Toby): Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (catalog: deepseek-flash default, or deepseek-v4-pro)
-    └── archive JSON back to cloud Jenkins
+```mermaid
+flowchart TD
+  cloud["Cloud VM: k3d + Jenkins :17070"] -->|"queue one_task"| pc["This PC: agent + Docker + iCode"]
+  disp["some_task or full_suite_task"] -->|"one build per question x rollout"| cloud
+  pc --> api["api.deepseek.com"]
+  pc --> back["artifact.json archived on Jenkins"]
 ```
 
 Do **not** continue the leftover `y84462643` session (no docker group, k3d missing). Cloud paths are under **root’s home**: `/root/src/mac-k3d`, `/root/.config/mac-k3d/config.yaml`, `/root/.local/bin/mac-k3d`.
@@ -328,7 +328,7 @@ Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --ic
 
 ### Phase 5b — multi-worker (needs a second worker)
 
-Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` and `SHARD_SIZE=2` (`SHARD_SIZE` shows when the controller has `ui_profile: developer`).
+Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` (developer profile). There is no `SHARD_SIZE`. The dispatcher queues one `deepswe_one_task` build per question and rollout.
 
 **Expected:** five `deepswe_one_task` shard builds, one running on each worker at a time and the rest queued until a worker frees up; **Lockable Resources** shows each build holding all of `<its own node>-core-*` and nothing else; the five `selected_tasks.txt` files are disjoint; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 5`, `n_tasks: 10`, `pipeline_status: same` and `10 x N_ROLLOUTS` rollout records. `pipeline_status: mixed` means a worker missed the last redeploy. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
 
@@ -361,7 +361,7 @@ LoLBench and SWE-bench Pro use the same Harbor stages as DeepSWE, with their own
 | 3 | `env` + `tasks` + `check_report.sh` testdata | | |
 | 4 | `evaluate` … `archive` n=1 + named JSON | | |
 | 5 | `deepswe_one_task` on this node | | |
-| 5b | `deepswe_full_suite_task` `N_TASKS=10` `SHARD_SIZE=2` across two workers | | needs a second worker |
+| 5b | `deepswe_full_suite_task` `N_TASKS=10` across two workers, one `one_task` build per question and rollout | | needs a second worker |
 
 ---
 

@@ -10,8 +10,8 @@ The product is a CI path for AI harness evaluation: many short jobs, each in its
 
 | Piece | What it does now | Why it matches the goal |
 |-------|------------------|-------------------------|
-| **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), nine in total. `_one_task` evaluates; the other two split their questions into `_one_task` shard builds and merge the results in the same build. One executor per worker; a build locks every core of **its own node** (`lock(label: env.NODE_NAME)`) and only for the rollouts. The workspace dies with the build. | Parallelism across agents, and a short lifetime: nothing from the last trial is the next trial's machine. |
-| **Harbor** | The `evaluate` phase is one `harbor run` + `icode_harbor_agent:ICodeAgent` for all three benchmarks, at the version pinned in `pipeline/config/toolchain.env`. Harbor expands rollouts, applies each task's declared limits, retries and grades. `--allow-agent-host` comes from `pipeline/config/network-allowlist-v1.json` (`api.deepseek.com`, `api.deepseek.ai`). | One runner, used as a runner. mac-k3d no longer schedules containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
+| **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), nine in total. `_one_task` is one question and one rollout. The other two queue one `_one_task` build per question and rollout, then merge in the same build. Executors are `cpu_cores / 2`. Evaluate locks only the CPUs that question declares. | Several trials can run on one worker, each in its own build, without one trial taking the whole machine. |
+| **Harbor** | Inside that one build, `evaluate` is one `harbor run -n 1 -k 1` plus `icode_harbor_agent:ICodeAgent`, at the version pinned in `pipeline/config/toolchain.env`. Harbor applies the task's declared limits and grades. `--allow-agent-host` comes from `pipeline/config/network-allowlist-v1.json` (`api.deepseek.com`, `api.deepseek.ai`). | One runner, used as a runner. mac-k3d does not schedule containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
 | **k3d** | The controller uses k3d to host Jenkins. Eval sandboxes still run as Harbor containers on the worker's Docker. | A later job will `k3d cluster create` per build, apply a default-deny NetworkPolicy (DeepSeek API only), pull images through a Harbor registry proxy cache, run Harbor, then delete the cluster. That cluster, the NetworkPolicy, and the registry cache are **not** implemented yet. |
 
 Pier is not used. It left a long-lived Docker Compose sandbox on the host, with no Kubernetes NetworkPolicy and no registry cache, and it was a second runner beside Harbor.
@@ -23,21 +23,7 @@ Pier is not used. It left a long-lived Docker Compose sandbox on the host, with 
 | **1. Machine bootstrap** | Download one `mac-k3d` binary; become a Jenkins **controller** or **worker** | A blank PC has no Rust. The binary installs Docker and the rest. |
 | **2. Eval pipeline** | Run DeepSWE, LoLBench, or SWE-bench Pro with harness=iCode and LLM=DeepSeek; write JSON and HTML | Score the iCode harness (f2p / p2p, pass@k, tokens, time). |
 
-```text
-New Mac/Linux
-  → download mac-k3d Release asset
-  → setup: controller (k3d+Jenkins :17070) or worker (agent.jar)
-  → mac-k3d eval (harness=icode, llm=deepseek, benchmark=deepswe|lolbench|swebenchpro, N)
-  → Jenkins job <benchmark>_one_task | _some_task | _full_suite_task (all Harbor)
-       mac-k3d pipeline --extract-to: the worker binary's pipeline/, commit recorded
-       install harbor; bind-mount the worker iCode drop at /opt/icode-host
-       one harbor run + icode_harbor_agent:ICodeAgent (DeepSeek allowlist)
-       grade Harbor reward.json
-  → eval-runs/output/{benchmark}/jenkins-<build>-<UTC>/{artifact.json,summary.md,report.html}
-  → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz under the pipeline root
-```
-
-Several questions add one hop: `_some_task` or `_full_suite_task` queues one `_one_task` build per question and rollout (each worker takes the next when an executor frees up), then merges them into one report in its own `Aggregate` stage.
+Several questions add one hop: `_some_task` or `_full_suite_task` queues one `_one_task` build per question and rollout (a worker runs `cpu_cores / 2` of them at once), then merges them into one report in its own `Aggregate` stage.
 
 ```mermaid
 flowchart TD
@@ -49,7 +35,7 @@ flowchart TD
   work["Worker: Docker Java agent Harbor"]
   evalCli["mac-k3d eval: icode / deepseek / deepswe or lolbench or swebenchpro / TASK"]
   shape{"how many questions?"}
-  job["<benchmark>_one_task (runs on a worker, holds all its cores)"]
+  job["one_task: one question, one rollout, locks that task's CPUs"]
   disp["<benchmark>_some_task or _full_suite_task (agent none, splits into shards)"]
   harborA["Harbor + iCode allowlist"]
   grade["Verifier reward.json"]
@@ -64,7 +50,7 @@ flowchart TD
   evalCli --> shape
   shape -->|one| job
   shape -->|a list or the whole suite| disp
-  disp -->|queued shards, one TASK_OFFSET or TASKS each| job
+  disp -->|one build per question x rollout| job
   job --> harborA
   harborA --> grade
   grade --> agg
@@ -121,7 +107,7 @@ mac-k3d eval --stage tasks --n-tasks 1   # one phase on its own (env, tasks, eva
 
 `--job one|some|full` and the job's **Build with Parameters** page start the same build: the CLI sends only the fields you give and the job keeps its defaults for the rest ([commands.md](commands.md#queue-a-jenkins-job-from-the-cli)).
 
-Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`; a build locks every core of its own node for the `Evaluate` stage only. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor slots is in [optimization.md](optimization.md).
+Nine Jenkins jobs — `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`. Evaluate locks the CPUs that question declares, not the whole node. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor's `-n 1` is in [optimization.md](optimization.md).
 
 ---
 

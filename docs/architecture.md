@@ -175,13 +175,13 @@ The integrity layer stays here because Harbor has no equivalent: `harbor job sum
 
 ### One Harbor run per build
 
-`evaluate/harbor_run` issues a single command and lets Harbor expand it. Every flag is explained in [pipeline.md](pipeline.md#how-harbor-is-called):
+A Jenkins `one_task` build issues one command and Harbor runs one trial. A local run can still pass several task ids and `-n` slots. Every flag is explained in [pipeline.md](pipeline.md#how-harbor-is-called):
 
 ```text
-harbor run -p <dataset dir> -i <task id> ... -k <N_ROLLOUTS> -n <slots> -r <retries>
+harbor run -p <dataset dir> -i <task id> -k 1 -n 1 -r 1
 ```
 
-Harbor's own plan is `n_attempts x tasks x agents`, so `-k 4` over 10 selected ids is 40 trials with `-n` of them in flight. The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and are **not** overridden; `pipeline/lib/task_resources.py` reads them, plans how many fit on this worker, and fails the build before any container starts if even one task does not fit.
+The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and are **not** overridden. The build fails before any container starts if this worker's CPU limit is below what the task declares. Out-of-memory requeue and container cleanup are in [pipeline.md](pipeline.md).
 
 ### Job topology
 

@@ -112,15 +112,27 @@ Use all three. Executors provide coarse safety; locks provide workload-aware sch
 
 ### What the eval jobs actually do
 
-`mac-k3d config -c worker.yaml` (which `setup` runs) implements this for evaluation: it sets `numExecutors` to `cpu_cores / cpus_per_executor` and creates lockable resources `<agent>-core-1..cpu_cores`, each labelled with the agent name. Each `one_task` build then locks the CPUs its question declares:
+```mermaid
+flowchart TD
+  yaml["worker.yaml cpu_cores"] --> exec["executors = cpu_cores / 2"]
+  yaml --> cores["core-1 .. core-N, labelled with this node"]
+  disp["dispatcher"] -->|"one build per question x rollout"| build["one_task"]
+  exec --> build
+  build --> lock["Evaluate locks this question's CPUs on this node"]
+  lock --> harbor["harbor run -n 1"]
+```
+
+`mac-k3d config -c worker.yaml` (which `setup` runs) sets `numExecutors` to `cpu_cores / cpus_per_executor` and creates lockable resources `<agent>-core-1..cpu_cores`, each labelled with the agent name. Each `one_task` build then locks the CPUs its question declares:
 
 ```groovy
 lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES')
 ```
 
-Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. With no quantity the build holds all of its node's cores, and their count sets Harbor's `-n`. One executor matters too: Jenkins' default load balancer prefers the same node for every build of one job, so with several executors per node the shards of one suite would pile onto one worker. The lock wraps only the `Evaluate` stage, one of the seven pipeline stages ([pipeline.md](pipeline.md)).
+Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores. The quantity is the task's declared CPUs (DeepSWE 2, LoLBench 4), not every core on the node. Harbor then runs one trial. The lock wraps only the `Evaluate` stage, one of the seven pipeline stages ([pipeline.md](pipeline.md)).
 
-**Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the dispatcher counts online workers when it plans shards, the queue hands each shard to the first free worker, and `env.NODE_NAME` resolves per build. See [architecture.md](architecture.md#evaluation-architecture).
+**Keep exactly one controller.** Lockable-resources state lives on the controller, so a second controller would hand out tokens for cores the first one already lent out. Scale workers, not controllers. Adding a worker needs no pipeline change: the next dispatcher counts that node's executors, and Jenkins places each build on a node that fits the suite. See [architecture.md](architecture.md#evaluation-architecture).
+
+The slot classes below (`macb-small`, `macb-medium`, `macb-large`) are not what the eval jobs use.
 
 ### Recommended lock design: capacity slots
 

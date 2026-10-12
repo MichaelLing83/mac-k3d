@@ -1,8 +1,17 @@
 # Evaluation results
 
-One Jenkins build scores the iCode harness. Harbor runs iCode for `N_ROLLOUTS` attempts on each question. A later comparison harness is not part of this run.
+One Jenkins `one_task` build scores one question and one rollout. A headline number still needs `N_ROLLOUTS=4`: `some_task` or `full_suite_task` queues that many `one_task` builds per question and merges them. A single `one_task` build is a smoke test.
 
-**One build issues one `harbor run`.** mac-k3d selects the questions and prepares the environment; Harbor expands `n_attempts x tasks x agents` into trials, runs `-n` of them at a time, applies each task's declared limits, retries, and grades. mac-k3d does not loop over rollouts and does not schedule containers. See [architecture.md](architecture.md#evaluation-architecture) for the full responsibility split.
+```mermaid
+flowchart LR
+  one["one_task: 1 question, 1 rollout"] --> harbor["one harbor run, -n 1 -k 1"]
+  some["some_task: a list or the first N"] --> queue["one one_task per question x rollout"]
+  full["full_suite_task: the whole suite"] --> queue
+  queue --> harbor
+  queue --> merge["Aggregate in the dispatcher build"]
+```
+
+mac-k3d selects the question and prepares the worker. Harbor runs that one trial, applies `task.toml`, and grades. mac-k3d does not schedule containers. See [architecture.md](architecture.md#evaluation-architecture).
 
 Release and git both mount the supplied iCode at `/opt/icode-host` and run the same single-shot `icode run` (one question × one rollout, no improve-loop). DeepSeek official API uses `ICODE_PROVIDER=DeepSeek` and `ICODE_REASONING_EFFORT=high` (wire fields `thinking.type=enabled` and `reasoning_effort=high`) unless those env vars are already set. `ICODE_API_BASE` is `https://api.deepseek.com/v1`. `ICODE_MODEL` is the catalog id (`deepseek-flash` or `deepseek-v4-pro`). The artifact `model` field is still `openai/<catalog id>` (catalog label, not the provider string). The `env` phase (`env/model_api`) still checks `GET https://api.deepseek.com/models` for that id.
 
@@ -14,7 +23,7 @@ A headline number needs `N_ROLLOUTS=4` (the job default). A one-rollout run is a
 
 After `icode run`, the Harbor agent force-commits a dirty git tree so DeepSWE can grade `git diff <base> HEAD` and LoLBench submit sees the same tree. That commit does not start another model call.
 
-Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` and are **not** overridden: a DeepSWE task gets the 2 CPUs and 8 GB it declares, a LoLBench task gets its 4 CPUs. `pipeline/lib/task_resources.py` reads the declared values, plans how many fit on this worker (`EVAL_SLOTS`, which becomes Harbor's `-n`), and **fails the build before any container starts** if even one selected task does not fit. The build locks every core of its worker (one eval build per worker); that count arrives as `CPU_LOCK_QTY` and is an upper bound on the plan, not the per-task limit. `artifact.json` records `resources.declared` against `resources.applied`. See [optimization.md](optimization.md).
+Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` and are **not** overridden: a DeepSWE task gets the 2 CPUs and 8 GB it declares, a LoLBench task gets its 4 CPUs. On Jenkins, Evaluate locks that many cores of this node and Harbor runs `-n 1`. A local run still sets `-n` from `cpu_cores / declared cpus`. The build fails before any container starts if this worker's CPU limit is below what the task declares. `artifact.json` records `resources.declared` against `resources.applied`. See [optimization.md](optimization.md).
 
 Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
@@ -32,7 +41,22 @@ Three jobs per suite, nine in total:
 | `<suite>_some_task` | `TASKS` list, or first `N_TASKS` | 4, editable | comparing a handful of questions against a known-good result |
 | `<suite>_full_suite_task` | whole suite | 4, editable | the real run |
 
-`<suite>_one_task` is the only job that evaluates, and it is exactly one question and one rollout. `some_task` and `full_suite_task` are dispatchers on `agent none`: they queue one `<suite>_one_task` build per question and rollout, at most `MAX_IN_FLIGHT` of them in Jenkins at once, and wait. Executors are `cpu_cores / cpus_per_executor`, so a worker runs that many builds at once and takes the next when one finishes. An OOM rollout is queued again at the tail, at most twice.
+`<suite>_one_task` is the only job that evaluates, and it is exactly one question and one rollout. `some_task` and `full_suite_task` are dispatchers on `agent none`: they queue one `<suite>_one_task` build per question and rollout, at most `MAX_IN_FLIGHT` of them in Jenkins at once (`0` means twice the online executors that can run the suite), and wait. Executors are `cpu_cores / cpus_per_executor` (default 2), so this PC (4 cores) runs 2 builds at once and the cloud worker (16 cores) can run 8. An OOM rollout is queued again at the tail, at most `OOM_RETRIES` times (default 2).
+
+```mermaid
+flowchart TD
+  build["one_task result"] --> ok["SUCCESS: scored"]
+  build --> oom["UNSTABLE: out of memory"]
+  build --> early["FAILURE before Harbor"]
+  build --> late["FAILURE or ABORTED after Harbor"]
+  oom -->|"attempt <= OOM_RETRIES"| tail["queued again at the tail"]
+  oom -->|"past the cap"| stop["not queued; stays UNSTABLE"]
+  early --> once["dispatcher retries that unit once"]
+  late --> report["not retried; counted as not run"]
+  ok --> merge["Aggregate keeps this build"]
+  tail --> merge
+  once --> merge
+```
 
 `some_task` and `full_suite_task` in git mode resolve the Jenkins form (branch, tag, commit, or pull request) once in a Pin iCode stage and pass that commit to every shard as `ICODE_GIT_SHA`. A direct `one_task` build leaves that pin empty and resolves the form itself. The report's identity line is `iCode under test`: `git <kind> <ref> -> <sha>` or `release <file> sha256 <hash>`. A worker workspace from a previous job is not an input.
 

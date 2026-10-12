@@ -6,7 +6,7 @@ Read this one first if you are my mentor: the [responsibility split](#the-respon
 
 ## What changed on this branch
 
-1. **Harbor schedules the rollouts, not mac-k3d.** The old harness stage used to loop over questions, build one `harbor run` per rollout, keep an in-flight table and a heartbeat scheduler, and wait on `wait -n`. It is now a single `harbor run -p <dataset> -i <id> ... -k <rollouts> -n <slots> -r <retries>`. Harbor expands `n_attempts x tasks x agents` into trials itself and runs `-n` of them at a time.
+1. **One Jenkins build is one trial.** The old harness looped over questions inside one `harbor run`. A Jenkins `one_task` build is now one question and one rollout: `harbor run -n 1 -k 1`. `some_task` and `full_suite_task` queue one of those builds per question and rollout. Harbor still applies the task limit, grades, and retries an errored trial once (`-r 1`). An out-of-memory trial is requeued by Jenkins, not by Harbor.
 2. **Declared CPUs are honored; RAM is not an admission limit.** `pipeline/lib/task_resources.py` reads `cpus` out of each `task.toml`. A Jenkins build is one container (`harbor run -n 1`) and locks that many cores. A local run still sets `-n` from `cpu_cores / cpus`, with no RAM cap. The build fails before starting if this worker's CPU limit is below what the task declares.
 3. **Executors from the CPU limit.** `jenkins_agent.cpu_cores` is the upper limit (cloud 16, local 4). Executors are `cpu_cores / cpus_per_executor` (`cpus_per_executor` defaults to 2, so cloud 8 and local 2). The node also gets `fits-<suite>` for every suite whose per-task CPUs fit, and `executors-<n>`. Evaluate locks `quantity` equal to the task's declared CPUs out of `<agent>-core-1..cpu_cores`, so mixed suites on one worker never exceed the limit.
 4. **Nine jobs, three per suite.** `<suite>_one_task` (one question, one rollout by default — the smoke test, and the shard runner), `<suite>_some_task` (a `TASKS` list or the first `N_TASKS` at the full rollout count — the mentor-PDF comparison arm), `<suite>_full_suite_task` (the whole suite). For `deepswe`, `lolbench` and `swebenchpro`. There is no separate aggregate job.
@@ -22,6 +22,13 @@ Read this one first if you are my mentor: the [responsibility split](#the-respon
 14. **Setup and config are modular, and `worker.yaml` always shows its API fields.** The wizard only asks questions (`src/prepare/wizard/`), saves the YAML, then `src/prepare/apply.rs` and `root_steps.rs` do the work, and `config` is split per role (`src/commands/config/`). A worker's `jenkins.api_user` and `api_token` are always written, empty when skipped, so the user can fill them in with an editor later. `config -c <missing file>` now says the file is missing instead of failing on a k3d check.
 
 ## The responsibility split: what mac-k3d does and what Harbor does
+
+```mermaid
+flowchart LR
+  mac["mac-k3d: machine, tasks, canary, score, report"] --> jenkins["Jenkins: place one build per question x rollout"]
+  jenkins --> harbor["Harbor: one trial, task.toml limits, reward"]
+  harbor --> mac
+```
 
 This is the part you asked me to get right, so here it is explicitly.
 

@@ -288,7 +288,7 @@ Never run `mac-k3d start -c worker.yaml`; it is rejected on purpose.
 2. Creates the lockable resources `<agent>-core-1..N` (one per logical core), labelled with the shared `CPU_CORES` label and the agent name.
 3. Writes `launch-agent.sh` and starts the agent service (LaunchAgent `com.mac-k3d.jenkins-agent` on macOS, systemd user unit `mac-k3d-jenkins-agent.service` on Linux).
 
-Do not create nodes or lock entries by hand. Each eval build locks every core of its own node, only for its Evaluate stage ([deployment.md](deployment.md#what-the-eval-jobs-actually-do)).
+Do not create nodes or lock entries by hand. Each eval build locks the CPUs its question declares, only for its Evaluate stage ([deployment.md](deployment.md#what-the-eval-jobs-actually-do)).
 
 ---
 
@@ -298,7 +298,7 @@ Do not create nodes or lock entries by hand. Each eval build locks every core of
 |-------|------------------|
 | Controller cluster | `mac-k3d status` on Mac A |
 | Jenkins reachable from worker | `curl -sS -o /dev/null -w '%{http_code}\n' http://<mac-a-ip>:17070/login` from Mac B |
-| Agent online | Jenkins UI → Nodes → the agent name shows **online** with 1 executor |
+| Agent online | Jenkins UI → Nodes → the agent name shows **online**. Executors are `cpu_cores / 2` (a 4-core worker shows 2) |
 | Worker toolchain | `harbor --version` on Mac B prints the pin (0.22.0); `REQUIRE_WORKER=1 ./scripts/env_set_up/03_check_worker.sh` |
 | Job runs on worker | Run `deepswe_one_task`; the console says `Running on <agent>` and shows seven stages with the lock only around Evaluate |
 

@@ -82,6 +82,14 @@ resources:
   disk_min_gb: 0          # 0 = role default (40 / 60 / 40)
 ```
 
+```mermaid
+flowchart LR
+  cores["jenkins_agent.cpu_cores"] --> exec["executors = cpu_cores / cpus_per_executor"]
+  cores --> locks["core-1 .. core-N"]
+  exec --> builds["that many one_task builds at once"]
+  locks --> hold["Evaluate locks the CPUs the question declares"]
+```
+
 All fields are optional; omitted keys use defaults above.
 
 ## Field reference

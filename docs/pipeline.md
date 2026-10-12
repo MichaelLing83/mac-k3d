@@ -12,7 +12,38 @@ One evaluation build runs seven phases in order. mac-k3d prepares the worker and
 | `report` | Report | `artifact.json`, `summary.md`, `report.html` | no |
 | `archive` | Archive | Cost/token analysis, backup, `tar.gz` | no |
 
-Only Evaluate holds the worker's cores (`lock(label: env.NODE_NAME ...)`), so a second build on the same worker can prepare its tasks or write its report while the first one runs Harbor.
+Only Evaluate holds cores, and only as many as the question declares (`lock(label: env.NODE_NAME, quantity: cpusEach)`). A second build on the same worker can prepare its tasks or write its report while the first one runs Harbor.
+
+```mermaid
+flowchart LR
+  env["env"] --> tasks["tasks"] --> evaluate["evaluate"] --> anticheat["anticheat"] --> score["score"] --> report["report"] --> archive["archive"]
+```
+
+A Jenkins `one_task` build is one question and one rollout. `some_task` and `full_suite_task` do not run Harbor. They queue one `one_task` build per question and rollout, then merge.
+
+```mermaid
+flowchart TD
+  disp["some_task or full_suite_task"] -->|"one build per question x rollout"| one["one_task"]
+  one --> eval["Evaluate: lock the task CPUs, then harbor run -n 1 -k 1"]
+  eval --> oom{"trial out of memory?"}
+  oom -->|no| rest["anti-cheat, score, report, archive"]
+  oom -->|yes| skip["UNSTABLE; those four stages are skipped"]
+  skip --> again{"attempt at most OOM_RETRIES?"}
+  again -->|yes| one
+  again -->|no| done["stop; the build stays UNSTABLE"]
+```
+
+Containers for that build are removed even when the build stops early:
+
+```mermaid
+flowchart TD
+  finish["shell exits"] --> trap["EXIT trap removes this build's trial containers"]
+  killed["shell killed before the trap"] --> post["post always: same removal"]
+  next["next build"] --> sweep["sweep: a dead owner pid, remove what it left"]
+  sweep --> clean["cleanup: this worker's stopped projects and unused pool networks"]
+```
+
+A live trial is kept. The Linux agent unit sets `OOMScoreAdjust=-1000`, so a full machine does not sacrifice the Jenkins agent. A trial container can still be killed, and that path is the requeue above.
 
 ## How it runs
 
@@ -116,7 +147,7 @@ The `env` phase fetches neither. It checks that the worker can run any evaluatio
 
 ## How Harbor is called
 
-`evaluate/harbor_cmd.sh` builds one command for the whole build. A Jenkins build is one question and one rollout, so Harbor runs one trial (`-n 1`, `-k 1`). A local run still sets `-n` from the CPU limit divided by the task's declared CPUs. Harbor retries a trial that errored once (`-r` defaults to 1). A wrong answer is a reward of 0 with no exception, and iCode's own exit 137 exits 0, so neither is retried. If a retry still has no `reward.json` and the log names an out of memory, the dispatcher queues that rollout again at the tail, at most `OOM_RETRIES` times. The list is `harness/oom_trials.txt`. Environment and slots delete the previous build's copy, and a run that finds no OOM deletes it again, so a scored retry is not marked out of memory:
+`evaluate/harbor_cmd.sh` builds one command for the whole build. A Jenkins build is one question and one rollout, so Harbor runs one trial (`-n 1`, `-k 1`). A local run still sets `-n` from the CPU limit divided by the task's declared CPUs. Harbor retries a trial that errored once (`-r` defaults to 1). A wrong answer is a reward of 0 with no exception, and iCode's own exit 137 exits 0, so Harbor does not retry either of those. An out-of-memory trial is requeued by Jenkins instead, at most `OOM_RETRIES` times (default 2, three tries in all). A direct `one_task` build queues the next attempt itself. A dispatcher appends that unit to the tail. The list is `harness/oom_trials.txt`: iCode exit 137, or Harbor's out-of-memory cause, even when `reward.json` exists. A log search is only the fallback when that list is empty and there is no reward. Environment and slots delete the previous build's copy, and a run that finds no OOM deletes it again, so a scored retry is not marked out of memory:
 
 ```bash
 harbor run -p <task folder> -i <task> [-i <task> ...] \
@@ -139,7 +170,7 @@ harbor run -p <task folder> -i <task> [-i <task> ...] \
 | `-a icode_harbor_agent:ICodeAgent`, `-m` | The agent under test (`pipeline/lib/icode_harbor_agent.py`) and the catalog model |
 | `--job-name`, `--jobs-dir`, `--no-delete` | Where results go; the containers' logs and patches are kept for the later phases |
 | `-k N_ROLLOUTS` | Attempts per task |
-| `-r HARBOR_MAX_RETRIES` | Harbor retries a trial that errored, once (default 1). A wrong answer and an iCode exit 137 are not exceptions, so they are not retried. An OOM that still has no reward after that is re-queued by the dispatcher, up to `OOM_RETRIES` |
+| `-r HARBOR_MAX_RETRIES` | Harbor retries a trial that errored, once (default 1). A wrong answer and an iCode exit 137 are not exceptions, so Harbor does not retry them. Jenkins requeues an OOM trial, up to `OOM_RETRIES`, whether or not `reward.json` exists |
 | `-n EVAL_SLOTS` | Trials at once. `1` on a Jenkins build; a local run uses `cpu_cores / declared cpus` |
 | `--override-cpus`, `--override-memory-mb` | Only when `EVAL_OVERRIDE_CPUS` / `EVAL_OVERRIDE_MEMORY_MB` is set. Without them Harbor applies each `task.toml` |
 | `--allow-agent-host` | Once per host in `pipeline/config/network-allowlist-v1.json`; the agent can reach nothing else |

@@ -15,7 +15,19 @@ Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (d
 - **LoLBench** via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, the `tasks` phase builds or retags a local image (do not use Harbor `--force-build`).
 - **SWE-bench Pro** via **Harbor**. The `tasks` phase writes a task whose image is `jefzda/sweap-images:…`. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB each; first live job should set **one** `TASK` (`instance_id`).
 
-Each benchmark has three job shapes. Start with `_one_task` (one question, one rollout), use `_some_task` for a handful of questions, and `_full_suite_task` for the whole suite — it splits the work across workers and merges the results. Details: [evaluation.md](evaluation.md#which-job-to-run).
+Each benchmark has three job shapes.
+
+```mermaid
+flowchart LR
+  controller["controller: nine jobs"] --> one["one_task: 1 question, 1 rollout"]
+  controller --> some["some_task: a list or the first N"]
+  controller --> full["full_suite_task: the whole suite"]
+  some --> one
+  full --> one
+  one --> worker["worker: Harbor, then JSON / HTML"]
+```
+
+Start with `_one_task`. Use `_some_task` for a handful of questions and `_full_suite_task` for the whole suite. Both queue one `_one_task` build per question and rollout, then merge. Details: [evaluation.md](evaluation.md#which-job-to-run). The seven phases and the out-of-memory requeue are in [pipeline.md](pipeline.md).
 
 Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
@@ -101,20 +113,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
-To copy a working controller or worker YAML onto another machine (same pipeline, different host or `jenkins_job` defaults), export on the source host and import on the dest. Secrets are stripped; import only writes the file. Full flow, DeepSWE first→second question, and why `config --skip-secrets` does not put keys in the YAML: [export-import.md](export-import.md).
-
-```bash
-# Source host: sanitized copy (api_token blanked to '', no credentials.pending.yaml)
-mac-k3d export -c ~/.config/mac-k3d/config.yaml -o /tmp/controller.yaml
-mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o /tmp/worker.yaml
-# Optional: edit jenkins_job.default_task / labels / controller_url in those files
-
-# Dest host: write only, then setup or config as usual
-mac-k3d import /tmp/controller.yaml
-mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml
-# Overwrite an existing dest file:
-# mac-k3d import /tmp/worker.yaml -c ~/.config/mac-k3d/worker.yaml --force
-```
+Copying a YAML onto another machine, changing the model or the default task, or changing a worker's CPU limit: [export-import.md](export-import.md). Import never keeps the agent token or `cpu_cores`. Do not `import --force` onto a worker file that already has a token.
 
 Linux without sudo stops before installing Docker and prints the root commands; after an administrator runs them, re-run `setup` and choose **Use existing config**. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup`. macOS: open **Docker Desktop** until it is idle.
 

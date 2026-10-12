@@ -12,7 +12,7 @@ Do not add a new top-level folder for each feature branch. Update these product 
 | [new-machine.md](new-machine.md) | Download the Release binary; `setup` installs Docker |
 | [icode-harness-inputs.md](icode-harness-inputs.md) | Jenkins upload vs git clone (`branch` / `tag` / `commit`) |
 | [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
-| [export-import.md](export-import.md) | Worker vs controller YAML; `--force` vs `--skip-secrets` |
+| [export-import.md](export-import.md) | Export, `set`, and import. CPU limit is a live worker edit; model and task go through the controller file |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
 | [lolbench-jenkins.md](lolbench-jenkins.md) | The nine jobs `config` writes: three shapes x three benchmarks |
 | [pipeline.md](pipeline.md) | The seven phases, how Harbor and its flags are used, anti-cheat layers, outputs |

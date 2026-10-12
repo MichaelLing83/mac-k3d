@@ -30,12 +30,12 @@ Default model: `deepseek-flash` (`DEEPSEEK_MODEL` or `--model`). Catalog also al
 
 Jobs must **not** run inside the controller’s k3d nodes. Jenkins on the cloud VM only queues; this PC (Docker + Harbor + iCode) executes.
 
-```text
-Cloud VM: k3d + Jenkins :17070
-    └── queue deepswe_one_task (label lolbench)
-This PC: Jenkins agent + Docker + iCode
-    ├── api.deepseek.com  (catalog: deepseek-flash default, or deepseek-v4-pro)
-    └── archive JSON back to cloud Jenkins
+```mermaid
+flowchart TD
+  cloud["Cloud VM: k3d + Jenkins :17070"] -->|"queue one_task"| pc["This PC: agent + Docker + iCode"]
+  disp["some_task or full_suite_task"] -->|"one build per question x rollout"| cloud
+  pc --> api["api.deepseek.com"]
+  pc --> back["artifact.json archived on Jenkins"]
 ```
 
 Worker wizard default is `http://43.107.42.252:17070`. Type a new `http://<ip>:17070` or export `JENKINS_URL` for another controller. Never `mac-k3d start -c worker.yaml`.

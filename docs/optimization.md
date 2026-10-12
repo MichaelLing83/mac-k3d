@@ -13,6 +13,15 @@ Harbor applies each task's own `cpus` / `memory_mb` / `storage_mb`. mac-k3d's on
 
 The pipeline passes **no** `--override-cpus` and **no** `--override-memory-mb` on the normal path. A task gets what it asks for, so a score is comparable with anyone else's run of the same task.
 
+```mermaid
+flowchart TD
+  limit["cpu_cores in worker.yaml"] --> exec["executors = cpu_cores / 2"]
+  limit --> locks["core-1 .. core-N in Jenkins"]
+  exec --> place["Jenkins places that many one_task builds"]
+  place --> hold["Evaluate locks the CPUs that question declares"]
+  hold --> harbor["harbor run -n 1"]
+```
+
 ## How many fit
 
 ```text
@@ -21,7 +30,7 @@ mem_slots  = floor((MemAvailable_GB - HOST_RESERVE_GB) / declared_memory_GB)
 disk_floor = 1 when free disk at WORKDIR < MIN_DISK_GB, else unbounded
 ```
 
-`HOST_RESERVE_GB` is 2 and `MIN_DISK_GB` is 40. `EVAL_SLOTS` becomes Harbor's `-n`, so Harbor keeps that many trials in flight and queues the rest itself.
+`HOST_RESERVE_GB` is 2 and `MIN_DISK_GB` is 40. On a local run, `EVAL_SLOTS` becomes Harbor's `-n`. A Jenkins `one_task` build is one trial, so Harbor runs `-n 1` and the lock quantity is the task's declared CPUs, not this whole formula.
 
 Admission and throughput use different numbers on purpose:
 
@@ -48,7 +57,7 @@ python3 pipeline/lib/task_resources.py plan \
   --cpu 8 --n-rollouts 4 --workdir eval-runs
 ```
 
-On Jenkins, `CPU_LOCK_QTY` is not a parameter: the `Evaluate` stage locks every `<node>-core-N` resource of its worker and exports how many it got. That count is `jenkins_agent.cpu_cores` in the worker's `~/.config/mac-k3d/worker.yaml`: `mac-k3d config -c worker.yaml` creates `<node>-core-1..N` and deletes any `<node>-core-M` above N. A core that a running build holds is reported `busy` and kept until the next `config`.
+On Jenkins, `CPU_LOCK_QTY` is not a parameter and it is not the whole machine. The `Evaluate` stage locks `cpusEach` resources of this node (DeepSWE 2, LoLBench 4) and Harbor runs `-n 1`. `mac-k3d config -c worker.yaml` creates `<node>-core-1..N` where N is `jenkins_agent.cpu_cores`, and deletes any `<node>-core-M` above N. A core that a running build holds is reported `busy` and kept until the next `config`. A checked change on this PC: `cpu_cores: 2` left 1 executor, `executors-1` and `fits-deepswe`, and pruned core-3 and core-4; putting `4` back restored 2 executors and all three `fits-` labels.
 
 `mac-k3d eval --local` and `mac-k3d eval --stage` plan with the same number, so a local run packs the same `EVAL_SLOTS` as a Jenkins build on that machine. They print one line before the phase starts, for example `CPU_LOCK_QTY=16 (from /home/you/.config/mac-k3d/worker.yaml jenkins_agent.cpu_cores; Jenkins locks the same on this node)`. The number comes from the first of these that is set:
 
@@ -77,7 +86,19 @@ Time and token cost are reduced by `ICODE_REASONING_EFFORT=high` (less explore s
 
 ## Retries
 
-Harbor's `-r` (max retries) handles a trial that dies on infrastructure, so mac-k3d has no resume mode of its own. To re-run a suite that aborted, trigger the dispatcher again: within one dispatcher build, shards that fail do not stop the others (`propagate: false`), and the `Aggregate` stage reports on whatever finished, so a partial suite still yields a report.
+Two different retries:
+
+```mermaid
+flowchart TD
+  trial["one trial"] --> harborR{"Harbor exception, not a wrong answer and not exit 137?"}
+  harborR -->|yes| r["Harbor -r 1: one more try inside this build"]
+  harborR -->|no| oom{"out of memory?"}
+  oom -->|yes| jenkins["Jenkins queues a new one_task, at most OOM_RETRIES times"]
+  oom -->|no| score["this build's reward stands"]
+  r --> score
+```
+
+There is no resume mode. To re-run a suite that aborted, trigger the dispatcher again. Inside one dispatcher build, a unit that fails does not stop the others (`propagate: false`). A failure before Harbor starts is retried once. A failure after Harbor started, or an abort, is not retried. The `Aggregate` stage reports on whatever finished.
 
 ## Disk and I/O
 
