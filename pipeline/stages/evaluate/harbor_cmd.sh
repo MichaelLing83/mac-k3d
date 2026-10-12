@@ -158,7 +158,11 @@ build_run_cmd() {
   cmd+=(--jobs-dir "$JOBS_DIR")
   cmd+=(--no-delete)
   cmd+=(-k "$N_ROLLOUTS")
+  # A wrong answer is never an exception, and iCode's 137 exits 0, so neither
+  # is retried. Harbor's one retry covers infrastructure errors, as before.
   cmd+=(-r "${HARBOR_MAX_RETRIES:-1}")
+  # The canary keeps the task.toml limit. Only the rollout is squeezed.
+  apply_test_memory
   append_agent_flags
 }
 
@@ -187,6 +191,23 @@ build_canary_cmd() {
   fi
 }
 
+# Developer testing: TEST_MEMORY_MB becomes --override-memory-mb while ATTEMPT
+# is at most TEST_MEMORY_ATTEMPTS (default 1). A later try runs as declared.
+apply_test_memory() {
+  [ -n "${TEST_MEMORY_MB:-}" ] || return 0
+  local limit="${TEST_MEMORY_ATTEMPTS:-1}" attempt="${ATTEMPT:-1}"
+  case "$limit" in
+    ''|*[!0-9]*) limit=1 ;;
+  esac
+  case "$attempt" in
+    ''|*[!0-9]*) attempt=1 ;;
+  esac
+  if [ "$attempt" -le "$limit" ]; then
+    EVAL_OVERRIDE_MEMORY_MB="$TEST_MEMORY_MB"
+    echo "harbor: TEST_MEMORY_MB=$TEST_MEMORY_MB on attempt $attempt"
+  fi
+}
+
 # Everything the agent sees: model, egress allowlist, resources, env file,
 # verifier env, mounts and agent env. Shared by iCode and the canary.
 append_agent_flags() {
@@ -198,7 +219,8 @@ append_agent_flags() {
   cmd+=(--agent-setup-timeout-multiplier 10)
   cmd+=(-n "$EVAL_SLOTS")
   # No --override-cpus / --override-memory-mb: Harbor then applies what each
-  # task.toml declares. EVAL_SLOTS already divides the lock by those numbers.
+  # task.toml declares. A Jenkins build is one trial; the lock holds its CPUs.
+  # build_run_cmd may set EVAL_OVERRIDE_MEMORY_MB from TEST_MEMORY_MB first.
   if [ -n "${EVAL_OVERRIDE_CPUS:-}" ]; then
     cmd+=(--override-cpus "$EVAL_OVERRIDE_CPUS")
     echo "harbor: override-cpus=$EVAL_OVERRIDE_CPUS (EVAL_OVERRIDE_CPUS set; task.toml ignored)"

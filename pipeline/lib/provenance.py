@@ -480,6 +480,16 @@ def record_canary(inputs: Path, summary: Path) -> dict:
     return doc
 
 
+def record_canary_reuse(inputs: Path, source: str) -> dict:
+    """This worker already passed the canary for this question in this run."""
+    doc = _load_json(inputs)
+    isolation = doc.get("isolation") if isinstance(doc.get("isolation"), dict) else {}
+    isolation["canary"] = {"status": "reused", "source": source}
+    doc["isolation"] = isolation
+    _write_json(inputs, doc)
+    return doc
+
+
 def record_egress_probe(inputs: Path, probe: Path) -> dict:
     """`harbor_egress.py check` output: which image Harbor's kernel probe ran in."""
     doc = _load_json(inputs)
@@ -966,6 +976,9 @@ def main(argv: list[str] | None = None) -> int:
     leak.add_argument("--inputs", required=True)
     leak.add_argument("--report", required=True)
 
+    reuse = sub.add_parser("record-canary-reuse")
+    reuse.add_argument("--inputs", required=True)
+    reuse.add_argument("--source", required=True)
     canary = sub.add_parser("record-canary")
     canary.add_argument("--inputs", required=True)
     canary.add_argument("--summary", required=True)
@@ -1011,6 +1024,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "record-canary":
         record_canary(Path(args.inputs), Path(args.summary))
+        return 0
+    if args.cmd == "record-canary-reuse":
+        record_canary_reuse(Path(args.inputs), args.source)
         return 0
     if args.cmd == "record-egress-probe":
         record_egress_probe(Path(args.inputs), Path(args.probe))

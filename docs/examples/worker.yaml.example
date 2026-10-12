@@ -37,7 +37,8 @@ jenkins_agent:
   name: linux-eval-1
   labels: [linux, docker, lolbench]
   remote_fs: /home/YOU/jenkins-agent
-  cpu_cores: 8
+  cpu_cores: 4              # local upper limit; a cloud worker uses 16
+  cpus_per_executor: 2    # executors = cpu_cores / this (local 2, cloud 8)
   api_user: admin
   # api_token: set via prepare or MAC_K3D_JENKINS_TOKEN
 

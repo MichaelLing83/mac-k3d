@@ -40,6 +40,8 @@ jenkins_job:
   default_icode_git_url: ""
   default_icode_git_ref: main
   default_icode_args: ""
+  max_in_flight: 0        # 0 = 2 x online executors for the suite
+  oom_retries: 2
 
 resources:
   cpu_cores_label: CPU_CORES

@@ -37,7 +37,7 @@ New Mac/Linux
   → output/{benchmark}/jenkins-<build>-<UTC>.tar.gz under the pipeline root
 ```
 
-Several questions add one hop: `_some_task` or `_full_suite_task` splits them into shards of `SHARD_SIZE`, queues each as a `_one_task` build (each worker takes the next shard when it frees up), then merges the shards into one report in its own `Aggregate` stage.
+Several questions add one hop: `_some_task` or `_full_suite_task` queues one `_one_task` build per question and rollout (each worker takes the next when an executor frees up), then merges them into one report in its own `Aggregate` stage.
 
 ```mermaid
 flowchart TD
@@ -85,7 +85,7 @@ flowchart TD
 | `chmod +x` / quarantine strip | Make the asset executable | Unsigned downloads are blocked on macOS |
 | `mac-k3d setup` | Wizard: role, Install Docker / k3d / Java | One entry point for controller or worker |
 | Controller: `start` + `config` | k3d cluster + Jenkins UI `:17070` + credentials | Job queue and `deepseek-api-key` live here |
-| Worker: token + `config` | Inbound agent with one executor + `<agent>-core-N` locks | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes. Adding the Nth worker needs no pipeline edit |
+| Worker: token + `config` | Inbound agent with `cpu_cores / cpus_per_executor` executors + `<agent>-core-N` locks | Workloads run on the worker’s Docker, not inside the controller’s k3d nodes. Adding the Nth worker needs no pipeline edit |
 
 Honest leftovers: Linux **logout** after docker group; macOS first **Docker Desktop** window; worker **API token**; DeepSeek key on the **controller** credentials store.
 
@@ -155,7 +155,7 @@ A sharded run merges builds from several workers. If they report different `pipe
 
 Worker `config` downloads `agent.jar` next to the running one and swaps it in only when the bytes differ. The agent is restarted only when the jar, `launch-agent.sh` or the systemd unit / LaunchAgent changed; otherwise it prints `Jenkins agent unchanged, left running`, so a redeploy does not drop a connected worker.
 
-Developer parameters (pins, `AGENT_LABEL`, `SHARD_SIZE`) show only in the `developer` profile. Switch while developing and back for handover:
+Developer parameters (pins, `AGENT_LABEL`, `MAX_IN_FLIGHT`, `OOM_RETRIES`, `TEST_MEMORY_MB`, `TEST_MEMORY_ATTEMPTS`) show only in the `developer` profile. Switch while developing and back for handover:
 
 ```bash
 mac-k3d set --ui-profile developer && mac-k3d config --skip-secrets   # on the controller

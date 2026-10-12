@@ -96,6 +96,38 @@ have() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# One lock directory per worker, outside any executor's workspace. mkdir is
+# the lock, so it works on macOS (no flock). A holder whose pid is gone is stale.
+node_lock() {
+  local name="$1" root dir i=0 owner=""
+  if [ -n "${WORKSPACE:-}" ]; then
+    root="$(cd "$(dirname "$WORKSPACE")/.." && pwd)/.mac-k3d/locks"
+  else
+    root="${HOME}/.mac-k3d/locks"
+  fi
+  mkdir -p "$root"
+  dir="$root/${name}.lock"
+  while ! mkdir "$dir" 2>/dev/null; do
+    owner="$(cat "$dir/owner" 2>/dev/null || true)"
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+      rm -rf "$dir"
+      continue
+    fi
+    i=$((i + 1))
+    [ "$i" -le 900 ] || die "timed out waiting for the node lock $name"
+    sleep 2
+  done
+  echo $$ >"$dir/owner"
+  NODE_LOCK_DIR="$dir"
+}
+
+node_unlock() {
+  if [ -n "${NODE_LOCK_DIR:-}" ]; then
+    rm -rf "$NODE_LOCK_DIR"
+    NODE_LOCK_DIR=""
+  fi
+}
+
 # Run each named step (stages/<phase>/<step>.sh) in its own process, in order.
 run_steps() {
   local step

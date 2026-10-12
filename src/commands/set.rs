@@ -55,9 +55,13 @@ pub struct SetArgs {
     #[arg(long)]
     pub ui_profile: Option<String>,
 
-    /// Questions per shard when some_task / full_suite_task split work across workers
+    /// Builds one dispatcher keeps in the Jenkins queue at once. 0 counts 2 x online executors
     #[arg(long)]
-    pub shard_size: Option<u32>,
+    pub max_in_flight: Option<u32>,
+
+    /// Times an out-of-memory rollout is put back at the end of the queue
+    #[arg(long)]
+    pub oom_retries: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -70,7 +74,8 @@ pub struct SetPatch {
     pub n_tasks: Option<u32>,
     pub tasks: Option<String>,
     pub ui_profile: Option<String>,
-    pub shard_size: Option<u32>,
+    pub max_in_flight: Option<u32>,
+    pub oom_retries: Option<u32>,
 }
 
 /// Edit `jenkins_job` on a YAML file. Does not start Jenkins or upload secrets.
@@ -101,7 +106,8 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         n_tasks: args.n_tasks,
         tasks: args.tasks,
         ui_profile: args.ui_profile,
-        shard_size: args.shard_size,
+        max_in_flight: args.max_in_flight,
+        oom_retries: args.oom_retries,
     };
 
     let mut any_flag = patch.harness.is_some()
@@ -112,7 +118,8 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
         || patch.n_tasks.is_some()
         || patch.tasks.is_some()
         || patch.ui_profile.is_some()
-        || patch.shard_size.is_some();
+        || patch.max_in_flight.is_some()
+        || patch.oom_retries.is_some();
     let path_flags = args.icode_release.is_some();
 
     if !any_flag && !args.check_models && !path_flags {
@@ -121,7 +128,7 @@ pub fn run(args: SetArgs, config_path: Option<&Path>) -> Result<()> {
             any_flag = true;
         } else {
             return Err(Error::Config(
-                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks / --ui-profile / --shard-size / --icode-release, --check-models, or --list"
+                "not a TTY: pass --harness / --llm / --model / --benchmark / --task / --n-tasks / --tasks / --ui-profile / --max-in-flight / --oom-retries / --icode-release, --check-models, or --list"
                     .into(),
             ));
         }
@@ -309,11 +316,11 @@ pub fn apply_set(config: &mut MacK3dConfig, patch: SetPatch) -> Result<()> {
         }
         job.ui_profile = p;
     }
-    if let Some(n) = patch.shard_size {
-        if n == 0 {
-            return Err(Error::Config("--shard-size must be >= 1".into()));
-        }
-        job.default_shard_size = n;
+    if let Some(n) = patch.max_in_flight {
+        job.max_in_flight = n;
+    }
+    if let Some(n) = patch.oom_retries {
+        job.oom_retries = n;
     }
 
     let q = usize::from(patch.task.is_some())
@@ -497,9 +504,10 @@ fn print_set_summary(config: &MacK3dConfig, path: &Path) {
         println!("  n_tasks={} (first N sorted)", job.default_n_tasks.max(1));
     }
     println!(
-        "  ui_profile={}  shard_size={}",
+        "  ui_profile={}  max_in_flight={}  oom_retries={}",
         job.ui_profile,
-        job.default_shard_size.max(1)
+        job.max_in_flight,
+        job.oom_retries
     );
     println!(
         "Controller: mac-k3d config -c {} --skip-secrets",
@@ -637,19 +645,30 @@ mod tests {
     }
 
     #[test]
-    fn set_ui_profile_and_shard_size() {
+    fn set_ui_profile_and_dispatch_limits() {
         let mut c = cfg();
         apply_set(
             &mut c,
             SetPatch {
                 ui_profile: Some("Developer".into()),
-                shard_size: Some(4),
+                max_in_flight: Some(30),
+                oom_retries: Some(2),
                 ..SetPatch::default()
             },
         )
         .unwrap();
         assert_eq!(c.jenkins_job.ui_profile, "developer");
-        assert_eq!(c.jenkins_job.default_shard_size, 4);
+        assert_eq!(c.jenkins_job.max_in_flight, 30);
+        assert_eq!(c.jenkins_job.oom_retries, 2);
+        apply_set(
+            &mut c,
+            SetPatch {
+                max_in_flight: Some(0),
+                ..SetPatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(c.jenkins_job.max_in_flight, 0, "0 means count 2 x executors");
 
         let err = apply_set(
             &mut c,
@@ -661,16 +680,6 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("user, developer"), "{err}");
-        let err = apply_set(
-            &mut c,
-            SetPatch {
-                shard_size: Some(0),
-                ..SetPatch::default()
-            },
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains(">= 1"), "{err}");
     }
 
     #[test]

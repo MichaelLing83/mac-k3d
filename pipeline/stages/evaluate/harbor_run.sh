@@ -139,6 +139,8 @@ run_harbor() {
   local tid rc rewards finished heartbeat_pid oom
   REPO_CANDIDATES="$(declared_repo_candidates)"
   mkdir -p "$JOBS_DIR"
+  printf '%s\n' "${ROLLOUT:-1}" >"$JOBS_DIR/rollout.txt"
+  python3 "$PIPELINE_LIB/trial_network.py" owner --out "$JOBS_DIR/owner.json" || true
   printf '%s\n' "$JOBS_DIR" >"$HARNESS_DIR/harbor_jobs_dir.txt"
   build_run_cmd
   echo "harbor: -p ${unit_task_path} tasks=${#TASK_IDS[@]} -k ${N_ROLLOUTS} -n ${EVAL_SLOTS} (${NEEDED} trials)"
@@ -172,23 +174,26 @@ run_harbor() {
   echo "harbor: ${rewards:-0}/${NEEDED} trials scored (exit $rc)"
   # A trial's result.json sits at <jobs>/<job>/<trial>/; the job's own one level up.
   finished="$(find "$JOBS_DIR" -mindepth 3 -maxdepth 3 -name result.json -type f 2>/dev/null | wc -l | tr -d ' ')"
-  if [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
+  oom="$(oom_trials)"
+  # Harbor deletes a failed attempt before retrying, but the log keeps its
+  # text. A retry that scored (a reward.json exists) is not an OOM to re-queue.
+  if [ -z "$oom" ] && [ "${rewards:-0}" -eq 0 ] && grep -Eiq \
+    'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
+    "$unit_log"; then
+    oom="log"
+  fi
+  if [ -n "$oom" ]; then
+    printf '%s\n' "$oom" >"$HARNESS_DIR/oom_trials.txt"
+    echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory (iCode exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
+    echo "  Removing the container now. The rollout is queued again at the end of the run."
+    python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$JOBS_DIR" || true
+  elif [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
     icode_reclaim_host_tree "$HOST_ICODE"
     die "harbor run exited $rc before any trial finished: $(harbor_last_error "$unit_log") (see $unit_log)"
-  fi
-  if [ "${rewards:-0}" -eq 0 ]; then
+  elif [ "${rewards:-0}" -eq 0 ]; then
     echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
   elif [ "$rc" -ne 0 ]; then
     echo "WARNING: harbor run exited $rc. Rewards are present; treating them as scores."
-  fi
-  oom="$(oom_trials)"
-  if [ -n "$oom" ]; then
-    echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory (iCode exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
-    echo "  Each stays that rollout's own result. EVAL_SLOTS=$EVAL_SLOTS came from CPU_LOCK_QTY and the declared memory; lower CPU_LOCK_QTY or give the worker more RAM."
-  elif grep -Eiq \
-    'out of memory|Cannot allocate memory|oom-kill|oom_kill|exit(ed)?[[:space:]]+(with[[:space:]]+)?(status|code)[[:space:]]*137([^0-9]|$)|ExitCode[=:[:space:]]*137([^0-9]|$)' \
-    "$unit_log"; then
-    echo "WARNING: a trial hit the memory ceiling. EVAL_SLOTS=$EVAL_SLOTS came from CPU_LOCK_QTY and the declared memory; lower CPU_LOCK_QTY or give the worker more RAM."
   fi
   for tid in "${TASK_IDS[@]}"; do
     python3 "$PIPELINE_LIB/provenance.py" record-image \
@@ -223,6 +228,7 @@ SECONDS=0
 : >"$HARNESS_DIR/harbor.log"
 LAST_RC=0
 run_harbor
+python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$JOBS_DIR" || true
 icode_reclaim_host_tree "$HOST_ICODE"
 
 DURATION="$SECONDS"

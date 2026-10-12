@@ -71,7 +71,7 @@ python3 pipeline/lib/task_resources.py sample --harness-dir eval-runs/harness --
 
 ## Scaling out instead of up
 
-Packing more trials onto one worker has a ceiling; adding workers does not. `<suite>_some_task` and `<suite>_full_suite_task` split their questions into shards of `SHARD_SIZE` and queue them; each worker runs one build at a time with all its cores and takes the next shard when it finishes, so adding a worker is the whole change — see [evaluation.md](evaluation.md#which-job-to-run). Smaller shards balance better across uneven workers; larger shards pay the per-build prepare cost fewer times.
+Packing more trials onto one worker has a ceiling; adding workers does not. `<suite>_some_task` and `<suite>_full_suite_task` queue one `one_task` build per question and rollout. A worker runs `cpu_cores / cpus_per_executor` of them at once, each locking the CPUs that question declares, and takes the next when one finishes. Adding a worker is the whole change — see [evaluation.md](evaluation.md#which-job-to-run).
 
 Time and token cost are reduced by `ICODE_REASONING_EFFORT=high` (less explore soft-stop), not by cutting rollouts.
 

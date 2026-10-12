@@ -188,7 +188,7 @@ Or re-run step 1 and paste **admin** + token when the wizard asks.
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
-Use the **worker** file, not `config.yaml`. Expect: `harbor 0.22.0: ok` (a warning if Harbor or git is missing), download `agent.jar`, register the node with **one executor**, write `launch-agent.sh`, create `<agent>-core-1..N` locks (one per logical core), start the OS agent service. With the keys still empty it prints which keys to fill in and the command to re-run. A line like `k3d cluster 'ci-worker' not present` is **OK** — workers are not a k3d cluster.
+Use the **worker** file, not `config.yaml`. Expect: `harbor 0.22.0: ok` (a warning if Harbor or git is missing), download `agent.jar`, register the node with `cpu_cores / cpus_per_executor` executors, write `launch-agent.sh`, create `<agent>-core-1..cpu_cores` locks, start the OS agent service. With the keys still empty it prints which keys to fill in and the command to re-run. A line like `k3d cluster 'ci-worker' not present` is **OK** — workers are not a k3d cluster.
 
 That is the whole cost of adding the Nth worker. No pipeline or job edit is needed: eval builds lock `label: env.NODE_NAME`, so each worker only ever holds its own cores, and the full-suite dispatcher sizes its shards from the cores now registered. Scale workers freely, but keep exactly one controller — lockable-resources state is per-controller.
 

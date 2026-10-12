@@ -43,14 +43,9 @@ pub struct EvalArgs {
     #[arg(long, requires = "job")]
     pub tasks: Option<String>,
 
-    /// With --job: attempts per question (N_ROLLOUTS)
+    /// With --job some|full: attempts per question (N_ROLLOUTS). one_task is one rollout
     #[arg(long, requires = "job")]
     pub n_rollouts: Option<u32>,
-
-    /// With --job some|full: questions per shard for the whole run (SHARD_SIZE, a
-    /// developer field). Shards are raised to at least one per online worker
-    #[arg(long, requires = "job")]
-    pub shard_size: Option<u32>,
 
     /// With --job: any other field of the job page, e.g. --param CANARY=on or
     /// --param AGENT_LABEL=mac-Michael-Ubuntu (repeatable)

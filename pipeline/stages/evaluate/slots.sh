@@ -23,6 +23,10 @@ rm -f "$HARNESS_DIR/harbor_jobs_dir.txt" \
 echo "slots: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 
 RESOURCE_PLAN="$WORKDIR/eval_resources.json"
+jenkins_flag=()
+if [ -n "${BUILD_NUMBER:-}" ]; then
+  jenkins_flag=(--jenkins)
+fi
 plan_out="$(
   python3 "$PIPELINE_LIB/task_resources.py" plan \
     --tasks-dir "$TASKS_DIR" \
@@ -31,7 +35,8 @@ plan_out="$(
     --n-rollouts "${N_ROLLOUTS:-1}" \
     --workdir "$WORKDIR" \
     --measured-peak-gb "$(cat "$HARNESS_DIR/container_mem_peak_gb" 2>/dev/null || echo 0)" \
-    --out "$RESOURCE_PLAN"
+    --out "$RESOURCE_PLAN" \
+    ${jenkins_flag[@]+"${jenkins_flag[@]}"}
 )" || die "this worker cannot run the selected tasks as declared (see the error above)"
 eval "$plan_out"
 python3 "$PIPELINE_LIB/provenance.py" record-resources \

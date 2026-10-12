@@ -142,7 +142,7 @@ fn eval_help_mentions_the_jenkins_queue_flags() {
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    for flag in ["--job", "--tasks", "--n-rollouts", "--shard-size", "--param", "--dry-run"] {
+    for flag in ["--job", "--tasks", "--n-rollouts", "--param", "--dry-run"] {
         assert!(stdout.contains(flag), "{flag} missing:\n{stdout}");
     }
 }
@@ -155,12 +155,12 @@ fn eval_job_dry_run_prints_only_the_given_fields() {
         .env("HOME", home.path())
         .env_remove("XDG_CONFIG_HOME")
         .args([
-            "eval", "--job", "some", "--tasks", "a, b", "--n-rollouts", "1", "--shard-size", "2", "--dry-run",
+            "eval", "--job", "some", "--tasks", "a, b", "--n-rollouts", "1", "--dry-run",
         ])
         .assert()
         .success();
     let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
-    assert!(out.starts_with("Queue deepswe_some_task with:\n  TASKS=a,b\n  N_ROLLOUTS=1\n  SHARD_SIZE=2\n"), "{out}");
+    assert!(out.starts_with("Queue deepswe_some_task with:\n  TASKS=a,b\n  N_ROLLOUTS=1\n"), "{out}");
     assert!(out.contains("Dry run: nothing queued."), "{out}");
 }
 

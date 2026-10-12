@@ -284,7 +284,7 @@ Never run `mac-k3d start -c worker.yaml`; it is rejected on purpose.
 
 `mac-k3d config -c worker.yaml` is the only command that registers an agent. Using the API token it:
 
-1. Creates or updates the node on Mac A: one executor, the agent labels (default `macos docker lolbench` / `linux docker lolbench`), launch method **Inbound**.
+1. Creates or updates the node on Mac A: executors = `cpu_cores / cpus_per_executor`, the agent labels (default `macos docker lolbench` / `linux docker lolbench`) plus `fits-<suite>` and `executors-<n>`, launch method **Inbound**.
 2. Creates the lockable resources `<agent>-core-1..N` (one per logical core), labelled with the shared `CPU_CORES` label and the agent name.
 3. Writes `launch-agent.sh` and starts the agent service (LaunchAgent `com.mac-k3d.jenkins-agent` on macOS, systemd user unit `mac-k3d-jenkins-agent.service` on Linux).
 

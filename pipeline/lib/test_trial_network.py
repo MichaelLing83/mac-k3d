@@ -951,5 +951,28 @@ class ProvenanceTests(unittest.TestCase):
         self.assertFalse(any(line.startswith("Trial networks") for line in lines))
 
 
+class OwnerSweepTests(unittest.TestCase):
+    def test_a_dead_owner_is_swept_and_a_live_one_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            live = root / "live"
+            dead = root / "dead"
+            live.mkdir()
+            dead.mkdir()
+            (live / "owner.json").write_text(
+                json.dumps({"pid": os.getpid(), "started": tn.process_start(os.getpid())}),
+                encoding="utf-8",
+            )
+            (dead / "owner.json").write_text(
+                json.dumps({"pid": 1 << 30, "started": "gone"}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(tn, "teardown", return_value=1) as torn:
+                self.assertEqual(tn.sweep([root]), 1)
+            torn.assert_called_once_with(dead)
+            self.assertTrue(tn.owner_alive({"pid": os.getpid(), "started": tn.process_start(os.getpid())}))
+            self.assertFalse(tn.owner_alive({"pid": 1 << 30, "started": "gone"}))
+
+
 if __name__ == "__main__":
     unittest.main()

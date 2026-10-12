@@ -19,6 +19,7 @@ harbor_version() {
 }
 
 export PATH="${HOME}/.local/bin:${PATH}"
+node_lock harbor
 got="$(harbor_version)"
 if [ "$got" != "$HARBOR_VERSION" ]; then
   ensure_uv
@@ -26,6 +27,7 @@ if [ "$got" != "$HARBOR_VERSION" ]; then
   uv tool install --force "harbor==${HARBOR_VERSION}"
   got="$(harbor_version)"
 fi
+node_unlock
 have harbor || die "harbor still not on PATH after install. Try: uv tool install --force \"harbor==${HARBOR_VERSION}\""
 [ "$got" = "$HARBOR_VERSION" ] || die "harbor --version is '${got}', wanted ${HARBOR_VERSION}"
 printf '%s\n' "$got" >"$WORKDIR/harbor_version.txt"

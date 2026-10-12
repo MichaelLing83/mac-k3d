@@ -590,6 +590,25 @@ exit 35
         self.assertEqual(result["checks"]["filesystem"]["status"], "pass", result["checks"]["filesystem"])
         self.assertEqual(json.loads((self.logs / "canary.json").read_text(encoding="utf-8"))["filesystem"]["hits"], [])
 
+    def test_a_failed_mktemp_stops_instead_of_a_false_verdict(self):
+        self._stub("mktemp", "#!/bin/sh\nexit 1\n")
+        env = {
+            "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "HOME": str(self.home),
+            "CANARY_LOG_DIR": str(self.logs),
+            "CANARY_SPEC": str(self.spec),
+            "CANARY_SEARCH_ROOT": str(self.root),
+            "CANARY_MOUNT": str(self.mount),
+            "CANARY_MOUNTS_FILE": str(self.mounts_file),
+            "CANARY_CAPTURE": str(CAPTURE),
+        }
+        proc = subprocess.run(
+            ["bash", str(PROBE), "mount"], env=env, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("cannot create a temp file (out of processes or disk?)", proc.stderr)
+        self.assertFalse((self.logs / "canary_root.json").exists())
+
     def test_writable_mount_and_extra_ref_fail(self):
         self.mounts_file.write_text(f"/dev/vda1 {self.mount} ext4 rw,relatime 0 0\n", encoding="utf-8")
         (self.bin / "touch").unlink()

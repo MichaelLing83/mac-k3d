@@ -132,6 +132,7 @@ fn prompt_agent(base_dir: &Path, cpu_cores: u32) -> Result<JenkinsAgentConfig> {
         remote_fs: Some(PathBuf::from(remote_fs.trim())),
         agent_jar: Some(base_dir.join("downloads").join("jenkins-agent").join("agent.jar")),
         cpu_cores,
+        cpus_per_executor: crate::config::cpus_per_executor(0),
         api_user: Some(api_user.trim().to_string()).filter(|s| !s.is_empty()),
         api_token,
     })

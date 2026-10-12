@@ -116,7 +116,7 @@ The `env` phase fetches neither. It checks that the worker can run any evaluatio
 
 ## How Harbor is called
 
-`evaluate/harbor_cmd.sh` builds one command for the whole build. Harbor expands it into `tasks × N_ROLLOUTS` trials and runs `EVAL_SLOTS` at a time:
+`evaluate/harbor_cmd.sh` builds one command for the whole build. A Jenkins build is one question and one rollout, so Harbor runs one trial (`-n 1`, `-k 1`). A local run still sets `-n` from the CPU limit divided by the task's declared CPUs. Harbor retries a trial that errored once (`-r` defaults to 1). A wrong answer is a reward of 0 with no exception, and iCode's own exit 137 exits 0, so neither is retried. If a retry still has no `reward.json` and the log names an out of memory, the dispatcher queues that rollout again at the tail, at most `OOM_RETRIES` times:
 
 ```bash
 harbor run -p <task folder> -i <task> [-i <task> ...] \
@@ -139,8 +139,8 @@ harbor run -p <task folder> -i <task> [-i <task> ...] \
 | `-a icode_harbor_agent:ICodeAgent`, `-m` | The agent under test (`pipeline/lib/icode_harbor_agent.py`) and the catalog model |
 | `--job-name`, `--jobs-dir`, `--no-delete` | Where results go; the containers' logs and patches are kept for the later phases |
 | `-k N_ROLLOUTS` | Attempts per task |
-| `-r HARBOR_MAX_RETRIES` | Harbor retries of a trial that errored (default 1) |
-| `-n EVAL_SLOTS` | Trials at once, from `evaluate/slots` |
+| `-r HARBOR_MAX_RETRIES` | Harbor retries a trial that errored, once (default 1). A wrong answer and an iCode exit 137 are not exceptions, so they are not retried. An OOM that still has no reward after that is re-queued by the dispatcher, up to `OOM_RETRIES` |
+| `-n EVAL_SLOTS` | Trials at once. `1` on a Jenkins build; a local run uses `cpu_cores / declared cpus` |
 | `--override-cpus`, `--override-memory-mb` | Only when `EVAL_OVERRIDE_CPUS` / `EVAL_OVERRIDE_MEMORY_MB` is set. Without them Harbor applies each `task.toml` |
 | `--allow-agent-host` | Once per host in `pipeline/config/network-allowlist-v1.json`; the agent can reach nothing else |
 | `--mounts` | The one bind mount: iCode read-only at `/opt/icode-host` (`agent_mounts.json`) |

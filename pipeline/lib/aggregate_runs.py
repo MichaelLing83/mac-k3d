@@ -67,15 +67,20 @@ def shard_report_protocol(shard: Path, builds: list[str], own_only: bool = False
 
 
 def read_plan(path: Path) -> list[dict]:
-    """The dispatcher's ``shards/plan.txt``: one ``index|build|result|offset|count|tasks`` line per shard."""
+    """The dispatcher's ``shards/plan.txt``.
+
+    One ``index|build|result|offset|count|tasks`` line per shard, or
+    ``...|rollout|attempts`` when each line is one question and one rollout.
+    """
     rows: list[dict] = []
     if not path.is_file():
         return rows
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.strip().split("|")
-        if len(parts) != 6:
+        if len(parts) not in (6, 8):
             continue
-        index, build, result, offset, count, tasks = parts
+        index, build, result, offset, count, tasks = parts[:6]
+        rollout, attempts = (parts[6], parts[7]) if len(parts) == 8 else ("1", "1")
         try:
             rows.append(
                 {
@@ -85,11 +90,25 @@ def read_plan(path: Path) -> list[dict]:
                     "offset": int(offset),
                     "count": int(count),
                     "tasks": [t.strip() for t in tasks.split(",") if t.strip()],
+                    "rollout": int(rollout),
+                    "attempts": int(attempts),
                 }
             )
         except ValueError:
             continue
     return rows
+
+
+def planned_questions(plan: list[dict]) -> int:
+    """Distinct questions. A per-rollout plan has ``count`` 1 on every line;
+    an older shard plan sums ``count`` because one line covers several questions.
+    """
+    if plan and all(int(entry.get("count") or 0) == 1 for entry in plan):
+        named = {tid for entry in plan for tid in entry.get("tasks") or []}
+        if named:
+            return len(named)
+        return len({entry.get("offset") for entry in plan})
+    return sum(int(entry.get("count") or 0) for entry in plan)
 
 
 def built_by(inputs: dict, build: str) -> bool:
@@ -467,7 +486,7 @@ def coverage_record(rows: list[dict], plan: list[dict], harness: Path, tasks: li
         if row.get("not_run") or row.get("not_run_count")
     ]
     return {
-        "planned": sum(entry["count"] for entry in plan),
+        "planned": planned_questions(plan),
         "with_trials": sum(1 for tid in tasks if harbor_task_trials(harness, tid)),
         "not_run": not_run,
         "not_named": sum(int(row.get("not_run_count") or 0) for row in rows),
@@ -480,8 +499,8 @@ def merge_harness(shards: list[Path], dest: Path, plan: list[dict] | None = None
     """Copy every shard's trials and anti-cheat verdicts under one harness dir.
 
     Shard directories are named per build, so trials cannot collide. A task that
-    somehow appears in two shards keeps both, and the discovery contract in
-    ``score_results`` then takes the newest build that ran it.
+    ran in several builds keeps every trial, ordered by the rollout number
+    written next to that build's jobs dir.
 
     With a ``plan``, a shard's inputs, selection and resources count only when
     its own build wrote them, its verdicts only when its own build has trials,
@@ -812,6 +831,19 @@ def main() -> int:
     if plan:
         coverage = coverage_record(rows, plan, merged["harness"], tasks)
         doc["coverage"] = coverage
+        requeues = [
+            {
+                "tasks": entry["tasks"],
+                "offset": entry["offset"],
+                "rollout": entry.get("rollout") or 1,
+                "attempts": entry.get("attempts") or 1,
+            }
+            for entry in plan
+            if (entry.get("attempts") or 1) > 1
+        ]
+        if requeues:
+            protocol["oom_requeues"] = requeues
+            doc["eval_protocol"] = protocol
         if coverage["planned"] != len(tasks):
             print(
                 f"WARNING: the dispatcher planned {coverage['planned']} questions but Pass@k covers {len(tasks)}; "

@@ -189,36 +189,36 @@ Nine evaluation jobs — three shapes for each of `deepswe`, `lolbench`, `sweben
 
 | Job | Shape | Purpose |
 |---|---|---|
-| `<suite>_one_task` | 1 question, 1 rollout by default | smoke test after a code change; also runs every shard |
+| `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change; also every unit a dispatcher queues |
 | `<suite>_some_task` | dispatcher, `agent none` | a `TASKS` list or the first `N_TASKS`, at full rollouts |
 | `<suite>_full_suite_task` | dispatcher, `agent none` | the whole suite at full rollouts |
 
 ```mermaid
 flowchart LR
-  someTask["suite_some_task"] -->|"shards, propagate false"| shardBuilds["suite_one_task builds"]
-  fullSuite["suite_full_suite_task"] -->|"shards, propagate false"| shardBuilds
-  shardBuilds -->|"1 executor per worker; next shard goes to the first free worker"| workers["Workers"]
+  someTask["suite_some_task"] -->|"one build per question x rollout"| oneTask["suite_one_task builds"]
+  fullSuite["suite_full_suite_task"] -->|"one build per question x rollout"| oneTask
+  oneTask -->|"fits-suite label, executors, core lock"| workers["Workers"]
   someTask --> mergeStage["Aggregate stage in the same build"]
   fullSuite --> mergeStage
 ```
 
-A dispatcher does **not** queue one build per rollout. It splits the sorted question list into contiguous shards of `SHARD_SIZE` (at least one per online worker, counted with `nodesByLabel`; a label no online worker carries fails the build before any shard is queued), queues each as a `<suite>_one_task` build with its own `TASKS` or `TASK_OFFSET` and a shared `RUN_GROUP`, and waits. Its final `Aggregate` stage runs on a worker, copies each shard's archived trials by build number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json` archived on the dispatcher build. The dispatcher holds no executor while its shards queue, so it cannot starve them.
+A dispatcher queues **one** `<suite>_one_task` build per question and rollout. It keeps the rest of the units in its own list and submits at most `MAX_IN_FLIGHT` at a time (controller yaml `jenkins_job.max_in_flight`: 0 means twice the online executors that can run this suite). An OOM unit goes back to the tail, at most `oom_retries` times. Its final `Aggregate` stage runs on a worker, copies each unit's final build by number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json`. The dispatcher holds no executor while those builds queue, so it cannot starve them. A label no online worker carries (`AGENT_LABEL && fits-<suite>`) fails the build before any unit is queued.
 
-### One build per worker, every core
+### Executors and the core lock
 
-Each registered node has **one executor**. Jenkins' default load balancer hashes the job name to a preferred node, so with several executors per node every shard of one dispatcher would pile onto the same worker while it had a free executor. With one executor, a worker that is busy is skipped, and when it finishes it takes the next queued shard: bigger or faster workers simply run more shards.
+`jenkins_agent.cpu_cores` is the worker's CPU upper limit. Executors are `cpu_cores / cpus_per_executor` (default 2, so a 16-core cloud worker has 8 and a 4-core local worker has 2). Registration also adds `fits-<suite>` for each suite whose declared CPUs fit, and `executors-<n>` so a dispatcher can count capacity (`nodesByLabel` returns names, not executor counts).
 
-Each `<suite>_one_task` build is seven stages, one per pipeline phase — Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive — each running `run_all.sh` with its `MAC_K3D_PHASE`. Only `Evaluate` takes the lock:
+Each `<suite>_one_task` build is seven stages, one per pipeline phase — Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive — each running `run_all.sh` with its `MAC_K3D_PHASE`. Only `Evaluate` takes the lock, and only for the CPUs the task declares (`tasks/resources` writes `eval-runs/cpus_each.txt`):
 
 ```groovy
-lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
+lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES')
 ```
 
-With no quantity, lockable-resources locks **every** matching resource, so the build holds all of its worker's cores; their count becomes `CPU_LOCK_QTY`, which `task_resources.py` turns into Harbor's `-n`. The label is the **node name**, not a shared `CPU_CORES` label, because `mac-k3d setup` on a worker creates resources named `<agent>-core-1..N` labelled with both the shared label and the agent name, and the agent name is the Jenkins node name. Benchmark checkout, iCode build and image checks (Tasks), and everything after Harbor run unlocked.
+Harbor then runs `-n 1`. The label is the **node name**, because `mac-k3d setup` creates resources named `<agent>-core-1..cpu_cores` labelled with the agent name, which is the Jenkins node name. A LoLBench task (4 CPUs) and a DeepSWE task (2) share one worker without exceeding `cpu_cores`. Benchmark checkout, iCode build and image checks (Tasks), and everything after Harbor, run unlocked. An OOM sets `TRIAL_OOM` and skips the later stages; `post { always }` removes the containers.
 
 ### Adding a worker
 
-`mac-k3d setup -c worker.yaml` registers the node (one executor) and its core resources. Nothing in the pipeline is edited: the dispatcher counts online workers when it plans shards, Jenkins hands each queued shard to the first free worker, and `lock(label: env.NODE_NAME)` resolves per build.
+`mac-k3d setup -c worker.yaml` registers the node (executors from the CPU limit, `fits-*` and `executors-<n>` labels, and its core resources). Nothing in the pipeline is edited: the next dispatcher counts the new executors, and Jenkins places each build on a node that fits the suite.
 
 Scale workers, not controllers. Lockable-resources state is per-controller, so a second controller would hand out tokens for cores the first one already lent out.
 

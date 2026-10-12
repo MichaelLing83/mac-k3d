@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import shutil
 import sys
@@ -111,6 +112,13 @@ def declared_for_tasks(tasks_dir: Path, task_ids: list[str]) -> dict:
     return {"per_task": per_task, "peak": peak, "tasks": len(task_ids), "declared_tasks": len(per_task)}
 
 
+def cpus_to_lock(cpus: float) -> int:
+    """Whole cores the Jenkins lock takes. ``2.0`` is 2; a fraction rounds up."""
+    if cpus <= 0:
+        return 1
+    return max(1, math.ceil(cpus))
+
+
 def plan_slots(
     peak: dict,
     cpu_lock_qty: int,
@@ -119,55 +127,44 @@ def plan_slots(
     mem_total_kb_: int | None,
     free_disk_gb: float | None,
     measured_peak_gb: float | None = None,
+    jenkins: bool = False,
 ) -> dict:
-    """How many trials run at once, and why.
+    """How many trials run at once, from CPUs only.
 
-    Admission (``fits``) asks whether the worker could host one trial at the
-    declared size, so it uses installed RAM. Throughput uses RAM free right now,
-    and a measured container peak in preference to the declared ceiling, which is
-    a limit Docker enforces rather than what a trial actually uses.
+    RAM is not an admission limit and does not change the slot count. A Jenkins
+    build is one container (``jenkins``), and it does not fit when the cores it
+    locked are below what the task declares. A local run divides ``cpu_lock_qty``
+    by the declared CPUs.
     """
+    del mem_available_kb_, mem_total_kb_, measured_peak_gb
     cpus = float(peak.get("cpus") or 0)
     mem_mb = int(peak.get("memory_mb") or 0)
+    need = cpus_to_lock(cpus) if cpus > 0 else 1
     reasons: list[str] = []
-    limits: list[int] = []
     blockers: list[str] = []
 
-    if cpus > 0:
-        by_cpu = int(cpu_lock_qty // cpus)
-        limits.append(by_cpu)
-        reasons.append(f"cpu_lock {cpu_lock_qty}/{cpus:g} = {by_cpu}")
-        if by_cpu < 1:
-            blockers.append(f"each trial declares {cpus:g} CPUs but this build locked only {cpu_lock_qty}")
-    if mem_mb > 0 and mem_total_kb_:
-        installed_gb = mem_total_kb_ / 1024 / 1024 - HOST_RESERVE_GB
-        if installed_gb < mem_mb / 1024:
-            blockers.append(
-                f"each trial declares {mem_mb / 1024:.1f} GB but the worker has "
-                f"{mem_total_kb_ / 1024 / 1024:.1f} GB installed"
-            )
-    per_trial_gb = measured_peak_gb if measured_peak_gb and measured_peak_gb > 0 else (mem_mb / 1024 if mem_mb else 0)
-    if per_trial_gb > 0 and mem_available_kb_:
-        usable_gb = mem_available_kb_ / 1024 / 1024 - HOST_RESERVE_GB
-        by_mem = int(usable_gb // per_trial_gb)
-        limits.append(by_mem)
-        source = "measured peak" if measured_peak_gb else "declared"
-        reasons.append(f"free ram {usable_gb:.1f}GB/{per_trial_gb:.1f}GB ({source}) = {by_mem}")
-
-    slots = min(limits) if limits else 1
-    if free_disk_gb is not None and free_disk_gb < MIN_DISK_GB:
+    if cpus > 0 and cpu_lock_qty < need:
+        blockers.append(f"each trial declares {cpus:g} CPUs but this build locked only {cpu_lock_qty}")
+    if jenkins or cpus <= 0:
+        slots = 1
+        reasons.append(f"one container; lock {need} CPUs" if jenkins else "no declared CPUs; one at a time")
+    else:
+        by_cpu = int(cpu_lock_qty // cpus) if cpus > 0 else 1
+        slots = max(1, by_cpu)
+        reasons.append(f"cpu {cpu_lock_qty}/{cpus:g} = {by_cpu}")
+        if trials > 0:
+            slots = min(slots, trials)
+    if free_disk_gb is not None and free_disk_gb < MIN_DISK_GB and not jenkins:
         slots = min(slots, 1)
         reasons.append(f"free disk {free_disk_gb:.0f}GB below {MIN_DISK_GB}GB, one at a time")
-    slots = max(1, slots)
-    if trials > 0:
-        slots = min(slots, trials)
     return {
         "slots": slots,
         "fits": not blockers,
         "blockers": blockers,
-        "cpus_each": cpu_count(cpus),
+        "cpus_each": cpu_count(cpus) if cpus > 0 else None,
+        "cpus_lock": need,
         "memory_mb_each": mem_mb or None,
-        "per_trial_gb": per_trial_gb or None,
+        "per_trial_gb": None,
         "reasons": reasons,
     }
 
@@ -216,18 +213,34 @@ def main() -> int:
     plan_p.add_argument("--tasks-dir", required=True)
     plan_p.add_argument("--selected", required=True, help="newline-separated task dir names")
     plan_p.add_argument("--cpu", type=int, required=True, help="CPU_LOCK_QTY for this build")
+    plan_p.add_argument("--jenkins", action="store_true", help="one container; the lock is the declared CPUs")
     plan_p.add_argument("--n-rollouts", type=int, default=1)
     plan_p.add_argument("--workdir", default=".")
     plan_p.add_argument(
         "--measured-peak-gb", type=float, default=0.0, help="observed container peak, when a prior run measured one"
     )
     plan_p.add_argument("--out", default="", help="also write the plan as JSON here")
+
+    declare_p = sub.add_parser("declare", help="whole CPUs to lock for the selected tasks")
+    declare_p.add_argument("--tasks-dir", required=True)
+    declare_p.add_argument("--selected", required=True)
+    declare_p.add_argument("--out", required=True)
     args = ap.parse_args()
     if args.cmd is None:
         ap.error("need a subcommand (plan or sample)")
 
     if args.cmd == "sample":
         sample_peak(Path(args.harness_dir), args.slots)
+        return 0
+
+    if args.cmd == "declare":
+        tasks_dir = Path(args.tasks_dir)
+        ids = [ln.strip() for ln in Path(args.selected).read_text(encoding="utf-8").splitlines() if ln.strip()]
+        need = cpus_to_lock(float(declared_for_tasks(tasks_dir, ids)["peak"].get("cpus") or 0))
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(f"{need}\n", encoding="utf-8")
+        print(need)
         return 0
 
     tasks_dir = Path(args.tasks_dir)
@@ -239,16 +252,21 @@ def main() -> int:
     total_kb = mem_total_kb()
     free_disk = disk_free_gb(args.workdir)
     plan = plan_slots(
-        peak, max(1, args.cpu), trials, avail_kb, total_kb, free_disk, args.measured_peak_gb or None
+        peak,
+        max(1, args.cpu),
+        trials,
+        avail_kb,
+        total_kb,
+        free_disk,
+        args.measured_peak_gb or None,
+        jenkins=args.jenkins,
     )
 
     if not plan["fits"]:
         print(
             "ERROR: this worker cannot run the selected tasks as declared: "
             + "; ".join(plan["blockers"])
-            + ". Raise CPU_LOCK_QTY, send the job to a bigger worker, or set "
-            "EVAL_OVERRIDE_CPUS / EVAL_OVERRIDE_MEMORY_MB to run below what the "
-            "task declares (the run is then not comparable to an official one).",
+            + ". This worker's CPU limit is below what the task declares.",
             file=sys.stderr,
         )
         return 1
@@ -258,6 +276,7 @@ def main() -> int:
         "applied": {
             "slots": plan["slots"],
             "cpus_each": plan["cpus_each"],
+            "cpus_lock": plan["cpus_lock"],
             "memory_mb_each": plan["memory_mb_each"],
             "per_trial_gb": plan["per_trial_gb"],
             "cpu_lock_qty": args.cpu,

@@ -574,6 +574,45 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertEqual(doc["n_tasks"], 2)
             self.assertIn("- Worker (shard 2 jenkins-61): ABORTED before any trial · 1 question not run: beta", md)
 
+    def test_rollouts_of_one_question_from_two_builds_merge_in_rollout_order(self):
+        """Per-rollout dispatch: each build is one question x one rollout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for build, rollout, reward in (("70", 2, 1.0), ("71", 1, 0.0)):
+                work = make_shard(root / f"ws{build}", f"jenkins-{build}", {"alpha": [reward]},
+                                  inputs=shard_inputs(build, "node"))
+                jobs = work / "harness" / "harbor_runs" / f"jenkins-{build}"
+                (jobs / "rollout.txt").write_text(f"{rollout}\n", encoding="utf-8")
+                self.collect(root, build, work)
+            code, err = self.run_plan(
+                root, ["1|70|SUCCESS|0|1|alpha|2|1", "1|71|SUCCESS|0|1|alpha|1|3"], rollouts=2
+            )
+            self.assertEqual(code, 0, err)
+            doc, _, _ = self.report(root)
+            self.assertEqual(doc["n_tasks"], 1)
+            self.assertEqual(doc["coverage"]["planned"], 1)
+            row = {r["id"]: r for r in doc["icode"]["tasks"]}["alpha"]
+            self.assertEqual(row["n"], 2)
+            self.assertEqual(row["c"], 1)
+            # Rollout 1 (build 71) failed, so first-rollout Pass@1 is 0.
+            self.assertEqual(doc["icode"]["pass@1"], 0.0)
+            self.assertEqual(
+                doc["eval_protocol"]["oom_requeues"],
+                [{"tasks": ["alpha"], "offset": 0, "rollout": 1, "attempts": 3}],
+            )
+
+    def test_a_plan_reads_old_and_per_rollout_lines(self):
+        from aggregate_runs import planned_questions, read_plan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan.txt"
+            plan.write_text("1|60|SUCCESS|0|2|a,b\n1|61|UNSTABLE|0|1|c|3|2\nbad|line\n", encoding="utf-8")
+            rows = read_plan(plan)
+            self.assertEqual([(r["rollout"], r["attempts"]) for r in rows], [(1, 1), (3, 2)])
+            self.assertEqual(planned_questions(rows), 3)
+            per_rollout = [r for r in rows if r["count"] == 1] * 4
+            self.assertEqual(planned_questions(per_rollout), 1)
+
     def offset_shard(self, root: Path, build: str, tasks: dict[str, list[float]], suite: list[str]) -> None:
         """A full_suite_task shard: selected by offset, with the suite list its tasks phase wrote."""
         work = make_shard(root / f"ws{build}", f"jenkins-{build}", tasks, inputs=shard_inputs(build, f"node{build}"))
@@ -904,6 +943,56 @@ class DispatcherPlanTests(unittest.TestCase):
         from provenance import provenance_markdown
 
         self.assertFalse(any("Transcripts" in ln for ln in provenance_markdown(shard_inputs("58", "cloud"))))
+
+    def test_a_per_rollout_plan_counts_questions_and_keeps_every_rollout(self):
+        """Two questions x two rollouts: planned is the questions, rows are the units."""
+        from score_results import harbor_task_trials
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Rollout 2 is the lower build number, so order has to come from rollout.txt.
+            later = make_shard(
+                root / "home", "jenkins-10", {"alpha": [0.0]}, inputs=shard_inputs("10", "home")
+            )
+            (later / "harness" / "harbor_runs" / "jenkins-10" / "rollout.txt").write_text("2\n", encoding="utf-8")
+            self.collect(root, "10", later)
+            first = make_shard(
+                root / "cloud", "jenkins-11", {"alpha": [1.0]}, inputs=shard_inputs("11", "cloud")
+            )
+            (first / "harness" / "harbor_runs" / "jenkins-11" / "rollout.txt").write_text("1\n", encoding="utf-8")
+            self.collect(root, "11", first)
+            beta = make_shard(
+                root / "home", "jenkins-12", {"beta": [1.0]}, inputs=shard_inputs("12", "home")
+            )
+            (beta / "harness" / "harbor_runs" / "jenkins-12" / "rollout.txt").write_text("1\n", encoding="utf-8")
+            self.collect(root, "12", beta)
+            code, err = self.run_plan(
+                root,
+                [
+                    "1|10|SUCCESS|0|1|alpha|2|3",
+                    "2|11|SUCCESS|0|1|alpha|1|1",
+                    "3|12|SUCCESS|1|1|beta|1|2",
+                ],
+                rollouts=2,
+            )
+            self.assertEqual(code, 0, err)
+            doc, _, _ = self.report(root)
+            self.assertEqual(doc["coverage"]["planned"], 2)
+            self.assertEqual(len(doc["eval_protocol"]["shards"]), 3)
+            self.assertEqual(
+                doc["eval_protocol"]["oom_requeues"],
+                [
+                    {"tasks": ["alpha"], "offset": 0, "rollout": 2, "attempts": 3},
+                    {"tasks": ["beta"], "offset": 1, "rollout": 1, "attempts": 2},
+                ],
+            )
+            harness = root / "aggregate" / "harness"
+            names = [p.parent.name for p in harbor_task_trials(harness, "alpha")]
+            self.assertEqual(names[0].rsplit("_", 1)[0], "alpha_icode")
+            rewards = []
+            for trial in harbor_task_trials(harness, "alpha"):
+                rewards.append(json.loads((trial / "verifier" / "reward.json").read_text())["reward"])
+            self.assertEqual(rewards, [1.0, 0.0])
 
     def test_without_a_plan_every_archived_shard_counts_as_before(self):
         """An older dispatcher passes no --plan; nothing is dropped."""

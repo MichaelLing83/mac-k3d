@@ -173,6 +173,23 @@ def current_jobs_dir(harness_dir: Path) -> Path | None:
     return None
 
 
+def rollout_number(trial: Path) -> int | None:
+    """The dispatcher's rollout, written as ``rollout.txt`` beside that build's jobs dir."""
+    cursor = trial
+    for _ in range(6):
+        marker = cursor / "rollout.txt"
+        if marker.is_file():
+            try:
+                number = int(marker.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                return None
+            return number if number >= 1 else None
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    return None
+
+
 def _trial_stamp(trial: Path) -> float:
     newest = -1.0
     for reward in trial.rglob("reward.json"):
@@ -192,34 +209,34 @@ def harbor_task_trials(harness_dir: Path, tid: str) -> list[Path]:
 
     With this build's jobs dir known, only its trials count, so a task this build
     did not score stays unscored instead of borrowing an older build's result.
-    Otherwise (the Aggregate's merged harness): builds up to PF.1 gave every task
-    its own jobs dir named <tid>; one ``harbor run`` per build has no such level,
-    so match the ids each trial recorded and keep the newest build that ran it.
+    Otherwise (the Aggregate's merged harness) every build that ran the task is
+    kept, ordered by the rollout number written next to that build's jobs dir.
+    Builds up to PF.1 gave every task its own jobs dir named <tid>.
     """
     if not tid:
         return []
     jobs = current_jobs_dir(harness_dir)
     if jobs is not None:
         return [trial for trial in trial_dirs(jobs) if tid in trial_task_ids(trial)]
-    job = find_harbor_task_dir(harness_dir, tid)
-    if job is not None:
-        return trial_dirs(job)
     runs = harbor_runs_root(harness_dir)
-    by_build: dict[Path, list[Path]] = {}
+    found: list[Path] = []
     if runs is not None:
-        for trial in trial_dirs(runs):
-            if tid not in trial_task_ids(trial):
-                continue
-            try:
-                rel = trial.relative_to(runs)
-            except ValueError:
-                continue
-            build = runs / rel.parts[0] if rel.parts else runs
-            by_build.setdefault(build, []).append(trial)
-    if not by_build:
+        found = [trial for trial in trial_dirs(runs) if tid in trial_task_ids(trial)]
+    if not found:
+        job = find_harbor_task_dir(harness_dir, tid)
+        if job is not None:
+            return trial_dirs(job)
         return trial_dirs(harness_dir / tid)
-    newest = max(by_build, key=lambda b: max(_trial_stamp(t) for t in by_build[b]))
-    return by_build[newest]
+
+    def rollout_key(trial: Path) -> tuple:
+        """Plan order: rollout 1 before rollout 2, so Pass@1 stays the first rollout."""
+        number = rollout_number(trial)
+        if number is not None:
+            return (0, number, _trial_stamp(trial))
+        return (1, 0, _trial_stamp(trial))
+
+    found.sort(key=rollout_key)
+    return found
 
 
 def unmatched_trials(jobs_dir: Path, task_ids: list[str]) -> list[Path]:

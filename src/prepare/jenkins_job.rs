@@ -19,7 +19,12 @@ const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_T
 const DESC_ICODE_RELEASE_FROM: &str = "Set by some_task or full_suite_task: job#build that archived the uploaded iCode release. Empty on a direct build.";
 const DESC_ICODE_RELEASE_SHA256: &str = "Set with ICODE_RELEASE_FROM: sha256 of that release. The shard stops if the copied file differs.";
 const DESC_ICODE_GIT_SHA: &str = "Set by some_task or full_suite_task: the commit every shard checks out. Empty on a direct build, which resolves the git form itself.";
-const DESC_SHARD_SIZE: &str = "Questions per shard. All shards are queued at once and each worker takes the next one when it finishes, so a faster worker runs more of them. There is always at least one shard per online worker.";
+const DESC_MAX_IN_FLIGHT: &str = "Builds of this run in the Jenkins queue at once, running or waiting. 0 counts 2 x the online executors that can run this suite. The rest wait in this build's list.";
+const DESC_OOM_RETRIES: &str = "How many times a rollout that ran out of memory is put back at the end of the queue. 2 means three tries in all.";
+const DESC_ROLLOUT: &str = "Set by some_task or full_suite_task: which attempt number of this question, from 1. 1 on a direct build.";
+const DESC_ATTEMPT: &str = "Which try this is after out-of-memory re-queues. 1 on the first try.";
+const DESC_TEST_MEMORY_MB: &str = "Testing only: trial memory limit in MB, to force an out of memory. Empty leaves the limit in task.toml.";
+const DESC_TEST_MEMORY_ATTEMPTS: &str = "Testing only: TEST_MEMORY_MB applies while ATTEMPT is at most this number. 1 limits the first try; a re-queued try runs as declared.";
 const DESC_RUN_GROUP: &str = "Set by some_task or full_suite_task on a shard build: ties the shards of one run together. Empty on a direct build.";
 const DESC_SHARD: &str = "Set by some_task or full_suite_task on a shard build: which shard this is. Shown as the build description.";
 const DESC_REQUESTED_BY: &str = "Set by some_task or full_suite_task on a shard build: the Jenkins user who started the run, for the report's Requester. Empty on a direct build.";
@@ -49,6 +54,8 @@ const FORWARDED_PARAMS: &[&str] = &[
     "LOLBENCH_REF",
     "ICODE_MODE",
     "DEEPSEEK_MODEL",
+    "TEST_MEMORY_MB",
+    "TEST_MEMORY_ATTEMPTS",
 ];
 
 /// What a job is for. `one_task` is the only shape that evaluates; the other
@@ -143,10 +150,10 @@ fn shape_description(job_benchmark: &str, shape: JobShape) -> String {
             job_description(job_benchmark)
         ),
         JobShape::Some_ => format!(
-            "Evaluate the iCode harness on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. The questions are split into shards that run as {shard_job} builds on whichever workers are free, then merged into one report on this build. See docs/user-guide.md."
+            "Evaluate the iCode harness on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/user-guide.md."
         ),
         JobShape::FullSuite => format!(
-            "Run the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. The suite is split into shards that run as {shard_job} builds on whichever workers are free, then merged into one report on this build. See docs/harbor-delegation-multiworker/README.md."
+            "Run the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/harbor-delegation-multiworker/README.md."
         ),
     }
 }
@@ -220,6 +227,10 @@ pub struct JobOpts {
     pub default_n_rollouts: u32,
     pub default_tasks: Vec<String>,
     pub default_shard_size: u32,
+    /// 0 = 2 x online executors at dispatch. Above 0 fixes MAX_IN_FLIGHT.
+    pub max_in_flight: u32,
+    /// Times an OOM rollout is put back at the tail. Default 2.
+    pub oom_retries: u32,
     pub ui_profile: UiProfile,
     /// Credential IDs present in Jenkins (only these are bound in the Pipeline).
     pub credential_ids: Vec<String>,
@@ -303,6 +314,8 @@ impl JobOpts {
                 10 => 2,
                 n => n.max(1),
             },
+            max_in_flight: config.jenkins_job.max_in_flight,
+            oom_retries: config.jenkins_job.oom_retries,
             ui_profile: UiProfile::parse(&config.jenkins_job.ui_profile),
             credential_ids,
             remote_trigger_token: config.jenkins.remote_trigger_token.trim().to_string(),
@@ -722,12 +735,9 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
     match shape {
         JobShape::One => {
             p.push(text_param("TASK", task, &task_param_description(job_benchmark), Always));
-            p.push(text_param(
-                "N_ROLLOUTS",
-                n_rollouts,
-                "Attempts at the question. 1 is a smoke run; each extra attempt is another full agent run.",
-                Always,
-            ));
+            // One build is one rollout. Several rollouts of one question go
+            // through some_task with TASKS set to that id.
+            p.push(text_param("N_ROLLOUTS", 1, "Fixed: one rollout. Use some_task for more.", Never));
             p.push(choice_param(
                 "ICODE_MODE",
                 &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
@@ -784,6 +794,9 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("ICODE_RELEASE_FROM", "", DESC_ICODE_RELEASE_FROM, Never));
             p.push(text_param("ICODE_RELEASE_SHA256", "", DESC_ICODE_RELEASE_SHA256, Never));
             p.push(text_param("ICODE_GIT_SHA", "", DESC_ICODE_GIT_SHA, Never));
+            p.push(text_param("ROLLOUT", 1, DESC_ROLLOUT, Never));
+            p.push(text_param("ATTEMPT", 1, DESC_ATTEMPT, Never));
+            p.push(text_param("OOM_RETRIES", opts.oom_retries, DESC_OOM_RETRIES, Never));
         }
         JobShape::Some_ => {}
         JobShape::FullSuite => {
@@ -791,8 +804,11 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         }
     }
     if shape.is_dispatcher() {
-        p.push(text_param("SHARD_SIZE", opts.default_shard_size.max(1), DESC_SHARD_SIZE, Developer));
+        p.push(text_param("MAX_IN_FLIGHT", opts.max_in_flight, DESC_MAX_IN_FLIGHT, Developer));
+        p.push(text_param("OOM_RETRIES", opts.oom_retries, DESC_OOM_RETRIES, Developer));
     }
+    p.push(text_param("TEST_MEMORY_MB", "", DESC_TEST_MEMORY_MB, Developer));
+    p.push(text_param("TEST_MEMORY_ATTEMPTS", 1, DESC_TEST_MEMORY_ATTEMPTS, Developer));
     p.push(text_param("AGENT_LABEL", DEFAULT_AGENT_LABEL, DESC_AGENT_LABEL, Developer));
     if shape.is_dispatcher() {
         p.push(text_param("AGGREGATE_LABEL", "", DESC_AGGREGATE_LABEL, Developer));
@@ -962,16 +978,19 @@ struct EvalStage {
     title: &'static str,
     phase: &'static str,
     holds_cpu_lock: bool,
+    /// An out-of-memory rollout is re-queued whole. Scoring a partial trial
+    /// would record the failure twice, once here and once on the retry.
+    skips_on_oom: bool,
 }
 
 const EVAL_STAGES: [EvalStage; 7] = [
-    EvalStage { title: "Environment", phase: "env", holds_cpu_lock: false },
-    EvalStage { title: "Tasks", phase: "tasks", holds_cpu_lock: false },
-    EvalStage { title: "Evaluate", phase: "evaluate", holds_cpu_lock: true },
-    EvalStage { title: "Anti-cheat", phase: "anticheat", holds_cpu_lock: false },
-    EvalStage { title: "Score", phase: "score", holds_cpu_lock: false },
-    EvalStage { title: "Report", phase: "report", holds_cpu_lock: false },
-    EvalStage { title: "Archive", phase: "archive", holds_cpu_lock: false },
+    EvalStage { title: "Environment", phase: "env", holds_cpu_lock: false, skips_on_oom: false },
+    EvalStage { title: "Tasks", phase: "tasks", holds_cpu_lock: false, skips_on_oom: false },
+    EvalStage { title: "Evaluate", phase: "evaluate", holds_cpu_lock: true, skips_on_oom: false },
+    EvalStage { title: "Anti-cheat", phase: "anticheat", holds_cpu_lock: false, skips_on_oom: true },
+    EvalStage { title: "Score", phase: "score", holds_cpu_lock: false, skips_on_oom: true },
+    EvalStage { title: "Report", phase: "report", holds_cpu_lock: false, skips_on_oom: true },
+    EvalStage { title: "Archive", phase: "archive", holds_cpu_lock: false, skips_on_oom: true },
 ];
 
 fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
@@ -989,7 +1008,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
         .join("\n\n");
     format!(
         r#"pipeline {{
-  agent {{ label params.AGENT_LABEL }}
+  agent {{ label "${{params.AGENT_LABEL}} && fits-${{params.BENCHMARK}}" }}
 
   options {{
     timeout(time: 96, unit: 'HOURS')
@@ -1043,6 +1062,42 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
             echo "WARNING: ${{lost}} rollouts have no score (causes above; see Unscored in summary.md)"
           }}
         }}
+        // A killed shell never runs its EXIT trap. Remove this build's trial
+        // containers here, including an abort or a timeout.
+        sh '''#!/bin/bash
+set -euo pipefail
+export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
+if [ ! -f "$MAC_K3D_ROOT/pipeline/lib/trial_network.py" ]; then
+  command -v mac-k3d >/dev/null || exit 0
+  mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean || exit 0
+fi
+for dir in \
+  "${{WORKSPACE}}/eval-runs/harness/harbor_runs/jenkins-${{BUILD_NUMBER}}" \
+  "${{WORKSPACE}}/eval-runs/canary/jenkins-${{BUILD_NUMBER}}"
+do
+  [ -d "$dir" ] || continue
+  python3 "$MAC_K3D_ROOT/pipeline/lib/trial_network.py" teardown --jobs-dir "$dir" || true
+done
+'''
+        // A direct build has no dispatcher to put it back on the queue.
+        if (env.TRIAL_OOM == '1' && !params.RUN_GROUP?.trim()) {{
+          int attempt = (params.ATTEMPT ?: '1') as Integer
+          int cap = (params.OOM_RETRIES ?: '2') as Integer
+          if (attempt <= cap) {{
+            echo "OOM on attempt ${{attempt}}; queueing attempt ${{attempt + 1}}"
+            List again = []
+            params.each {{ key, value ->
+              String name = key.toString()
+              if (name == 'ATTEMPT' || name == 'ICODE_RELEASE_FILE') {{ return }}
+              again << string(name: name, value: value == null ? '' : value.toString())
+            }}
+            again << string(name: 'ATTEMPT', value: "${{attempt + 1}}")
+            build job: env.JOB_NAME, wait: false, propagate: false, quietPeriod: 0, parameters: again
+          }} else {{
+            echo "OOM on attempt ${{attempt}}; not queueing again (OOM_RETRIES=${{cap}})"
+          }}
+        }}
         // The dispatcher reads this through run.buildVariables: a shard that
         // failed before its Harbor job dir existed spent no model tokens.
         if (fileExists("eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}")) {{
@@ -1069,16 +1124,36 @@ fn eval_stage(stage: &EvalStage, first: bool, bootstrap: &str, opts: &JobOpts) -
         return format!(
             r#"    stage('{title}') {{
       steps {{
-{cred_open}          script {{
-            // Lock every core of this worker. The resources are named
-            // <node>-core-N and carry the node name as a label, so two workers
-            // never draw from one pool. No quantity means every matching
-            // resource. Held for this stage only.
-            lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES') {{
+{cred_open}          sh '''#!/bin/bash
+set -euo pipefail
+export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
+export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
+if [ -f "$MAC_K3D_ROOT/pipeline/lib/trial_network.py" ]; then
+  roots=()
+  base="$(dirname "$WORKSPACE")"
+  for runs in "$base"/*/eval-runs; do
+    [ -d "$runs/harness/harbor_runs" ] && roots+=(--root "$runs/harness/harbor_runs")
+    [ -d "$runs/canary" ] && roots+=(--root "$runs/canary")
+  done
+  if [ "${{#roots[@]}}" -gt 0 ]; then
+    python3 "$MAC_K3D_ROOT/pipeline/lib/trial_network.py" sweep "${{roots[@]}}" || true
+  fi
+fi
+'''
+          script {{
+            // Lock the CPUs this one task declares, not every core. The tasks
+            // phase wrote the count. The resources are named <node>-core-N and
+            // carry the node name as a label, so two workers never share a pool.
+            int cpusEach = 1
+            if (fileExists('eval-runs/cpus_each.txt')) {{
+              String raw = readFile('eval-runs/cpus_each.txt').trim()
+              if (raw ==~ /\d+/ && (raw as Integer) >= 1) {{ cpusEach = raw as Integer }}
+            }}
+            lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES') {{
               String heldCores = env.HELD_CORES ?: ''
               int held = heldCores.trim() ? heldCores.split(',').size() : 0
-              if (held < 1) {{
-                error "No ${{env.NODE_NAME}}-core-N lockable resources. Run mac-k3d config on this worker to register them."
+              if (held < cpusEach) {{
+                error "Needed ${{cpusEach}} ${{env.NODE_NAME}}-core-N resources and locked ${{held}}. Run mac-k3d config on this worker."
               }}
               env.CPU_LOCK_QTY = "${{held}}"
               sh '''#!/bin/bash
@@ -1086,6 +1161,11 @@ set -euo pipefail
 {bootstrap}
                 {run}
               '''
+              if (fileExists('eval-runs/harness/oom_trials.txt')) {{
+                env.TRIAL_OOM = '1'
+                currentBuild.result = 'UNSTABLE'
+                currentBuild.description = "OOM, attempt ${{params.ATTEMPT ?: '1'}}"
+              }}
             }}
           }}
 {cred_close}      }}
@@ -1132,16 +1212,22 @@ set -euo pipefail
     } else {
         ""
     };
+    let when = if stage.skips_on_oom {
+        "      when { expression { env.TRIAL_OOM != '1' } }\n"
+    } else {
+        ""
+    };
     format!(
         r#"    stage('{title}') {{
-      steps {{
+{when}      steps {{
 {cred_open}{setup}          sh '''#!/bin/bash
 set -euo pipefail
 {clear}{bootstrap}{announce}
             {run}
           '''
 {cred_close}      }}
-    }}"#
+    }}"#,
+        when = when,
     )
 }
 
@@ -1256,65 +1342,118 @@ __CRED_CLOSE__      }
           {display_name}
           {requester}
           int rollouts = (params.N_ROLLOUTS as Integer)
-          int shardSize = (params.SHARD_SIZE as Integer)
-          if (rollouts < 1 || shardSize < 1) {{
-            error 'N_ROLLOUTS and SHARD_SIZE must be integers >= 1'
+          if (rollouts < 1) {{
+            error 'N_ROLLOUTS must be an integer >= 1'
           }}
-          // Explicit ids win over N_TASKS, exactly as in a shard build.
+          // Explicit ids win over N_TASKS, exactly as in a one_task build.
           List<String> ids = []
 {ids_from_tasks}          int total = ids ? ids.size() : (params.N_TASKS as Integer)
           if (total < 1) {{
             error 'nothing to run: set N_TASKS >= 1 or a non-empty TASKS list'
           }}
-          int shards = (int) ((total + shardSize - 1) / shardSize)
-          // At least one shard per online worker. nodesByLabel needs
-          // pipeline-utility-steps; without it SHARD_SIZE alone decides.
+          // A worker too small for this suite does not carry fits-<benchmark>,
+          // so a build is never placed where it cannot lock the cores.
+          String fits = "${{params.AGENT_LABEL}} && fits-${{params.BENCHMARK}}"
           List<String> workerNames = null
           try {{
-            workerNames = nodesByLabel(label: params.AGENT_LABEL, offline: false)
+            workerNames = nodesByLabel(label: fits, offline: false)
           }} catch (Throwable t) {{
-            echo "WARNING: could not count workers for label ${{params.AGENT_LABEL}} (${{t}}); using SHARD_SIZE alone."
+            echo "WARNING: could not count workers for label ${{fits}} (${{t}})"
           }}
-          // A label no online worker carries would leave every shard queued forever.
           if (workerNames != null && workerNames.isEmpty()) {{
             List<String> online = []
             try {{
               online = nodesByLabel(label: '{default_label}', offline: false)
             }} catch (Throwable t) {{
             }}
-            error "No online worker has label ${{params.AGENT_LABEL}}. Online {default_label} workers: ${{online ? online.join(', ') : 'none'}}."
+            error "No online worker has label ${{fits}}. Online {default_label} workers: ${{online ? online.join(', ') : 'none'}}."
           }}
-          int workers = workerNames == null ? 0 : workerNames.size()
-          String counted = workerNames == null ? 'not counted' : workerNames.join(', ')
-          if (shards < workers) {{ shards = workers }}
-          if (shards > total) {{ shards = total }}
+          // nodesByLabel returns names, not executor counts. Each worker's
+          // registration adds executors-<n>, so the sum is the online capacity.
+          int totalExec = 0
+          boolean countedOk = true
+          List<String> execNotes = []
+          try {{
+            for (int n = 1; n <= 64; n++) {{
+              def nodes = nodesByLabel(label: "${{fits}} && executors-${{n}}", offline: false)
+              if (nodes) {{
+                totalExec += n * nodes.size()
+                for (String node : nodes) {{ execNotes << "${{node}}:${{n}}" }}
+              }}
+            }}
+          }} catch (Throwable t) {{
+            countedOk = false
+            echo "WARNING: could not count executors (${{t}}); MAX_IN_FLIGHT falls back to 20"
+          }}
+          int cap = (params.MAX_IN_FLIGHT ?: '0') as Integer
+          String mode
+          if (!countedOk || totalExec < 1) {{
+            if (countedOk) {{
+              echo "WARNING: no executors-<n> label on online workers; MAX_IN_FLIGHT falls back to 20. Re-run mac-k3d config on each worker."
+            }}
+            cap = 20
+            mode = 'fallback'
+          }} else if (cap > 0) {{
+            mode = 'fixed'
+            if (cap < totalExec) {{
+              echo "WARNING: MAX_IN_FLIGHT=${{cap}} is below ${{totalExec}} online executors; some executors will sit idle"
+            }}
+          }} else {{
+            cap = totalExec * 2
+            mode = 'auto'
+          }}
+          echo "executors=${{totalExec}} [${{execNotes.join(', ')}}] max_in_flight=${{cap}} (${{mode}})"
           env.RUN_GROUP = "${{env.JOB_NAME}}-${{env.BUILD_NUMBER}}".replaceAll('[^A-Za-z0-9_.-]', '_')
-          echo "RUN_GROUP=${{env.RUN_GROUP}} total=${{total}} shards=${{shards}} shard_size=${{shardSize}} workers=${{workers}} [${{counted}}] rollouts=${{rollouts}}"
+          echo "RUN_GROUP=${{env.RUN_GROUP}} questions=${{total}} rollouts=${{rollouts}} units=${{total * rollouts}}"
 
+          // One unit is one question and one rollout. Lanes pop the head; an
+          // OOM rollout is appended, so it runs after everything already waiting.
+          List<Map> units = []
+          for (int i = 0; i < total; i++) {{
+            for (int r = 1; r <= rollouts; r++) {{
+              units << [index: i, offset: i, tasks: ids ? ids[i] : '', rollout: r, attempt: 1, preHarbor: false]
+            }}
+          }}
+          int inflight = 0
+          int oomRetries = (params.OOM_RETRIES ?: '2') as Integer
+          String queueLock = "mack3d-${{env.RUN_GROUP}}"
           Map<String, Integer> shardBuilds = [:]
-          // index|build|result|offset|count|tasks, for the Aggregate stage.
-          Map<Integer, String> shardPlan = [:]
+          Map<String, String> shardPlan = [:]
           List<String> notOk = []
           List<String> retried = []
+          int lanes = units.size() < cap ? units.size() : cap
           Map<String, Closure> branches = [:]
-          for (int i = 0; i < shards; i++) {{
-            int index = i
-            // Contiguous, non-overlapping slices of the same sorted id list.
-            int from = (int) (((long) total * index) / shards)
-            int to = (int) (((long) total * (index + 1)) / shards)
-            if (to <= from) {{ continue }}
-            String shardTasks = ids ? ids.subList(from, to).join(',') : ''
-            int shardCount = to - from
-            String name = "shard-${{index + 1}}"
-            String note = "${{index + 1}}/${{shards}} of ${{env.JOB_NAME}} #${{env.BUILD_NUMBER}}"
+          for (int lane = 0; lane < lanes; lane++) {{
+            String name = "lane-${{lane + 1}}"
             branches[name] = {{
-              List shardParams = [
+              while (true) {{
+                def unit = null
+                String action = 'stop'
+                lock(resource: queueLock) {{
+                  if (units) {{
+                    unit = units.remove(0)
+                    inflight++
+                    action = 'run'
+                  }} else if (inflight > 0) {{
+                    action = 'wait'
+                  }}
+                }}
+                if (action == 'stop') {{ break }}
+                if (action == 'wait') {{
+                  // A build still running may OOM and put its unit back.
+                  sleep 5
+                  continue
+                }}
+                String note = "rollout ${{unit.rollout}}/${{rollouts}} question ${{unit.index + 1}}/${{total}} attempt ${{unit.attempt}} of ${{env.JOB_NAME}} #${{env.BUILD_NUMBER}}"
+                List shardParams = [
 {forwarded}
                   string(name: 'TASK', value: ''),
-                  string(name: 'TASKS', value: shardTasks),
-                  string(name: 'N_TASKS', value: "${{shardCount}}"),
-                  string(name: 'TASK_OFFSET', value: ids ? '0' : "${{from}}"),
-                  string(name: 'N_ROLLOUTS', value: "${{rollouts}}"),
+                  string(name: 'TASKS', value: unit.tasks),
+                  string(name: 'N_TASKS', value: '1'),
+                  string(name: 'TASK_OFFSET', value: ids ? '0' : "${{unit.offset}}"),
+                  string(name: 'N_ROLLOUTS', value: '1'),
+                  string(name: 'ROLLOUT', value: "${{unit.rollout}}"),
+                  string(name: 'ATTEMPT', value: "${{unit.attempt}}"),
                   string(name: 'RUN_GROUP', value: env.RUN_GROUP),
                   string(name: 'SHARD', value: note),
                   string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
@@ -1322,38 +1461,53 @@ __CRED_CLOSE__      }
                   string(name: 'ICODE_RELEASE_SHA256', value: env.ICODE_RELEASE_SHA256 ?: ''),
                   string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: ''),
                 ]
-              def run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
-              // A shard sets HARBOR_STARTED once its Harbor job dir exists. One that
-              // failed before that spent no model tokens, so it is queued once more.
-              // An abort, or a failure after Harbor started, is never retried.
-              if (run.result == 'FAILURE') {{
+                def run = build job: '{shard_job}', wait: true, propagate: false, quietPeriod: 0, parameters: shardParams
                 String started = ''
+                String oom = ''
                 try {{
                   started = run.buildVariables?.HARBOR_STARTED ?: ''
+                  oom = run.buildVariables?.TRIAL_OOM ?: ''
                 }} catch (Throwable t) {{
                   started = 'unknown'
-                  echo "WARNING: cannot read ${{name}} #${{run.number}}'s variables (${{t}}); not retrying it"
+                  echo "WARNING: cannot read #${{run.number}}'s variables (${{t}}); not retrying it"
                 }}
-                if (!started) {{
-                  echo "${{name}} #${{run.number}} failed before Harbor started; queueing it once more"
-                  retried << "${{name}} #${{run.number}}"
-                  run = build job: '{shard_job}', wait: true, propagate: false, parameters: shardParams
+                boolean requeue = false
+                if (oom == '1' && (unit.attempt as Integer) <= oomRetries) {{
+                  echo "OOM on #${{run.number}} attempt ${{unit.attempt}}; queueing it at the end"
+                  unit.attempt = (unit.attempt as Integer) + 1
+                  requeue = true
+                  retried << "build ${{run.number}} oom"
+                }} else if (run.result == 'FAILURE' && !started && !unit.preHarbor) {{
+                  // Failed before Harbor started: no model tokens spent. Once only.
+                  echo "Build ${{run.number}} failed before Harbor started; queueing it at the end"
+                  unit.preHarbor = true
+                  requeue = true
+                  retried << "build ${{run.number}} before-harbor"
                 }}
-              }}
-              shardBuilds[name] = run.number
-              shardPlan[index] = "${{index + 1}}|${{run.number}}|${{run.result}}|${{from}}|${{shardCount}}|${{shardTasks}}"
-              // Trial and question failures stay in the report; only a shard that
-              // did not finish makes the run UNSTABLE.
-              if (['FAILURE', 'ABORTED', 'NOT_BUILT'].contains(run.result)) {{
-                notOk << "${{name}} #${{run.number}} ${{run.result}}"
+                String key = "${{unit.index}}-${{unit.rollout}}"
+                lock(resource: queueLock) {{
+                  inflight--
+                  if (requeue) {{
+                    units << unit
+                  }} else {{
+                    shardBuilds[key] = run.number
+                    shardPlan[key] = "${{unit.index + 1}}|${{run.number}}|${{run.result}}|${{unit.offset}}|1|${{unit.tasks}}|${{unit.rollout}}|${{unit.attempt}}"
+                    if (['FAILURE', 'ABORTED', 'NOT_BUILT'].contains(run.result)) {{
+                      notOk << "question ${{unit.index + 1}} rollout ${{unit.rollout}} #${{run.number}} ${{run.result}}"
+                    }}
+                  }}
+                }}
               }}
             }}
           }}
           parallel branches
           env.SHARD_BUILDS = shardBuilds.values().join(',')
           List<String> planLines = []
-          for (int i = 0; i < shards; i++) {{
-            if (shardPlan[i] != null) {{ planLines << shardPlan[i] }}
+          for (int i = 0; i < total; i++) {{
+            for (int r = 1; r <= rollouts; r++) {{
+              String line = shardPlan["${{i}}-${{r}}"]
+              if (line != null) {{ planLines << line }}
+            }}
           }}
           env.SHARD_PLAN = planLines.join(';')
           // The shards have copied the drop. The sha256 in summary.md and
@@ -1827,6 +1981,8 @@ mod tests {
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
             default_shard_size: 2,
+            max_in_flight: 0,
+            oom_retries: 2,
             ui_profile: UiProfile::Developer,
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
             remote_trigger_token: String::new(),
@@ -1850,6 +2006,8 @@ mod tests {
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
             default_shard_size: 2,
+            max_in_flight: 0,
+            oom_retries: 2,
             ui_profile: UiProfile::User,
             credential_ids,
             remote_trigger_token: String::new(),
@@ -1977,9 +2135,8 @@ mod tests {
         // Each worker locks its own cores; a shared pool would let a build on
         // worker A hold tokens that belong to worker B.
         assert!(!jf.contains("lock(label: 'CPU_CORES'"));
-        assert!(jf.contains("lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')"));
-        // No quantity: the build takes every core of its worker.
-        assert!(!jf.contains("quantity:"));
+        assert!(jf.contains("lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES')"));
+        assert!(jf.contains("eval-runs/cpus_each.txt"));
         assert!(jf.contains("env.CPU_LOCK_QTY = \"${held}\""));
         assert!(jf.contains("withCredentials"));
         assert!(jf.contains("deepseek-api-key"));
@@ -2030,7 +2187,6 @@ mod tests {
                 "LLM",
                 "BENCHMARK",
                 "TASK",
-                "N_ROLLOUTS",
                 "ICODE_MODE",
                 "ICODE_RELEASE_FILE",
                 "ICODE_GIT_URL",
@@ -2084,7 +2240,7 @@ mod tests {
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
         // one_task: a single named question, a single attempt.
         assert!(one.contains("string(name: 'TASK', defaultValue: 'abs-stepped-slices'"));
-        assert!(one.contains("string(name: 'N_ROLLOUTS', defaultValue: '1'"));
+        assert!(one.contains("hidden(name: 'N_ROLLOUTS', defaultValue: '1'"));
         assert!(one.contains("hidden(name: 'N_TASKS', defaultValue: '1'"));
         // some_task: N questions at the full rollout count.
         assert!(some.contains("string(name: 'N_TASKS', defaultValue: '5'"));
@@ -2103,7 +2259,11 @@ mod tests {
             let jf = eval_jenkinsfile("deepswe", *shape, &opts);
             let block = params_block(&jf);
             assert!(block.contains("hidden(name: 'AGENT_LABEL', defaultValue: 'lolbench'"), "{shape:?}");
-            assert!(block.contains("string(name: 'N_ROLLOUTS'"));
+            if *shape == JobShape::One {
+                assert!(block.contains("hidden(name: 'N_ROLLOUTS', defaultValue: '1'"), "{shape:?}");
+            } else {
+                assert!(block.contains("string(name: 'N_ROLLOUTS'"), "{shape:?}");
+            }
             assert!(!block.contains("OFFICIAL"), "{shape:?}");
             assert!(!block.contains("CANARY"), "{shape:?}");
             assert!(!block.contains("ICODE_EXPECT_SHA"), "{shape:?}");
@@ -2114,7 +2274,17 @@ mod tests {
         let one = eval_jenkinsfile("deepswe", JobShape::One, &opts);
         assert!(params_block(&one).contains("string(name: 'TASK'"));
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
-        assert!(params_block(&full).contains("hidden(name: 'SHARD_SIZE', defaultValue: '2'"));
+        assert!(params_block(&full).contains("hidden(name: 'MAX_IN_FLIGHT', defaultValue: '0'"));
+        assert!(params_block(&full).contains("hidden(name: 'OOM_RETRIES', defaultValue: '2'"));
+        for shape in EVAL_SHAPES {
+            let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+            let block = params_block(&jf);
+            assert!(block.contains("hidden(name: 'TEST_MEMORY_MB', defaultValue: ''"), "{shape:?}");
+            assert!(
+                block.contains("hidden(name: 'TEST_MEMORY_ATTEMPTS', defaultValue: '1'"),
+                "{shape:?}"
+            );
+        }
     }
 
     #[test]
@@ -2132,8 +2302,22 @@ mod tests {
         assert!(block.contains("hidden(name: 'SHARD', defaultValue: ''"));
         assert!(block.contains("hidden(name: 'REQUESTED_BY', defaultValue: ''"));
         let full = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
-        assert!(params_block(&full).contains("string(name: 'SHARD_SIZE', defaultValue: '2'"));
+        assert!(params_block(&full).contains("string(name: 'MAX_IN_FLIGHT', defaultValue: '0'"));
+        assert!(params_block(&full).contains("string(name: 'OOM_RETRIES', defaultValue: '2'"));
         assert!(params_block(&full).contains("string(name: 'N_TASKS', defaultValue: '113'"));
+        for shape in EVAL_SHAPES {
+            let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+            let block = params_block(&jf);
+            assert!(block.contains("string(name: 'TEST_MEMORY_MB', defaultValue: ''"), "{shape:?}");
+            assert!(
+                block.contains("string(name: 'TEST_MEMORY_ATTEMPTS', defaultValue: '1'"),
+                "{shape:?}"
+            );
+            assert!(block.contains("Developer (testing): Testing only: trial memory limit in MB"), "{shape:?}");
+        }
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+        assert!(some.contains("string(name: 'TEST_MEMORY_MB', value: params.TEST_MEMORY_MB)"));
+        assert!(some.contains("string(name: 'TEST_MEMORY_ATTEMPTS', value: params.TEST_MEMORY_ATTEMPTS)"));
     }
 
     #[test]
@@ -2225,11 +2409,11 @@ mod tests {
         let second = jf.find("stage('Tasks')").unwrap();
         let at = jf.find(clear).unwrap();
         assert!(first < at && at < second);
-        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 7);
+        assert_eq!(jf.matches("mac-k3d pipeline --extract-to").count(), 8);
         // Jenkins does not trace a script that starts with a shebang, so the
         // prelude is not printed on every stage. The one-line summary is the
         // Environment stage only.
-        assert_eq!(jf.matches("#!/bin/bash").count(), 7);
+        assert_eq!(jf.matches("#!/bin/bash").count(), 9);
         assert_eq!(
             jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE\"").count(),
             1
@@ -2264,13 +2448,18 @@ mod tests {
         let jf = eval_jenkinsfile("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
         // The dispatcher holds no executor while its shards queue for one.
         assert!(jf.starts_with("pipeline {\n  agent none"));
-        assert!(!jf.contains("lock("));
+        // The queue lock is controller state. It is not a worker CPU lock.
+        assert!(!jf.contains("lock(label:"));
+        assert!(jf.contains("lock(resource: queueLock)"));
         assert!(!jf.contains("run_all.sh"));
         assert!(jf.contains("build job: 'deepswe_one_task'"));
         assert!(jf.contains("params.TASKS?.trim()"));
         assert!(jf.contains("parallel branches"));
         assert!(jf.contains("propagate: false"));
-        assert!(jf.contains("string(name: 'TASK_OFFSET', value: ids ? '0' : \"${from}\")"));
+        assert!(jf.contains("string(name: 'TASK_OFFSET', value: ids ? '0' : \"${unit.offset}\")"));
+        assert!(jf.contains("string(name: 'N_ROLLOUTS', value: '1')"));
+        assert!(jf.contains("string(name: 'ROLLOUT', value: \"${unit.rollout}\")"));
+        assert!(jf.contains("quietPeriod: 0"));
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
         assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
         assert!(jf.contains("stage('iCode release')"));
@@ -2334,8 +2523,10 @@ mod tests {
             assert!(post.contains(
                 "echo \"WARNING: ${lost} rollouts have no score (causes above; see Unscored in summary.md)\""
             ));
-            // A rollout's own failure never changes the build result.
-            assert!(!jf.contains("unstable"), "{bench}");
+            // A scored rollout's own failure never changes the build result.
+            // Out of memory does: the rollout is re-queued, and this build is unstable.
+            assert!(jf.contains("currentBuild.result = 'UNSTABLE'"), "{bench}");
+            assert!(!jf.contains("unstable \""), "{bench}");
             // The dispatcher's retry rule reads this.
             assert!(post.contains(
                 "if (fileExists(\"eval-runs/harness/harbor_runs/jenkins-${env.BUILD_NUMBER}\")) {\n          env.HARBOR_STARTED = '1'"
@@ -2353,14 +2544,18 @@ mod tests {
         assert!(some.contains("if (['FAILURE', 'ABORTED', 'NOT_BUILT'].contains(run.result)) {"));
         assert!(!some.contains("run.result != 'SUCCESS'"));
         assert!(some.contains("unstable \"Shards that did not succeed"));
-        // One retry, only for a FAILURE before Harbor started.
-        assert!(some.contains("if (run.result == 'FAILURE') {"));
+        // One build statement. A failure before Harbor, or an OOM, goes back on the tail.
+        assert!(some.contains("run.result == 'FAILURE' && !started && !unit.preHarbor"));
+        assert!(some.contains("oom == '1' && (unit.attempt as Integer) <= oomRetries"));
+        assert!(some.contains("units << unit"));
         assert!(some.contains("started = run.buildVariables?.HARBOR_STARTED ?: ''"));
-        let retry = some.find("if (!started) {").unwrap();
+        assert!(some.contains("oom = run.buildVariables?.TRIAL_OOM ?: ''"));
+        assert!(some.contains(
+            "shardPlan[key] = \"${unit.index + 1}|${run.number}|${run.result}|${unit.offset}|1|${unit.tasks}|${unit.rollout}|${unit.attempt}\""
+        ));
         let launches: Vec<_> = some.match_indices("build job: 'deepswe_one_task'").map(|(i, _)| i).collect();
-        assert_eq!(launches.len(), 2);
-        assert!(launches[0] < retry && retry < launches[1]);
-        assert_eq!(some.matches("parameters: shardParams").count(), 2);
+        assert_eq!(launches.len(), 1);
+        assert_eq!(some.matches("parameters: shardParams").count(), 1);
         // An unreadable variable map means no retry: tokens are never spent twice.
         assert!(some.contains("started = 'unknown'"));
     }
@@ -2370,16 +2565,15 @@ mod tests {
         let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
         let jf = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
         assert!(jf.contains("agent none"));
-        assert!(!jf.contains("lock("));
+        assert!(!jf.contains("lock(label:"));
         assert!(jf.contains("build job: 'deepswe_one_task'"));
         assert!(!jf.contains("params.TASKS"));
         assert!(jf.contains("parallel branches"));
         assert!(jf.contains("env.RUN_GROUP"));
         assert!(jf.contains("TASK_OFFSET"));
-        // Small shards, at least one per online worker.
-        assert!(jf.contains("int shards = (int) ((total + shardSize - 1) / shardSize)"));
-        assert!(jf.contains("nodesByLabel(label: params.AGENT_LABEL, offline: false)"));
-        assert!(jf.contains("if (shards < workers) { shards = workers }"));
+        assert!(jf.contains("for (int r = 1; r <= rollouts; r++)"));
+        assert!(jf.contains("cap = totalExec * 2"));
+        assert!(jf.contains("MAX_IN_FLIGHT falls back to 20"));
         assert!(jf.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
         assert!(jf.contains("stage('Aggregate')"));
         assert!(jf.contains("stage('Pin iCode')"));
@@ -2450,7 +2644,11 @@ mod tests {
         assert!(get(&one, "HARBOR_VERSION").settable && get(&one, "HARBOR_VERSION").developer);
         let some = job_params("deepswe", JobShape::Some_);
         assert!(get(&some, "TASKS").settable && !get(&some, "TASKS").developer);
-        assert!(get(&some, "SHARD_SIZE").settable && get(&some, "SHARD_SIZE").developer);
+        assert!(get(&some, "MAX_IN_FLIGHT").settable && get(&some, "MAX_IN_FLIGHT").developer);
+        assert!(get(&some, "OOM_RETRIES").settable && get(&some, "OOM_RETRIES").developer);
+        assert!(!get(&one, "N_ROLLOUTS").settable);
+        assert!(!get(&one, "ROLLOUT").settable);
+        assert!(!get(&one, "ATTEMPT").settable);
         assert!(get(&some, "AGENT_LABEL").developer);
         assert!(get(&some, "AGGREGATE_LABEL").settable && get(&some, "AGGREGATE_LABEL").developer);
         assert!(!one.iter().any(|p| p.name == "AGGREGATE_LABEL"));
@@ -2458,6 +2656,13 @@ mod tests {
         let full = job_params("deepswe", JobShape::FullSuite);
         assert!(get(&full, "N_TASKS").developer);
         assert!(!full.iter().any(|p| p.name == "TASKS"));
+        for shape_params in [&one, &some, &full] {
+            assert!(get(shape_params, "TEST_MEMORY_MB").settable && get(shape_params, "TEST_MEMORY_MB").developer);
+            assert!(
+                get(shape_params, "TEST_MEMORY_ATTEMPTS").settable
+                    && get(shape_params, "TEST_MEMORY_ATTEMPTS").developer
+            );
+        }
         assert_eq!(JobShape::from_cli("some"), Some(JobShape::Some_));
         assert_eq!(JobShape::from_cli("full_suite_task"), Some(JobShape::FullSuite));
         assert_eq!(JobShape::from_cli("ONE"), Some(JobShape::One));
@@ -2472,15 +2677,23 @@ mod tests {
                 let jf = eval_jenkinsfile(bench, shape, &opts);
                 // nodesWithLabel is not a Jenkins step: a build calling it counts 0 workers.
                 assert!(!jf.contains("nodesWithLabel"), "{bench} {shape:?}");
-                assert!(jf.contains("workerNames = nodesByLabel(label: params.AGENT_LABEL, offline: false)"));
+                assert!(jf.contains(
+                    "workerNames = nodesByLabel(label: fits, offline: false)"
+                ));
+                assert!(jf.contains("fits-${params.BENCHMARK}"));
                 assert!(jf.contains("if (workerNames != null && workerNames.isEmpty()) {"));
                 assert!(jf.contains("online = nodesByLabel(label: 'lolbench', offline: false)"));
                 assert!(jf.contains(
-                    "error \"No online worker has label ${params.AGENT_LABEL}. Online lolbench workers: ${online ? online.join(', ') : 'none'}.\""
+                    "error \"No online worker has label ${fits}. Online lolbench workers: ${online ? online.join(', ') : 'none'}.\""
                 ));
                 assert!(jf.contains("echo \"WARNING: could not count workers for label"));
-                assert!(jf.contains("workers=${workers} [${counted}]"));
-                // The fail-fast check runs before any shard is queued.
+                assert!(jf.contains("executors=${totalExec}"));
+                assert!(jf.contains("for (int n = 1; n <= 64; n++)"));
+                assert!(jf.contains("cap = totalExec * 2"));
+                assert!(jf.contains("mode = 'fixed'"));
+                assert!(jf.contains("some executors will sit idle"));
+                assert!(jf.contains("MAX_IN_FLIGHT falls back to 20"));
+                // The fail-fast check runs before any rollout is queued.
                 assert!(jf.find("workerNames.isEmpty()").unwrap() < jf.find("build job:").unwrap());
             }
         }
@@ -2543,12 +2756,13 @@ mod tests {
         let opts = deepswe_opts(Vec::new());
         for shape in [JobShape::Some_, JobShape::FullSuite] {
             let jf = eval_jenkinsfile("deepswe", shape, &opts);
-            // One line per shard, recorded beside its build number, in shard order.
+            // One line per question x rollout, the unit's final build, in plan order.
             assert!(jf.contains(
-                "shardPlan[index] = \"${index + 1}|${run.number}|${run.result}|${from}|${shardCount}|${shardTasks}\""
+                "shardPlan[key] = \"${unit.index + 1}|${run.number}|${run.result}|${unit.offset}|1|${unit.tasks}|${unit.rollout}|${unit.attempt}\""
             ));
-            assert!(jf.find("shardPlan[index] =").unwrap() < jf.find("parallel branches").unwrap());
-            assert!(jf.contains("if (shardPlan[i] != null) { planLines << shardPlan[i] }"));
+            assert!(jf.find("shardPlan[key] =").unwrap() < jf.find("parallel branches").unwrap());
+            assert!(jf.contains("String line = shardPlan[\"${i}-${r}\"]"));
+            assert!(jf.contains("if (line != null) { planLines << line }"));
             assert!(jf.contains("env.SHARD_PLAN = planLines.join(';')"));
             // Written after copyArtifacts, so a shard that archived nothing is still named.
             let write = jf
@@ -2682,14 +2896,17 @@ mod tests {
         cfg.jenkins_job.default_shard_size = 10;
         let opts = JobOpts::from_config(&cfg, Vec::new());
         assert_eq!(opts.default_shard_size, 2);
+        assert_eq!(opts.max_in_flight, 0);
+        assert_eq!(opts.oom_retries, 2);
         for bench in EVAL_BENCHMARKS {
             for shape in [JobShape::Some_, JobShape::FullSuite] {
                 let jf = eval_jenkinsfile(bench, shape, &opts);
                 let block = params_block(&jf);
                 assert!(
-                    block.contains("name: 'SHARD_SIZE'") && block.contains("defaultValue: '2'"),
+                    block.contains("name: 'MAX_IN_FLIGHT'") && block.contains("defaultValue: '0'"),
                     "{bench} {shape:?}: {block}"
                 );
+                assert!(!block.contains("SHARD_SIZE"), "{bench} {shape:?}");
             }
             let one = eval_jenkinsfile(bench, JobShape::One, &opts);
             assert!(!params_block(&one).contains("SHARD_SIZE"), "{bench}");

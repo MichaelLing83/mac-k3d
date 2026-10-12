@@ -178,8 +178,13 @@ pub struct JenkinsAgentConfig {
     pub remote_fs: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_jar: Option<PathBuf>,
-    /// Logical CPU cores recorded at prepare time.
+    /// Logical CPU cores recorded at prepare time. This is the worker's CPU
+    /// upper limit (cloud 16, local 4).
     pub cpu_cores: u32,
+    /// CPUs one executor stands for. Executors = cpu_cores / this. 0 or omitted
+    /// means 2, which is what a DeepSWE task declares.
+    #[serde(default = "default_cpus_per_executor")]
+    pub cpus_per_executor: u32,
     /// Jenkins user for REST API (plaintext for now; encrypt later). A worker's
     /// YAML always carries the key; `''` means "not filled in yet".
     #[serde(
@@ -280,10 +285,18 @@ pub struct JenkinsJobConfig {
     /// pins, canary and scheduling knobs (`mac-k3d set --ui-profile`).
     #[serde(default = "default_ui_profile")]
     pub ui_profile: String,
-    /// Questions per shard when some_task / full_suite_task split their work
-    /// across workers (`mac-k3d set --shard-size`).
+    /// Questions per shard. Kept so older YAML still loads; dispatch no longer
+    /// uses it. A rollout is one `one_task` build.
     #[serde(default = "default_shard_size")]
     pub default_shard_size: u32,
+    /// Builds one dispatcher may have in the Jenkins queue at once. 0 means
+    /// 2 x the online executors that can run the suite, counted at dispatch.
+    #[serde(default)]
+    pub max_in_flight: u32,
+    /// How many times an out-of-memory rollout is put back at the tail of the
+    /// queue. The rollout then runs at most this many times plus the first try.
+    #[serde(default = "default_oom_retries")]
+    pub oom_retries: u32,
 }
 
 pub const UI_PROFILES: &[&str] = &["user", "developer"];
@@ -294,6 +307,19 @@ fn default_ui_profile() -> String {
 
 fn default_shard_size() -> u32 {
     2
+}
+
+fn default_cpus_per_executor() -> u32 {
+    2
+}
+
+fn default_oom_retries() -> u32 {
+    2
+}
+
+/// CPUs one executor stands for. An omitted or zero value is the DeepSWE size.
+pub fn cpus_per_executor(value: u32) -> u32 {
+    if value == 0 { 2 } else { value }
 }
 
 fn default_n_tasks_one() -> u32 {
@@ -331,6 +357,8 @@ impl Default for JenkinsJobConfig {
             default_icode_git_ref_kind: "pr".into(),
             ui_profile: default_ui_profile(),
             default_shard_size: default_shard_size(),
+            max_in_flight: 0,
+            oom_retries: default_oom_retries(),
         }
     }
 }
@@ -387,6 +415,7 @@ impl Default for MacK3dConfig {
                 remote_fs: None,
                 agent_jar: None,
                 cpu_cores: 0,
+                cpus_per_executor: default_cpus_per_executor(),
                 api_user: None,
                 api_token: None,
             },

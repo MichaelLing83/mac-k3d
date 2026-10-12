@@ -210,7 +210,7 @@ def harness_task_attempts(
     harness_dir: Path, tid: str, n_rollouts: int = 0, max_tokens: int | None = None
 ) -> list[dict]:
     """Attempts in `_aNN` order. A missing slot stays put as no-response, not shifted to the end."""
-    from score_results import attempt_index, harbor_task_trials
+    from score_results import attempt_index, harbor_task_trials, rollout_number
 
     indexed: dict[int, dict] = {}
     loose: list[dict] = []
@@ -219,7 +219,9 @@ def harness_task_attempts(
         if not reward.is_file():
             reward = trial / "reward.json"
         row = _attempt_from_trial(trial, reward if reward.is_file() else None, max_tokens)
-        index = attempt_index(trial)
+        index = rollout_number(trial)
+        if index is None:
+            index = attempt_index(trial)
         if index is not None:
             previous = indexed.get(index)
             if previous is None:

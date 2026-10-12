@@ -432,6 +432,84 @@ def cleanup(roots: list[Path]) -> int:
     return len(done)
 
 
+def process_start(pid: int) -> str | None:
+    """A token that changes when ``pid`` is reused. None when the process is gone.
+
+    Linux reads the start-time field of ``/proc/<pid>/stat``. macOS has no
+    ``/proc``, so ``ps -o lstart=`` is the same idea.
+    """
+    if pid <= 0:
+        return None
+    stat = Path(f"/proc/{pid}/stat")
+    if stat.is_file():
+        try:
+            text = stat.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        end = text.rfind(")")
+        fields = text[end + 2 :].split() if end >= 0 else []
+        # Field 22 (starttime) is index 19 of the fields that follow comm.
+        return fields[19] if len(fields) > 19 else None
+    rc, out, _ = run(["ps", "-o", "lstart=", "-p", str(pid)])
+    if rc != 0:
+        return None
+    token = out.strip()
+    return token or None
+
+
+def write_owner(path: Path) -> None:
+    """The shell that started this step. A later sweep removes its containers
+    when this process is gone or the pid has been reused."""
+    pid = os.getppid()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"pid": pid, "started": process_start(pid) or ""}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def owner_alive(doc: dict) -> bool:
+    try:
+        pid = int(doc.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    now = process_start(pid)
+    if now is None:
+        return False
+    started = str(doc.get("started") or "")
+    return not started or now == started
+
+
+def sweep(roots: list[Path]) -> int:
+    """Force-remove trials whose owner process is gone.
+
+    ``owner.json`` sits in the jobs dir. A build that is still running keeps
+    its containers; one whose agent died does not.
+    """
+    count = 0
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for owner in root.rglob("owner.json"):
+            jobs = owner.parent
+            if jobs in seen:
+                continue
+            seen.add(jobs)
+            try:
+                doc = json.loads(owner.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(doc, dict) or owner_alive(doc):
+                continue
+            removed = teardown(jobs)
+            count += removed
+            print(f"sweep: removed {removed} project(s) of dead owner pid {doc.get('pid')} under {jobs}")
+    if count == 0:
+        print("sweep: no trials of a dead owner")
+    return count
+
+
 def teardown(jobs_dir: Path) -> int:
     names = trial_names([jobs_dir])
     if not names:
@@ -457,6 +535,10 @@ def main(argv: list[str] | None = None) -> int:
     p_cleanup.add_argument("--root", type=Path, action="append", default=[])
     p_teardown = sub.add_parser("teardown")
     p_teardown.add_argument("--jobs-dir", type=Path, required=True)
+    p_owner = sub.add_parser("owner")
+    p_owner.add_argument("--out", type=Path, required=True)
+    p_sweep = sub.add_parser("sweep")
+    p_sweep.add_argument("--root", type=Path, action="append", default=[])
     args = parser.parse_args(argv)
 
     try:
@@ -464,6 +546,10 @@ def main(argv: list[str] | None = None) -> int:
             check(args.out, args.need)
         elif args.cmd == "cleanup":
             cleanup(args.root)
+        elif args.cmd == "owner":
+            write_owner(args.out)
+        elif args.cmd == "sweep":
+            sweep(args.root)
         else:
             teardown(args.jobs_dir)
     except TrialNetworkError as exc:

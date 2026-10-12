@@ -26,7 +26,6 @@ pub(super) struct QueueRequest {
     pub icode_git_ref: Option<String>,
     pub icode_git_ref_kind: Option<String>,
     pub model: Option<String>,
-    pub shard_size: Option<u32>,
     /// `--param NAME=VALUE`, in the order given.
     pub params: Vec<String>,
 }
@@ -45,7 +44,6 @@ impl QueueRequest {
             icode_git_ref: args.icode_git_ref.clone(),
             icode_git_ref_kind: args.icode_git_ref_kind.clone(),
             model: args.model.clone(),
-            shard_size: args.shard_size,
             params: args.param.clone(),
         })
     }
@@ -75,7 +73,6 @@ const FLAG_FIELDS: &[(&str, &str)] = &[
     ("ICODE_GIT_REF", "--icode-git-ref"),
     ("ICODE_GIT_REF_KIND", "--icode-git-ref-kind"),
     ("DEEPSEEK_MODEL", "--model"),
-    ("SHARD_SIZE", "--shard-size"),
 ];
 
 fn at_least_one(flag: &str, n: u32) -> Result<String> {
@@ -148,18 +145,17 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
             if let Some(n) = req.n_tasks {
                 set.push(("N_TASKS", at_least_one("--n-tasks", n)?, "--n-tasks"));
             }
-            if let Some(n) = req.shard_size {
-                set.push(("SHARD_SIZE", at_least_one("--shard-size", n)?, "--shard-size"));
-            }
         }
     }
-    if req.shape == JobShape::One && req.shard_size.is_some() {
-        return Err(Error::Config(format!(
-            "{job} is not split into shards: --shard-size is for --job some or full"
-        )));
-    }
     if let Some(n) = req.n_rollouts {
-        set.push(("N_ROLLOUTS", at_least_one("--n-rollouts", n)?, "--n-rollouts"));
+        if req.shape == JobShape::One && n != 1 {
+            return Err(Error::Config(format!(
+                "{job} runs one rollout. For several, use --job some --tasks ID --n-rollouts {n}"
+            )));
+        }
+        if req.shape != JobShape::One {
+            set.push(("N_ROLLOUTS", at_least_one("--n-rollouts", n)?, "--n-rollouts"));
+        }
     }
     if let Some(url) = nonblank(&req.icode_git_url) {
         set.push(("ICODE_GIT_URL", eval_catalog::require_icode_git_url(&url)?, "--icode-git-url"));
@@ -380,16 +376,15 @@ mod tests {
     fn only_the_given_fields_are_sent_in_page_order() {
         let mut req = some("wazero-multi-module-snapshots, ytt-jsonpath-query-api");
         req.n_rollouts = Some(1);
-        req.shard_size = Some(2);
         req.model = Some("deepseek-flash".into());
-        req.params = vec!["agent_label=lolbench".into()];
+        req.params = vec!["agent_label=lolbench".into(), "MAX_IN_FLIGHT=20".into()];
         assert_eq!(
             names(&request_fields(&req).unwrap()),
             [
                 "TASKS=wazero-multi-module-snapshots,ytt-jsonpath-query-api",
                 "N_ROLLOUTS=1",
                 "DEEPSEEK_MODEL=deepseek-flash",
-                "SHARD_SIZE=2",
+                "MAX_IN_FLIGHT=20",
                 "AGENT_LABEL=lolbench",
             ]
         );
@@ -439,7 +434,7 @@ mod tests {
         };
         assert!(one(|r| r.tasks = Some("a,b".into())).unwrap_err().contains("--job some --tasks"));
         assert!(one(|r| r.n_tasks = Some(3)).unwrap_err().contains("--job some --n-tasks"));
-        assert!(one(|r| r.shard_size = Some(2)).unwrap_err().contains("--shard-size is for --job some or full"));
+        assert!(one(|r| r.n_rollouts = Some(4)).unwrap_err().contains("runs one rollout"));
         assert!(one(|r| r.icode_mode = Some("release".into())).unwrap_err().contains("ICODE_RELEASE_FILE"));
         assert_eq!(
             one(|r| {

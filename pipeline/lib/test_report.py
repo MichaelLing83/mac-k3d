@@ -2770,18 +2770,18 @@ class EvalReportTests(unittest.TestCase):
             self.assertEqual(len(harbor_task_trials(harness, "beta")), 1)
             self.assertEqual(harbor_task_trials(harness, "gamma"), [])
 
-    def test_only_the_newest_build_counts_when_several_ran_one_task(self):
+    def test_a_merged_harness_unions_rollouts_in_plan_order(self):
+        """Pass@1 is the first rollout, even when a later rollout finished in an earlier build."""
         from score_results import harbor_task_trials
 
         with tempfile.TemporaryDirectory() as tmp:
             harness = Path(tmp) / "harness"
             runs = harness / "harbor_runs"
-            old = self._trial(runs / "jenkins-51" / "job" / "alpha__a01" / "trial", "alpha", 0.0)
-            new = self._trial(runs / "jenkins-52" / "job" / "alpha__a01" / "trial", "alpha", 1.0)
-            then = time.time() - 3600
-            os.utime(old / "verifier" / "reward.json", (then, then))
-            found = harbor_task_trials(harness, "alpha")
-            self.assertEqual(found, [new])
+            second = self._trial(runs / "jenkins-51" / "job" / "alpha__a01" / "trial", "alpha", 0.0)
+            first = self._trial(runs / "jenkins-52" / "job" / "alpha__a01" / "trial", "alpha", 1.0)
+            (runs / "jenkins-51" / "rollout.txt").write_text("2\n", encoding="utf-8")
+            (runs / "jenkins-52" / "rollout.txt").write_text("1\n", encoding="utf-8")
+            self.assertEqual(harbor_task_trials(harness, "alpha"), [first, second])
 
     def test_a_trial_without_a_verifier_dir_still_yields_its_reward(self):
         from score_results import trial_reward_files

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -107,6 +108,7 @@ class PlanTests(unittest.TestCase):
             "mem_total_kb_": 64 * GB_KB,
             "free_disk_gb": 500.0,
             "measured_peak_gb": None,
+            "jenkins": False,
         }
         args.update(over)
         return plan_slots(
@@ -117,12 +119,22 @@ class PlanTests(unittest.TestCase):
             args["mem_total_kb_"],
             args["free_disk_gb"],
             args["measured_peak_gb"],
+            jenkins=args["jenkins"],
         )
 
-    def test_slots_are_the_tightest_of_cpu_and_memory(self):
+    def test_slots_follow_cpus_and_ignore_ram(self):
         self.assertEqual(self.plan()["slots"], 4)  # 8 cores / 2 cpus
-        self.assertEqual(self.plan(cpu_lock_qty=16)["slots"], 7)  # (64-2) GB / 8 GB
+        self.assertEqual(self.plan(cpu_lock_qty=16)["slots"], 8)
+        self.assertEqual(self.plan(mem_available_kb_=4 * GB_KB, mem_total_kb_=4 * GB_KB)["slots"], 4)
         self.assertTrue(self.plan()["fits"])
+        self.assertEqual(self.plan()["cpus_lock"], 2)
+
+    def test_a_jenkins_build_is_one_container(self):
+        got = self.plan(jenkins=True, cpu_lock_qty=2)
+        self.assertEqual(got["slots"], 1)
+        self.assertTrue(got["fits"])
+        blocked = self.plan(jenkins=True, cpu_lock_qty=1)
+        self.assertFalse(blocked["fits"])
 
     def test_a_locked_core_below_the_declared_cpus_blocks_the_build(self):
         got = self.plan(cpu_lock_qty=1)
@@ -130,23 +142,10 @@ class PlanTests(unittest.TestCase):
         self.assertIn("declares 2 CPUs", got["blockers"][0])
         self.assertIn("locked only 1", got["blockers"][0])
 
-    def test_a_worker_smaller_than_one_trial_blocks_the_build(self):
-        got = self.plan(mem_total_kb_=4 * GB_KB, mem_available_kb_=4 * GB_KB)
-        self.assertFalse(got["fits"])
-        self.assertIn("8.0 GB", got["blockers"][0])
-
-    def test_busy_ram_lowers_slots_without_blocking(self):
-        """Installed RAM decides admission; free RAM only decides throughput."""
-        got = self.plan(mem_total_kb_=64 * GB_KB, mem_available_kb_=12 * GB_KB)
+    def test_a_fraction_rounds_up_to_a_whole_core(self):
+        got = self.plan(peak={"cpus": 2.5, "memory_mb": 1024}, cpu_lock_qty=3)
+        self.assertEqual(got["cpus_lock"], 3)
         self.assertTrue(got["fits"])
-        self.assertEqual(got["slots"], 1)  # (12-2) GB / 8 GB
-
-    def test_a_measured_peak_beats_the_declared_ceiling(self):
-        declared = self.plan(cpu_lock_qty=16, mem_available_kb_=20 * GB_KB)
-        measured = self.plan(cpu_lock_qty=16, mem_available_kb_=20 * GB_KB, measured_peak_gb=1.5)
-        self.assertEqual(declared["slots"], 2)
-        self.assertEqual(measured["slots"], 8)
-        self.assertTrue(any("measured peak" in r for r in measured["reasons"]))
 
     def test_a_full_disk_forces_one_at_a_time(self):
         got = self.plan(free_disk_gb=float(MIN_DISK_GB - 1))
@@ -237,7 +236,7 @@ class CliTests(unittest.TestCase):
             proc = self.run_plan(tasks, ["beta"], 2, out)
             self.assertEqual(proc.returncode, 1)
             self.assertIn("cannot run the selected tasks as declared", proc.stderr)
-            self.assertIn("EVAL_OVERRIDE_CPUS", proc.stderr)
+            self.assertIn("This worker's CPU limit is below what the task declares.", proc.stderr)
             self.assertFalse(out.exists())
 
 
@@ -258,6 +257,40 @@ class StageWiringTests(unittest.TestCase):
         self.assertNotIn('cmd+=(--override-cpus "$EVAL_CPUS_EACH")', cmd)
         self.assertIn("EVAL_OVERRIDE_CPUS", cmd)
         self.assertIn("EVAL_OVERRIDE_MEMORY_MB", cmd)
+        self.assertIn("apply_test_memory", cmd)
+        rollout = cmd[cmd.index("build_run_cmd() {") : cmd.index("build_canary_cmd() {")]
+        self.assertLess(rollout.index("\n  apply_test_memory\n"), rollout.index("\n  append_agent_flags\n"))
+        canary = cmd[cmd.index("build_canary_cmd() {") : cmd.index("apply_test_memory() {")]
+        self.assertNotIn("\n  apply_test_memory\n", canary)
+
+    def test_test_memory_applies_only_while_attempt_is_within_the_cap(self):
+        cmd = ROOT / "pipeline" / "stages" / "evaluate" / "harbor_cmd.sh"
+        script = 'set -euo pipefail\nsource "$1"\napply_test_memory\nprintf "override=%s\\n" "${EVAL_OVERRIDE_MEMORY_MB-}"\n'
+
+        def run(attempt, attempts="1", memory="256"):
+            env = {"PATH": os.environ.get("PATH", ""), "TEST_MEMORY_MB": memory, "TEST_MEMORY_ATTEMPTS": attempts, "ATTEMPT": attempt}
+            proc = subprocess.run(
+                ["bash", "-c", script, "_", str(cmd)], capture_output=True, text=True, check=False, env=env
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return proc.stdout
+
+        first = run("1")
+        self.assertIn("harbor: TEST_MEMORY_MB=256 on attempt 1", first)
+        self.assertIn("override=256", first)
+        later = run("2")
+        self.assertNotIn("TEST_MEMORY_MB=256", later)
+        self.assertIn("override=\n", later)
+        third = run("3", attempts="3")
+        self.assertIn("harbor: TEST_MEMORY_MB=256 on attempt 3", third)
+        self.assertIn("override=256", third)
+        unset = subprocess.run(
+            ["bash", "-c", script, "_", str(cmd)],
+            capture_output=True, text=True, check=False,
+            env={"PATH": os.environ.get("PATH", ""), "ATTEMPT": "1"},
+        )
+        self.assertEqual(unset.returncode, 0, unset.stderr)
+        self.assertEqual(unset.stdout, "override=\n")
 
     def test_provenance_records_declared_against_applied(self):
         from provenance import record_resources

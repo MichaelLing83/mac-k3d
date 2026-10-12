@@ -14,7 +14,7 @@ scripts/check_docs.sh
 The cases that cover this branch:
 
 - `every_suite_gets_exactly_three_jobs` / `shapes_get_their_own_defaults` — nine eval jobs and no `eval_aggregate`; `one_task` pins 1 question x 1 rollout, `some_task` takes the configured list or N, `full_suite_task` the whole suite
-- `some_task_dispatches_to_one_task` / `full_suite_dispatches_shards_then_aggregates` — the dispatchers take no executor, no lock and no Docker until the merge; they queue `<suite>_one_task` shards (`SHARD_SIZE`, at least one per online worker) and merge them in their own `Aggregate` stage by child build number
+- `some_task_dispatches_to_one_task` / `full_suite_dispatches_shards_then_aggregates` — the dispatchers take no executor and no Docker until the merge; they queue one `<suite>_one_task` build per question and rollout (`MAX_IN_FLIGHT`) and merge the final build of each unit in their own `Aggregate` stage by child build number
 - `each_shape_shows_only_its_params` / `user_profile_hides_dev_params` / `developer_profile_shows_dev_params` / `harness_llm_benchmark_always_visible` / `groovy_and_xml_param_sets_match` — the per-shape parameter lists, the `ui_profile` switch, and Groovy and XML rendering from one table
 - `agent_registers_with_one_executor` — one eval build per worker
 - `bootstrap_extracts_pipeline_from_installed_binary` / `no_mac_k3d_git_params` — every phase uses `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline --require-clean`, only the first stage (Environment) clears it, and no job carries a `MAC_K3D_GIT_*` parameter, a `git fetch` or a `mac-k3d-src` clone
@@ -62,7 +62,7 @@ The run that has to pass before anyone else uses this.
 
 1. `bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker> --start` (`--start` once, for the plugins: it Helm-upgrades Jenkins with `copyartifact`, `pipeline-utility-steps` and `hidden-parameter`, rewrites the nine jobs and deletes `eval_aggregate`). Do not install plugins in the UI. Workers stay on `config` only — never `start -c worker.yaml`.
 2. Both workers on the same binary (the script's version table) and online in **Manage Jenkins -> Nodes** with **1 executor** each.
-3. Open `deepswe_full_suite_task` -> **Build with Parameters**. Set `N_TASKS=10` and `SHARD_SIZE=2` (five shards).
+3. Open `deepswe_full_suite_task` -> **Build with Parameters**. Set `N_TASKS=10` and `N_ROLLOUTS=1` (ten builds, one per question).
 4. While it runs, check:
    - two `deepswe_one_task` builds run at once, one per worker, and the other three wait in the queue; as each finishes, its worker takes the next
    - each shard build's description reads `shard i/5 of deepswe_full_suite_task #<n>`

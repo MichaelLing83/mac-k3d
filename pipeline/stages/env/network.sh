@@ -21,6 +21,8 @@ for runs in "${run_dirs[@]}"; do
   done
 done
 
+python3 "$PIPELINE_LIB/trial_network.py" sweep "${roots[@]}" \
+  || echo "WARNING: could not sweep trials whose owner is gone (see above); continuing" >&2
 python3 "$PIPELINE_LIB/trial_network.py" cleanup "${roots[@]}" \
   || echo "WARNING: could not remove this worker's leftover trials (see above); continuing" >&2
 python3 "$PIPELINE_LIB/trial_network.py" check --need 1 --out "$WORKDIR/trial_network.json" \

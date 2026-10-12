@@ -15,8 +15,9 @@
 #                                mount write, repo history, env names -> canary.json
 #   canary_probe.sh mount        As root: write to the mount -> canary_root.json
 #
-# Always exits 0. Harbor treats `curl: (N)` in a failed command as a network
-# error, and a blocked host is the expected result here.
+# Exits 0, except when it cannot create a temp file: that is a starved host,
+# not a verdict, so it exits 1. Harbor treats `curl: (N)` in a failed command
+# as a network error, and a blocked host is the expected result here.
 set -uo pipefail
 
 SCHEMA=mac-k3d-canary-probe-v1
@@ -32,6 +33,22 @@ MODEL_ATTEMPTS=3
 FIND_TIMEOUT=300
 GIT_TIMEOUT=300
 MAX_HITS=50
+
+# Stop when the host cannot fork or the disk is full. An empty path must not
+# be read as a mount or filesystem verdict.
+need_temp() {
+  local path
+  if [ "$#" -eq 0 ]; then
+    path=$(mktemp) || true
+  else
+    path=$(mktemp "$@") || true
+  fi
+  if [ -z "${path:-}" ] || [ ! -e "$path" ]; then
+    echo "cannot create a temp file (out of processes or disk?)" >&2
+    exit 1
+  fi
+  printf '%s\n' "$path"
+}
 
 HOSTS=()
 NAMES=()
@@ -171,7 +188,7 @@ cmd_home() {
 # that must stay blocked gets one short try.
 probe_network() {
   local first=1 entry kind host code rc errf secs tries n
-  errf=$(mktemp)
+  errf=$(need_temp) || exit 1
   printf '['
   for entry in ${HOSTS[@]+"${HOSTS[@]}"}; do
     kind=${entry%% *}
@@ -231,9 +248,9 @@ hash_kept() {
 probe_filesystem() {
   local repo="$1" hits pruned kept rc=0 timed_out=0 p first digest
   local -a expr=() prune=()
-  hits=$(mktemp)
-  pruned=$(mktemp)
-  kept=$(mktemp)
+  hits=$(need_temp) || exit 1
+  pruned=$(need_temp) || exit 1
+  kept=$(need_temp) || exit 1
   prune=(${PRUNE[@]+"${PRUNE[@]}"})
   [ -n "$repo" ] && prune+=("$repo")
   printf '%s\n' ${prune[@]+"${prune[@]}"} >"$pruned"
@@ -283,7 +300,7 @@ probe_filesystem() {
 
 probe_mount() {
   local present=0 options="" ro="" rc errf
-  errf=$(mktemp)
+  errf=$(need_temp) || exit 1
   [ -d "$MOUNT" ] && present=1
   if [ -r "$MOUNTS_FILE" ]; then
     options=$(awk -v m="$MOUNT" '$2 == m { print $4 }' "$MOUNTS_FILE" | tail -n 1)
@@ -305,7 +322,7 @@ probe_mount() {
 
 probe_history() {
   local repo="$1" error="$2" all="" at_head="" fsck_rc="" fsck_timed_out=0 unreachable="" stash="" tmp
-  tmp=$(mktemp -d)
+  tmp=$(need_temp -d) || exit 1
   : >"$tmp/unreachable.txt"
   : >"$tmp/remotes.txt"
   if [ -z "$error" ]; then
@@ -330,11 +347,11 @@ probe_history() {
 }
 
 cmd_probe() {
-  local repo="" repo_error="" errf names
+  local repo="" repo_error="" errf names network filesystem mount_json history
   load_spec
   # Same repo iCode gets: icode_capture.sh base, with the task's declared MAC_K3D_REPO.
   export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
-  errf=$(mktemp)
+  errf=$(need_temp) || exit 1
   if [ -f "$CAPTURE" ]; then
     repo=$(bash "$CAPTURE" base 2>"$errf" | tail -n 1)
     [ -n "$repo" ] && [ -d "$repo" ] || repo_error="repo not found: $(first_line "$errf")"
@@ -342,18 +359,24 @@ cmd_probe() {
     repo_error="missing $CAPTURE"
   fi
   rm -f "$errf"
-  names=$(mktemp)
+  names=$(need_temp) || exit 1
   compgen -e | LC_ALL=C sort -u >"$names"
+  # Run before the pipe: a failing temp file must exit this process, not the
+  # pipe's subshell.
+  network=$(probe_network) || exit 1
+  filesystem=$(probe_filesystem "$repo") || exit 1
+  mount_json=$(probe_mount) || exit 1
+  history=$(probe_history "$repo" "$repo_error") || exit 1
   {
     printf '{\n'
     printf '  "schema": %s,\n' "$(json_str "$SCHEMA")"
     printf '  "uid": %s,\n' "$(json_int_or_null "$(id -u 2>/dev/null)")"
     printf '  "user": %s,\n' "$(json_or_null "$(id -un 2>/dev/null)")"
     printf '  "curl": %s,\n' "$(json_bool "$(have curl && echo 1)")"
-    printf '  "network": %s,\n' "$(probe_network)"
-    printf '  "filesystem": %s,\n' "$(probe_filesystem "$repo")"
-    printf '  "mount": %s,\n' "$(probe_mount)"
-    printf '  "repo": %s,\n' "$(probe_history "$repo" "$repo_error")"
+    printf '  "network": %s,\n' "$network"
+    printf '  "filesystem": %s,\n' "$filesystem"
+    printf '  "mount": %s,\n' "$mount_json"
+    printf '  "repo": %s,\n' "$history"
     printf '  "env_names": %s,\n' "$(json_lines "$names")"
     printf '  "python_env": {"PYTHONPATH": %s, "VIRTUAL_ENV": %s}\n' \
       "$(json_or_null "${PYTHONPATH:-}")" "$(json_or_null "${VIRTUAL_ENV:-}")"
@@ -364,7 +387,7 @@ cmd_probe() {
 
 cmd_mount() {
   local rc errf erofs=0
-  errf=$(mktemp)
+  errf=$(need_temp) || exit 1
   touch "$MOUNT/.mac-k3d-canary-root" 2>"$errf"
   rc=$?
   [ "$rc" = 0 ] && rm -f "$MOUNT/.mac-k3d-canary-root"

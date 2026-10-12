@@ -13,6 +13,7 @@ STEPS=(
   tasks/images
   tasks/isolation
   tasks/leakscan
+  tasks/resources
 )
 
 progress 15 "tasks: preparing benchmark=$BENCHMARK"

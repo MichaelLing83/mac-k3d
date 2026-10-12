@@ -71,11 +71,11 @@ mac-k3d eval                         # interactive → local or Jenkins *_one_ta
 ```bash
 # what would be sent; nothing is queued
 mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api,\
-wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --shard-size 2 --dry-run
+wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --dry-run
 
 # the same, queued; prints the build URL and the `eval record` line for when it ends
 mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api,\
-wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1 --shard-size 2
+wazero-multi-module-snapshots,abs-module-cache-flags --n-rollouts 1
 
 mac-k3d eval --job full                                   # the whole suite, job defaults
 mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=linux-Michael-Ubuntu
@@ -83,7 +83,7 @@ mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=linux-M
 
 Run it on any machine whose config (or `~/.config/mac-k3d/worker.yaml`) has `jenkins_agent.controller_url`, `api_user` and `api_token`. curl gets the credentials on stdin, never in its arguments or the URL. Before queueing, the CLI reads the live job's field names; a field the live job lacks means its jobs are older than this binary, and it stops and asks for a controller redeploy instead of letting Jenkins drop the value.
 
-A flag the job has no field for is refused rather than ignored: `--tasks` and `--shard-size` on `--job one`, `--task` on `--job some`, `--n-tasks` above 1 on `--job one` (use `--job some`), `--icode-mode release` anywhere (the release drop is a file upload; use the job page), and any `--param` that names a field with its own flag, a shard field (`TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD` on `one_task`) or a field the job does not have.
+A flag the job has no field for is refused rather than ignored: `--tasks` on `--job one`, `--n-rollouts` other than 1 on `--job one` (several rollouts of one question use `--job some --tasks ID`), `--task` on `--job some`, `--n-tasks` above 1 on `--job one` (use `--job some`), `--icode-mode release` anywhere (the release drop is a file upload; use the job page), and any `--param` that names a field with its own flag, a dispatcher field (`TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD` on `one_task`) or a field the job does not have.
 
 ### Flags
 
@@ -93,8 +93,7 @@ A flag the job has no field for is refused rather than ignored: `--tasks` and `-
 | `--local` | Full local `run_all.sh` (no Jenkins). `--local` and `--stage` set `CPU_LOCK_QTY` to `jenkins_agent.cpu_cores` from `~/.config/mac-k3d/worker.yaml`, the count Jenkins locks on this node, unless `CPU_LOCK_QTY` is already set; with no worker.yaml it falls back to the loaded config, then the logical CPU count. See [optimization.md](optimization.md#how-many-fit) |
 | `--job one\|some\|full` | Queue `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with only the fields given ([above](#queue-a-jenkins-job-from-the-cli)). Not with `--local`, `--stage` or `--icode-release` |
 | `--tasks a,b,c` | With `--job some`: the question list (`TASKS`); wins over `--n-tasks` |
-| `--n-rollouts N` | With `--job`: attempts per question (`N_ROLLOUTS`) |
-| `--shard-size N` | With `--job some\|full`: questions per shard for the whole run (`SHARD_SIZE`). The dispatcher still plans at least one shard per online worker |
+| `--n-rollouts N` | With `--job some` or `--job full`: attempts per question. `--job one` is always one rollout |
 | `--param NAME=VALUE` | With `--job`, repeatable: any other field of the job page, for example `CANARY=on` or `AGENT_LABEL=<node name>` |
 | `--dry-run` | With `--job`: print the job and the fields it would send; queue nothing and contact no controller |
 | `--n-tasks N` | Number of tasks when `--task` is empty (default 1 locally). With `--job some` or `full`: `N_TASKS` |
@@ -138,6 +137,8 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | `HARBOR_VERSION`, `DEEPSWE_REF`, `LOLBENCH_REF` | pinned | `env` (Harbor, default from `pipeline/config/toolchain.env`) and `tasks` (benchmark) pins. The iCode SHA is not a field: the build prints and records the commit or release sha256 it actually ran |
 | `SHARD_SIZE` | `default_shard_size` (2) | `some_task` / `full_suite_task`: questions per shard for the whole run, not per worker. Shards = ceil(questions / `SHARD_SIZE`), raised to at least the number of online workers |
 | `N_TASKS` | suite size | `full_suite_task` only: lower it for a rehearsal |
+| `TEST_MEMORY_MB` | empty | testing only: Harbor `--override-memory-mb` for a trial, to force an out of memory. Empty leaves the `task.toml` limit. The dispatcher forwards it to every `one_task` build |
+| `TEST_MEMORY_ATTEMPTS` | `1` | testing only: `TEST_MEMORY_MB` applies while `ATTEMPT` is at most this number. `1` limits the first try; a re-queued try runs as declared |
 
 **Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`, `ICODE_RELEASE_FROM`, `ICODE_RELEASE_SHA256`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API. `mac-k3d eval --job … --param OFFICIAL=1` (and `CANARY`, `CANARY_ALLOW_HOST`, `ICODE_EXPECT_SHA`) is refused: those fields are gone.
 
@@ -398,8 +399,9 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | `--n-tasks N` | First N sorted questions (clears TASK / TASKS). `N>1` is slower and costs more LLM calls |
 | `--tasks a,b` | Explicit comma-separated ids |
 | `--icode-release PATH` | Worker `*-full-*` drop; writes `~/.config/mac-k3d/icode-paths.yaml` |
-| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, `AGGREGATE_LABEL` (dispatchers), the pins, canary and `SHARD_SIZE`. Apply with `config --skip-secrets` on the controller |
-| `--shard-size N` | Questions per shard when `some_task` / `full_suite_task` split work across workers (default 2) |
+| `--ui-profile user\|developer` | Jenkins job pages: `user` shows each shape's short list; `developer` shows the same list followed by `AGENT_LABEL`, `AGGREGATE_LABEL` (dispatchers), the pins, canary, `MAX_IN_FLIGHT`, `OOM_RETRIES`, `TEST_MEMORY_MB` and `TEST_MEMORY_ATTEMPTS`. Apply with `config --skip-secrets` on the controller |
+| `--max-in-flight N` | Builds one dispatcher may have in Jenkins at once. `0` means twice the online executors for the suite |
+| `--oom-retries N` | How many times an OOM rollout is queued again (default 2) |
 
 `--task`, `--n-tasks`, and `--tasks` are mutually exclusive. `set` updates only the flags you pass, then `save`.
 

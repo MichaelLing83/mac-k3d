@@ -11,6 +11,7 @@ TASK_IDS=()
 while IFS= read -r tid || [ -n "$tid" ]; do
   case "$tid" in *[![:space:]]*) TASK_IDS+=("$tid") ;; esac
 done <"$WORKDIR/selected_tasks.txt"
+node_lock images
 for tid in ${TASK_IDS[@]+"${TASK_IDS[@]}"}; do
   [ -d "$TASKS_DIR/$tid" ] || die "no task under $TASKS_DIR (wanted $tid)"
   [ "${BENCHMARK:-deepswe}" = "lolbench" ] || continue
@@ -25,4 +26,5 @@ PY
   )"
   ensure_task_image "$tid" "$image" "$TASKS_DIR/$tid/environment"
 done
+node_unlock
 echo "OK task images ready for $BENCHMARK"

@@ -72,7 +72,8 @@ jenkins_agent:
   labels: [macos, docker, lolbench]
   remote_fs: null
   agent_jar: null
-  cpu_cores: 0            # logical cores recorded at prepare
+  cpu_cores: 0            # CPU upper limit (local 4, cloud 16); wizard default is the logical count
+  cpus_per_executor: 2    # executors = cpu_cores / this
   api_user: ''            # worker: always written, '' until filled in; CLI registration only
   api_token: ''           # plaintext for now; not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
 
@@ -254,8 +255,10 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-flash`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-v4-pro`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
-| `ui_profile` | `user` | `user` hides developer parameters (pins, canary, `SHARD_SIZE`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
-| `default_shard_size` | `2` | Default `SHARD_SIZE` (questions per shard) for `some_task` / `full_suite_task` (`mac-k3d set --shard-size`) |
+| `ui_profile` | `user` | `user` hides developer parameters (pins, canary, `MAX_IN_FLIGHT`, `OOM_RETRIES`, `TEST_MEMORY_MB`, `TEST_MEMORY_ATTEMPTS`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
+| `max_in_flight` | `0` | How many `one_task` builds one dispatcher may have in Jenkins at once. `0` means twice the online executors that can run the suite. `mac-k3d set --max-in-flight` |
+| `oom_retries` | `2` | An OOM rollout is appended to the queue tail at most this many times (three tries in total). `mac-k3d set --oom-retries` |
+| `default_shard_size` | `2` | Kept so an old config still loads. Dispatch is one build per question and rollout; this value is not used |
 
 ## Environment variables
 

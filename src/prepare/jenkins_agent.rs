@@ -180,6 +180,50 @@ pub fn has_agent_secret(script_path: &Path) -> bool {
     existing_secret(script_path).is_some()
 }
 
+/// CPUs a task of each suite declares. A worker only receives `fits-<suite>`
+/// when `cpu_cores` is at least this, so Jenkins never places the build on a
+/// machine that cannot lock that many cores. SWE-bench Pro's `task.toml`
+/// writes `cpus = 4` (pipeline/lib/swebenchpro_tasks.py).
+pub const SUITE_CPUS: &[(&str, u32)] = &[("deepswe", 2), ("lolbench", 4), ("swebenchpro", 4)];
+
+/// Executors on this node: the CPU limit divided by the CPUs one task takes.
+/// At least one, so a worker smaller than one task still registers.
+pub fn executor_count(cpu_cores: u32, cpus_per_executor: u32) -> u32 {
+    let each = crate::config::cpus_per_executor(cpus_per_executor);
+    (cpu_cores / each).max(1)
+}
+
+/// Labels mac-k3d owns. A later `config` drops any older value of these and
+/// writes the ones for the current `cpu_cores`.
+pub fn is_managed_label(label: &str) -> bool {
+    label.starts_with("executors-") || label.starts_with("fits-")
+}
+
+/// `executors-<n>` plus `fits-<suite>` for every suite this CPU limit can host.
+pub fn capacity_labels(cpu_cores: u32, cpus_per_executor: u32) -> Vec<String> {
+    let mut labels = vec![format!(
+        "executors-{}",
+        executor_count(cpu_cores, cpus_per_executor)
+    )];
+    for (suite, cpus) in SUITE_CPUS {
+        if cpu_cores >= *cpus {
+            labels.push(format!("fits-{suite}"));
+        }
+    }
+    labels
+}
+
+/// User labels, with any stale managed label replaced by the current capacity.
+pub fn node_labels(user: &[String], cpu_cores: u32, cpus_per_executor: u32) -> Vec<String> {
+    let mut labels: Vec<String> = user
+        .iter()
+        .filter(|label| !is_managed_label(label))
+        .cloned()
+        .collect();
+    labels.extend(capacity_labels(cpu_cores, cpus_per_executor));
+    labels
+}
+
 /// Register node via Jenkins REST API when token is available.
 ///
 /// Returns Ok(Some(secret)) when registration succeeded, Ok(None) when skipped
@@ -189,6 +233,7 @@ pub fn try_register_node(
     agent_name: &str,
     remote_fs: &Path,
     labels: &[String],
+    executors: u32,
     api_user: Option<&str>,
     api_token: Option<&str>,
 ) -> Result<Option<String>> {
@@ -212,7 +257,7 @@ pub fn try_register_node(
     // Skip create if node already exists.
     let exists = session.status(&format!("/computer/{agent_name}/api/json")) == Some(200);
 
-    let xml = agent_config_xml(agent_name, remote_fs, &labels_joined);
+    let xml = agent_config_xml(agent_name, remote_fs, &labels_joined, executors);
     if !exists {
         // Modern Jenkins: POST /computer/createItem?name=… with XML body.
         // (doCreateItem expects a Stapler form submission and returns HTTP 400 for raw XML.)
@@ -235,11 +280,11 @@ pub fn try_register_node(
         let path = format!("/computer/{}/config.xml", urlencoding_simple(agent_name));
         match session.post_xml(&path, "application/xml", &xml).map(|r| r.code) {
             Ok(code) if code == "200" || code == "204" => println!(
-                "Jenkins agent '{agent_name}' already exists; updated it to {EXECUTORS} executor and labels '{labels_joined}'."
+                "Jenkins agent '{agent_name}' already exists; updated it to {executors} executors and labels '{labels_joined}'."
             ),
             Ok(code) => println!(
                 "Warning: Jenkins agent '{agent_name}' exists but its config could not be updated (HTTP {code}). \
-                 Set # of executors to {EXECUTORS} on {base}/computer/{agent_name}/configure."
+                 Set # of executors to {executors} on {base}/computer/{agent_name}/configure."
             ),
             Err(err) => println!("Warning: could not update agent '{agent_name}' ({err})."),
         }
@@ -265,13 +310,10 @@ pub fn try_register_node(
     }
 }
 
-/// One eval build per worker. Each build locks every core of its worker and
-/// Harbor fills them, so the queue hands the next shard to whichever worker
-/// frees up first instead of piling shards onto one node.
-const EXECUTORS: u32 = 1;
-
-fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str) -> String {
-    let executors = EXECUTORS;
+/// One executor runs one rollout. The count is the CPU limit divided by the
+/// CPUs one task takes, so Jenkins admits that many builds and no more.
+fn agent_config_xml(name: &str, remote_fs: &Path, labels: &str, executors: u32) -> String {
+    let executors = executors.max(1);
     format!(
         r#"<?xml version='1.1' encoding='UTF-8'?>
 <slave>
@@ -449,12 +491,22 @@ pub fn ensure_worker_agent(config: &crate::config::MacK3dConfig) -> Result<()> {
         }
     };
 
+    let executors = executor_count(
+        config.jenkins_agent.cpu_cores,
+        config.jenkins_agent.cpus_per_executor,
+    );
+    let labels = node_labels(
+        &config.jenkins_agent.labels,
+        config.jenkins_agent.cpu_cores,
+        config.jenkins_agent.cpus_per_executor,
+    );
     let secret = if jar_ok {
         try_register_node(
             &url,
             &name,
             &remote_fs,
-            &config.jenkins_agent.labels,
+            &labels,
+            executors,
             config.jenkins_agent.api_user(),
             config.jenkins_agent.api_token(),
         )?
@@ -655,11 +707,61 @@ mod tests {
     }
 
     #[test]
-    fn agent_registers_with_one_executor() {
-        let xml = agent_config_xml("mac-host", Path::new("/tmp/agent"), "lolbench mac-host");
-        assert!(xml.contains("<numExecutors>1</numExecutors>"));
+    fn agent_registers_executors_from_the_cpu_limit() {
+        let xml = agent_config_xml("mac-host", Path::new("/tmp/agent"), "lolbench mac-host", 8);
+        assert!(xml.contains("<numExecutors>8</numExecutors>"));
         assert!(xml.contains("<label>lolbench mac-host</label>"));
         assert!(xml.contains("<remoteFS>/tmp/agent</remoteFS>"));
+        assert_eq!(executor_count(16, 2), 8);
+        assert_eq!(executor_count(4, 2), 2);
+        assert_eq!(executor_count(2, 2), 1);
+        assert_eq!(executor_count(16, 0), 8, "0 means the default of 2 CPUs");
+    }
+
+    fn capacity_labels_follow_the_cpu_limit_and_replace_stale_ones() {
+        let cloud = node_labels(&["linux".into(), "lolbench".into()], 16, 2);
+        assert_eq!(
+            cloud,
+            vec![
+                "linux".to_string(),
+                "lolbench".to_string(),
+                "executors-8".into(),
+                "fits-deepswe".into(),
+                "fits-lolbench".into(),
+                "fits-swebenchpro".into(),
+            ]
+        );
+        let local = capacity_labels(4, 2);
+        assert_eq!(
+            local,
+            vec![
+                "executors-2".to_string(),
+                "fits-deepswe".into(),
+                "fits-lolbench".into(),
+                "fits-swebenchpro".into(),
+            ]
+        );
+        let tiny = capacity_labels(2, 2);
+        assert_eq!(tiny, vec!["executors-1".to_string(), "fits-deepswe".into()]);
+        let replaced = node_labels(
+            &[
+                "linux".into(),
+                "executors-1".into(),
+                "fits-lolbench".into(),
+                "custom".into(),
+            ],
+            2,
+            2,
+        );
+        assert_eq!(
+            replaced,
+            vec![
+                "linux".to_string(),
+                "custom".into(),
+                "executors-1".into(),
+                "fits-deepswe".into(),
+            ]
+        );
     }
 
     #[test]

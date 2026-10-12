@@ -32,12 +32,55 @@ if harbor_dry_run; then
   exit 0
 fi
 
+# The canary proves this worker's setup for this question, not the rollout
+# number. The first rollout of the question to land here runs it; the rest of
+# this run reuse that pass. A direct build (no RUN_GROUP) always runs it.
+canary_marker() {
+  python3 - "$MAC_K3D_ROOT/pipeline/BUILD.json" "$1" <<'PY'
+import hashlib, json, os, sys
+from pathlib import Path
+pipe = {}
+path = Path(sys.argv[1])
+if path.is_file():
+    try:
+        pipe = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pipe = {}
+raw = "|".join([
+    os.environ.get("RUN_GROUP", ""),
+    sys.argv[2],
+    str(pipe.get("pipeline_hash") or pipe.get("commit") or ""),
+    os.environ.get("ICODE_GIT_SHA") or os.environ.get("ICODE_RELEASE_SHA256") or "",
+])
+digest = hashlib.sha256(raw.encode()).hexdigest()[:32]
+workspace = os.environ.get("WORKSPACE", "")
+if workspace:
+    base = Path(workspace).resolve().parent.parent / ".mac-k3d" / "canary-markers"
+else:
+    base = Path.home() / ".mac-k3d" / "canary-markers"
+print(base / digest)
+PY
+}
+
+CANARY_MARKER=""
+if [ -n "${RUN_GROUP:-}" ] && [ "$CANARY_MODE" != only ]; then
+  CANARY_MARKER="$(canary_marker "${TASK_IDS[0]}")"
+  if [ -s "$CANARY_MARKER" ]; then
+    source_build="$(tr -d '[:space:]' <"$CANARY_MARKER")"
+    echo "canary: reused from $source_build"
+    python3 "$PIPELINE_LIB/provenance.py" record-canary-reuse \
+      --inputs "$PROTOCOL_INPUTS" --source "$source_build" || true
+    exit 0
+  fi
+fi
+
 ensure_harbor_egress
 ensure_trial_network
 teardown_on_exit "$CANARY_DIR"
 warn_docker_mtu
 rm -rf "$CANARY_DIR"
 mkdir -p "$CANARY_DIR"
+python3 "$PIPELINE_LIB/trial_network.py" owner --out "$CANARY_DIR/owner.json" || true
 FALLBACK="$CANARY_DIR/fallback.tsv"
 : >"$FALLBACK"
 if [ -n "${CANARY_ALLOW_HOST:-}" ]; then
@@ -101,4 +144,9 @@ if [ "$rc" != 0 ] && [ "$CANARY_MODE" != only ] && [ "$(wc -l <"$FALLBACK" | tr 
   die "no question's canary trial started (see $CANARY_DIR/report.md), so isolation is not proven; the run stops here"
 fi
 [ "$rc" = 0 ] || die "isolation canary failed (see $CANARY_DIR/report.md); the run stops here"
+if [ -n "$CANARY_MARKER" ]; then
+  mkdir -p "$(dirname "$CANARY_MARKER")"
+  printf '%s\n' "${JOB_NAME:-local}#${BUILD_NUMBER:-0}" >"$CANARY_MARKER"
+fi
+python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$CANARY_DIR" || true
 echo "canary: pass ($(( ${#expect[@]} / 2 )) tasks, report $CANARY_DIR/report.md)"

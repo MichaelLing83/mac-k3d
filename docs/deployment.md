@@ -112,10 +112,10 @@ Use all three. Executors provide coarse safety; locks provide workload-aware sch
 
 ### What the eval jobs actually do
 
-`mac-k3d config -c worker.yaml` (which `setup` runs) implements this for evaluation: it sets `numExecutors` to **1** and creates lockable resources `<agent>-core-1..N`, each labelled with **both** the shared `CPU_CORES` label and the agent name. Each eval build then takes every core of its own node:
+`mac-k3d config -c worker.yaml` (which `setup` runs) implements this for evaluation: it sets `numExecutors` to `cpu_cores / cpus_per_executor` and creates lockable resources `<agent>-core-1..cpu_cores`, each labelled with the agent name. Each `one_task` build then locks the CPUs its question declares:
 
 ```groovy
-lock(label: env.NODE_NAME, resource: null, variable: 'HELD_CORES')
+lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES')
 ```
 
 Locking the node name rather than the shared label is what makes multi-worker safe: with a shared label, a build running on Mac B could hold tokens that represent Mac C's cores, and both machines would oversubscribe. With no quantity the build holds all of its node's cores, and their count sets Harbor's `-n`. One executor matters too: Jenkins' default load balancer prefers the same node for every build of one job, so with several executors per node the shards of one suite would pile onto one worker. The lock wraps only the `Evaluate` stage, one of the seven pipeline stages ([pipeline.md](pipeline.md)).
