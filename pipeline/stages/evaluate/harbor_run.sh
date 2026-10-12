@@ -187,13 +187,17 @@ run_harbor() {
     echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory (iCode exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
     echo "  Removing the container now. The rollout is queued again at the end of the run."
     python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$JOBS_DIR" || true
-  elif [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
-    icode_reclaim_host_tree "$HOST_ICODE"
-    die "harbor run exited $rc before any trial finished: $(harbor_last_error "$unit_log") (see $unit_log)"
-  elif [ "${rewards:-0}" -eq 0 ]; then
-    echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
-  elif [ "$rc" -ne 0 ]; then
-    echo "WARNING: harbor run exited $rc. Rewards are present; treating them as scores."
+  else
+    # This workspace is shared. A previous build's list must not mark this one.
+    rm -f "$HARNESS_DIR/oom_trials.txt"
+    if [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
+      icode_reclaim_host_tree "$HOST_ICODE"
+      die "harbor run exited $rc before any trial finished: $(harbor_last_error "$unit_log") (see $unit_log)"
+    elif [ "${rewards:-0}" -eq 0 ]; then
+      echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
+    elif [ "$rc" -ne 0 ]; then
+      echo "WARNING: harbor run exited $rc. Rewards are present; treating them as scores."
+    fi
   fi
   for tid in "${TASK_IDS[@]}"; do
     python3 "$PIPELINE_LIB/provenance.py" record-image \

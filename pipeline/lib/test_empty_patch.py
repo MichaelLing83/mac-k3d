@@ -246,6 +246,10 @@ class OomTests(unittest.TestCase):
         # A scored Harbor retry must not be re-queued from leftover log text.
         guard = text[text.index('oom="$(oom_trials)"'):text.index("if [ -n \"$oom\" ]")]
         self.assertIn('[ "${rewards:-0}" -eq 0 ]', guard)
+        # A previous build's list lives in this shared workspace. No OOM this run removes it.
+        no_oom = text[text.index("else\n    # This workspace is shared.") : text.index("for tid in")]
+        self.assertIn('rm -f "$HARNESS_DIR/oom_trials.txt"', no_oom)
+        self.assertLess(no_oom.index('rm -f "$HARNESS_DIR/oom_trials.txt"'), no_oom.index("elif"))
 
 
 class NotesAndCellTests(unittest.TestCase):

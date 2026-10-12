@@ -251,6 +251,10 @@ class StageWiringTests(unittest.TestCase):
         self.assertIn("record-resources", slots)
         # The measured peak of an earlier build must not shrink this build's slots.
         self.assertLess(slots.index('"$HARNESS_DIR/container_mem_peak_gb"'), slots.index('task_resources.py" plan'))
+        # The previous build's OOM list must not mark this one. Environment drops it too.
+        self.assertIn('"$HARNESS_DIR/oom_trials.txt"', slots)
+        env = (stages / "env.sh").read_text(encoding="utf-8")
+        self.assertIn('"$HARNESS_DIR/oom_trials.txt"', env)
         cmd = (stages / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         self.assertIn("eval_resources.json", cmd)
         # Harbor applies task.toml unless an operator deliberately opts out.

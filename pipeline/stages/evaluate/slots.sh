@@ -19,7 +19,8 @@ rm -f "$HARNESS_DIR/harbor_jobs_dir.txt" \
   "$HARNESS_DIR/container_mem.jsonl" \
   "$HARNESS_DIR/container_mem_current.json" \
   "$HARNESS_DIR/active_question.txt" \
-  "$HARNESS_DIR/skipped_questions.txt"
+  "$HARNESS_DIR/skipped_questions.txt" \
+  "$HARNESS_DIR/oom_trials.txt"
 echo "slots: cleared harbor_runs/jenkins-${BUILD_NUMBER:-local} for this run"
 
 RESOURCE_PLAN="$WORKDIR/eval_resources.json"
