@@ -172,7 +172,7 @@ Extract the `pipeline/` this binary was built with. Every Jenkins eval build run
 ```bash
 mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline"
 mac-k3d pipeline --extract-to "$WORKSPACE/mac-k3d-pipeline" --require-clean   # every Jenkins build
-mac-k3d --version     # mac-k3d 0.5.2 (<commit>[, dirty])
+mac-k3d --version     # mac-k3d 0.5.3 (<commit>[, dirty])
 ```
 
 | Flag | Description |

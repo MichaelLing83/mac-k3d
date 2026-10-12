@@ -7,7 +7,7 @@ Two different downloads:
 - **mac-k3d CLI** — GitHub asset `mac-k3d-linux-x86_64` (or `linux-aarch64` / `darwin-aarch64` / `darwin-x86_64`). Used in steps 1–2.
 - **iCode release** — official `icode-<os>-<arch>-full-vX.Y.Z` from the iCode project. Jenkins **uploads** it on **Build with Parameters**. Local `--stage` / `--local` still uses a worker path or `~/.local/share/mac-k3d/` discover. Not the same file as mac-k3d.
 
-Prefer **v0.5.2** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old iCode step: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
+Prefer **v0.5.3** Latest (or this checkout’s `cargo build --release`). **v0.5.1** DeepSWE Pier used the wrong iCode CLI and often exited in ~20s. **v0.5.0** still has the old iCode step: it only accepts a file named `icode` or a `*.tar.gz` / `*.tgz`. An extensionless `icode-…-full-…` download needs v0.5.1+.
 
 Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (default `deepseek-flash`; also `deepseek-v4-pro`). `setup` installs the Harbor version pinned in `pipeline/config/toolchain.env` (0.22.0), and every build's `env` phase checks it again. How each Harbor flag is used: [pipeline.md](pipeline.md#how-harbor-is-called). Release and git mount that iCode the same way and run one `icode run` per rollout with `ICODE_PROVIDER=DeepSeek`, `ICODE_REASONING_EFFORT=high`, `ICODE_API_BASE=https://api.deepseek.com/v1`, `ICODE_MAX_TOKENS=65536` and `ICODE_MAX_ITERATIONS=500` (the iCode developers' eval limits). The Jenkins model choice stays the catalog id. The report labels it `openai/<id>` and records the real provider and reasoning effort under `eval_protocol`.
 
@@ -60,7 +60,7 @@ mkdir -p "$HOME/.local/bin"
 
 # Download the mac-k3d CLI (change tag/arch if needed)
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.2/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.3/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 
@@ -92,7 +92,7 @@ export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
 # Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.2/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.3/mac-k3d-linux-x86_64"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval

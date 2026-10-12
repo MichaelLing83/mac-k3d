@@ -44,13 +44,13 @@ Every test names a commit, so a bad change is revertible and a good result is re
    bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worker>
    ```
 
-   It must end with `All hosts run mac-k3d 0.5.2 (<sha>).` and each worker's `config` should say `Jenkins agent unchanged, left running` unless the controller's `agent.jar` changed.
+   It must end with `All hosts run mac-k3d 0.5.3 (<sha>).` and each worker's `config` should say `Jenkins agent unchanged, left running` unless the controller's `agent.jar` changed.
 2. Open `deepswe_one_task` -> **Build with Parameters**. There is no pipeline field: the build runs the worker's binary.
 3. To re-run an exact past build, check out the `pipeline.commit` from that build's `artifact.json`, redeploy, and rebuild. Every build refuses a dirty binary (`--require-clean`).
 
 Console signals, in order:
 
-- `mac-k3d pipeline <sha> (mac-k3d 0.5.2, /home/<user>/.local/bin/mac-k3d)` in the Environment stage — the SHA actually under test
+- `mac-k3d pipeline <sha> (mac-k3d 0.5.3, /home/<user>/.local/bin/mac-k3d)` in the Environment stage — the SHA actually under test
 - `PROGRESS 45% evaluate: canary + harbor run (holding $CPU_LOCK_QTY cores on $NODE_NAME)` — the lock is per node
 - one `harbor run` line, with `-k` equal to `N_ROLLOUTS` and `-n` equal to the planned slots
 - `declared cpus=2 memory_mb=8192` (DeepSWE) or `cpus=4` (LoLBench) and **no** `--override-cpus`

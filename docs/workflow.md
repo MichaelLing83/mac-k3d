@@ -131,7 +131,7 @@ bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worke
 
 It asks each host's SSH password once and copies the binary to every remote host as `mac-k3d.new` first. If the copy fails `--version` on any host (another OS, or an older glibc than the build machine's), it stops before switching any host. It ends by comparing `mac-k3d --version` everywhere. The command is the same whatever changed (pipeline script, job XML, agent registration), so there is no table of which binary has to move.
 
-`--version` prints `mac-k3d 0.5.2 (<commit>)`, plus `, dirty` when `src/` or `pipeline/` had uncommitted changes at build time. The first stage (Environment) runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`, prints `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)`, and `artifact.json` records `eval_protocol.pipeline` as `{source: binary, version, commit, dirty, pipeline_hash}`. The other six stages reuse that extract, so a redeploy during a build does not change the scripts under it. That gives the loop:
+`--version` prints `mac-k3d 0.5.3 (<commit>)`, plus `, dirty` when `src/` or `pipeline/` had uncommitted changes at build time. The first stage (Environment) runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`, prints `mac-k3d pipeline <commit> (mac-k3d <version>, <binary>)`, and `artifact.json` records `eval_protocol.pipeline` as `{source: binary, version, commit, dirty, pipeline_hash}`. The other six stages reuse that extract, so a redeploy during a build does not change the scripts under it. That gives the loop:
 
 - **Did my fix work?** Redeploy, rebuild, compare `pipeline.commit` with the previous build's.
 - **Did that commit break it?** Check out the known-good commit, redeploy, rebuild.

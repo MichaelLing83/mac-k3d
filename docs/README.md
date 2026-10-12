@@ -53,7 +53,8 @@ Current install is the GitHub Release binary on **Users** above. This table is t
 
 | Version | What it implemented | Where to read |
 |---------|---------------------|---------------|
-| v0.5.2 (this tree) | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe; SWE-bench Pro third job | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
+| v0.5.3 (this tree) | One `one_task` build is one question and one rollout. Executors are `cpu_cores / 2`. An out-of-memory trial is queued again. The Linux agent is kept off the host OOM killer's list | [pipeline.md](pipeline.md), [evaluation.md](evaluation.md), [export-import.md](export-import.md) |
+| v0.5.2 | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe; SWE-bench Pro third job | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
 | binary-initializer (v0.4+) | Download `mac-k3d-{os}-{arch}`; `setup` installs Docker; controller vs worker | [new-machine.md](new-machine.md), [binary-initializer/README.md](binary-initializer/README.md) |
 | v0.3.0 | `cargo install` + `prepare`; user installs Docker first | **Historical** below (not the product path) |
 

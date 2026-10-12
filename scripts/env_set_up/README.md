@@ -119,7 +119,7 @@ Does **not** prove DeepSeek credentials or the evaluate phase onwards. For those
 
 **Purpose:** File-only `mac-k3d export` / `import` on this machine’s live `worker.yaml` or `config.yaml`. Writes scratch files under `/tmp`. Never `--force` onto `~/.config/mac-k3d/`. Does **not** queue Jenkins or call the LLM.
 
-Needs a binary that has `export` (this branch’s `target/release/mac-k3d`, not GitHub v0.5.2).
+Needs a binary that has `export` (GitHub v0.5.3 or this checkout’s `target/release/mac-k3d`).
 
 ```bash
 MAC_K3D_BIN="$PWD/target/release/mac-k3d" ./scripts/env_set_up/05_check_export_import.sh

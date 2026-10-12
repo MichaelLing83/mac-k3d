@@ -228,7 +228,7 @@ Scale workers, not controllers. Lockable-resources state is per-controller, so a
 
 | Where | What records the pipeline |
 |---|---|
-| Worker binary | `mac-k3d --version` → `mac-k3d 0.5.2 (<commit>[, dirty])` |
+| Worker binary | `mac-k3d --version` → `mac-k3d 0.5.3 (<commit>[, dirty])` |
 | The build's extract | `pipeline/BUILD.json` → `version`, `commit`, `dirty`, `pipeline_hash`, `binary` |
 | `artifact.json` | `eval_protocol.pipeline` → `source: binary` plus the same four fields |
 | Aggregate of shards | `pipeline_status: same`, or `mixed` with each commit/hash when a worker missed a redeploy |

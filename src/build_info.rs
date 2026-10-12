@@ -6,7 +6,7 @@ use serde::Serialize;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const COMMIT: &str = env!("MAC_K3D_GIT_COMMIT");
 pub const PIPELINE_HASH: &str = env!("MAC_K3D_PIPELINE_HASH");
-/// `0.5.2 (84c66ededd24)` or `0.5.2 (84c66ededd24, dirty)`; what `--version` prints.
+/// `0.5.3 (<commit>)` or `0.5.3 (<commit>, dirty)`; what `--version` prints.
 pub const VERSION_LINE: &str = env!("MAC_K3D_VERSION_LINE");
 const DIRTY: &str = env!("MAC_K3D_GIT_DIRTY");
 

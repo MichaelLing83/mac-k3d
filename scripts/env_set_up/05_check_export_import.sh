@@ -7,7 +7,7 @@ source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 require_mac_k3d
 
 "$MAC_K3D_BIN" export --help >/dev/null 2>&1 \
-  || die "this mac-k3d has no export (need feat/config-export-import or a later Release; not GitHub v0.5.2)"
+  || die "this mac-k3d has no export (need GitHub v0.5.3 or later)"
 pass "CLI lists export"
 
 src=""
