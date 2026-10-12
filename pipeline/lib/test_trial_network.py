@@ -952,26 +952,97 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class OwnerSweepTests(unittest.TestCase):
+    def _owner(self, path: Path, pid: int, started: str) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "owner.json").write_text(json.dumps({"pid": pid, "started": started}) + "\n", encoding="utf-8")
+
     def test_a_dead_owner_is_swept_and_a_live_one_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            live = root / "live"
-            dead = root / "dead"
-            live.mkdir()
-            dead.mkdir()
-            (live / "owner.json").write_text(
-                json.dumps({"pid": os.getpid(), "started": tn.process_start(os.getpid())}),
-                encoding="utf-8",
-            )
-            (dead / "owner.json").write_text(
-                json.dumps({"pid": 1 << 30, "started": "gone"}),
-                encoding="utf-8",
-            )
-            with mock.patch.object(tn, "teardown", return_value=1) as torn:
+            self._owner(root / "live", os.getpid(), tn.process_start(os.getpid()) or "")
+            self._owner(root / "dead", 1 << 30, "gone")
+            with mock.patch.object(tn, "teardown", return_value=1) as torn, mock.patch("sys.stdout") as out:
+                out.write = mock.Mock()
                 self.assertEqual(tn.sweep([root]), 1)
-            torn.assert_called_once_with(dead)
+            torn.assert_called_once_with(root / "dead", quiet=True)
+            text = "".join(call.args[0] for call in out.write.call_args_list)
+            self.assertEqual(text, "sweep: removed 1 project(s) of dead owners\n")
+            self.assertNotIn(str(1 << 30), text)
             self.assertTrue(tn.owner_alive({"pid": os.getpid(), "started": tn.process_start(os.getpid())}))
             self.assertFalse(tn.owner_alive({"pid": 1 << 30, "started": "gone"}))
+
+    def test_sweep_prints_one_line_when_nothing_is_left(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("old-a", "old-b"):
+                self._owner(root / name, 1 << 30, "gone")
+            with mock.patch.object(tn, "teardown", return_value=0), mock.patch("sys.stdout") as out:
+                out.write = mock.Mock()
+                self.assertEqual(tn.sweep([root]), 0)
+            text = "".join(call.args[0] for call in out.write.call_args_list)
+            self.assertEqual(text, "sweep: 2 dead owners, nothing left to remove\n")
+            self.assertNotIn("pid", text)
+            with mock.patch("sys.stdout") as out:
+                out.write = mock.Mock()
+                self.assertEqual(tn.sweep([root / "missing"]), 0)
+            self.assertEqual(
+                "".join(call.args[0] for call in out.write.call_args_list),
+                "sweep: no dead owners\n",
+            )
+
+
+class StoppedRunTests(FakeHost):
+    def test_a_stopped_run_is_force_removed_and_a_finished_one_is_cleaned_up(self):
+        runs = self.root / "ws" / "deepswe_one_task" / "eval-runs" / "harness" / "harbor_runs"
+        dead = runs / "jenkins-9"
+        live = runs / "jenkins-10"
+        done = runs / "jenkins-8"
+        old = runs / "jenkins-7"
+        trial_dir(job_dir(dead / "job") / "stopped__Aa11111")
+        trial_dir(job_dir(live / "job") / "running__Bb22222")
+        trial_dir(job_dir(done / "job") / "finished__Cc33333")
+        trial_dir(job_dir(old / "job") / "gone__Dd44444")
+        (dead / "owner.json").write_text(json.dumps({"pid": 1 << 30, "started": "gone"}) + "\n", encoding="utf-8")
+        (old / "owner.json").write_text(json.dumps({"pid": 1 << 30, "started": "gone"}) + "\n", encoding="utf-8")
+        (live / "owner.json").write_text(
+            json.dumps({"pid": os.getpid(), "started": tn.process_start(os.getpid())}) + "\n",
+            encoding="utf-8",
+        )
+        networks, containers = [], []
+        for project, state, subnet in (
+            ("stopped__aa11111__env", "running", "10.213.0.0/28"),
+            ("running__bb22222__env", "running", "10.213.0.16/28"),
+            ("finished__cc33333__env", "exited", "10.213.0.32/28"),
+        ):
+            networks.append(network(f"{project}_default", subnet, project))
+            containers.append(container(f"{project}-main-1", state, project, f"{project}_default"))
+        self.set_docker(networks, containers)
+        self.reserve("10.213.0.0/28", 1 << 30, "stopped__aa11111__env")
+        self.reserve("10.213.0.16/28", os.getpid(), "running__bb22222__env")
+
+        sweep = self.cli("sweep", "--root", str(runs))
+        self.assertEqual(sweep.returncode, 0, sweep.stderr)
+        self.assertEqual(sweep.stdout, "sweep: removed 1 project(s) of dead owners\n")
+        self.assertNotIn("jenkins-", sweep.stdout)
+        self.assertEqual(
+            self.container_names(),
+            {"running__bb22222__env-main-1", "finished__cc33333__env-main-1"},
+        )
+        self.assertEqual(set(self.reservations()), {"10.213.0.16/28"})
+
+        clean = self.cli("cleanup", "--root", str(runs))
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertIn("cleanup: removed finished__cc33333__env (1 container(s)", clean.stdout)
+        self.assertIn(
+            "cleanup: kept running__bb22222__env: running__bb22222__env-main-1 is running",
+            clean.stdout,
+        )
+        self.assertEqual(self.container_names(), {"running__bb22222__env-main-1"})
+        self.assertEqual(self.network_names(), {"running__bb22222__env_default"})
+
+        again = self.cli("sweep", "--root", str(runs))
+        self.assertEqual(again.stdout, "sweep: 2 dead owners, nothing left to remove\n")
+        self.assertEqual(self.container_names(), {"running__bb22222__env-main-1"})
 
 
 if __name__ == "__main__":

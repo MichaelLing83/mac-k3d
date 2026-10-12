@@ -374,7 +374,7 @@ def in_use(net: dict, held: list[ipaddress.IPv4Network]) -> bool:
     return any(s.overlaps(h) for s in net["subnets"] for h in held)
 
 
-def remove_project(verb: str, project: str, group: dict, force: bool) -> bool:
+def remove_project(verb: str, project: str, group: dict, force: bool, *, quiet: bool = False) -> bool:
     ids = [c["id"] for c in group["containers"]]
     if ids:
         rc, _, err = run(["docker", "rm", *(["-f"] if force else []), *ids])
@@ -388,8 +388,9 @@ def remove_project(verb: str, project: str, group: dict, force: bool) -> bool:
             removed.append(net["name"])
         else:
             print(f"WARNING: {verb}: could not remove network {net['name']}: {first_line(err) or f'exit {rc}'}")
-    nets = f"network {', '.join(removed)}" if removed else "no network"
-    print(f"{verb}: removed {project} ({len(ids)} container(s), {nets})")
+    if not quiet:
+        nets = f"network {', '.join(removed)}" if removed else "no network"
+        print(f"{verb}: removed {project} ({len(ids)} container(s), {nets})")
     return True
 
 
@@ -484,9 +485,10 @@ def sweep(roots: list[Path]) -> int:
     """Force-remove trials whose owner process is gone.
 
     ``owner.json`` sits in the jobs dir. A build that is still running keeps
-    its containers; one whose agent died does not.
+    its containers; one whose agent died does not. One summary line is printed.
     """
     count = 0
+    dead = 0
     seen: set[Path] = set()
     for root in roots:
         if not root.is_dir():
@@ -502,22 +504,25 @@ def sweep(roots: list[Path]) -> int:
                 continue
             if not isinstance(doc, dict) or owner_alive(doc):
                 continue
-            removed = teardown(jobs)
-            count += removed
-            print(f"sweep: removed {removed} project(s) of dead owner pid {doc.get('pid')} under {jobs}")
-    if count == 0:
-        print("sweep: no trials of a dead owner")
+            dead += 1
+            count += teardown(jobs, quiet=True)
+    if count:
+        print(f"sweep: removed {count} project(s) of dead owners")
+    elif dead:
+        print(f"sweep: {dead} dead owners, nothing left to remove")
+    else:
+        print("sweep: no dead owners")
     return count
 
 
-def teardown(jobs_dir: Path) -> int:
+def teardown(jobs_dir: Path, *, quiet: bool = False) -> int:
     names = trial_names([jobs_dir])
     if not names:
         return 0
     projects = compose_projects(docker_networks())
     count = 0
     for project in sorted(projects):
-        if owns(project, names) and remove_project("teardown", project, projects[project], force=True):
+        if owns(project, names) and remove_project("teardown", project, projects[project], force=True, quiet=quiet):
             count += 1
     with reservations() as held:
         for subnet in [s for s, row in held.items() if owns(str(row.get("trial") or ""), names)]:
