@@ -1,4 +1,4 @@
-"""Harbor's oracle and nop agents for tasks/images' environment check.
+"""Harbor's oracle and nop agents for the check of a native DeepSWE build (mac-k3d eval prepare).
 
 The same agents as `harbor run --agent oracle` / `--agent nop`, loaded by import
 path as iCode's and the canary's are, so the check's trials take their subnet

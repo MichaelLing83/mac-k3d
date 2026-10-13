@@ -205,8 +205,8 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     canary = isolation_record_of(protocol, "canary")
     if canary is not None:
         row["canary"] = {"status": str(canary.get("status") or ""), "summary_sha256": str(canary.get("summary_sha256") or "")}
-    # Each worker proves its own images: the same question may run published on
-    # one and built natively on another.
+    # Each Mac worker decides its own images: the same question may run natively
+    # on one and emulated on another. A Linux worker has no entries.
     if isinstance(protocol.get("env_check"), dict) and protocol["env_check"]:
         row["env_check"] = protocol["env_check"]
     images = protocol.get("images") if isinstance(protocol.get("images"), dict) else {}

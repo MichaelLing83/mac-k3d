@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The one place that builds `harbor run` command lines. Sourced after
 # _common.sh by evaluate/canary.sh, evaluate/harbor_run.sh and tasks/images.sh
-# (the environment check); never run alone.
+# (the check of a native DeepSWE build in mac-k3d eval prepare); never run alone.
 #
 #   load_eval_state    read what the tasks phase and evaluate/slots left in $WORKDIR
 #   ensure_harbor_egress  re-run env/egress's probe check right before Harbor runs
@@ -319,7 +319,7 @@ run_cmd() {
     fi
     # Harbor's docker and compose calls build and run the task images for this
     # platform, so Docker never picks its native one for an amd64-only task.
-    # RUN_PLATFORM is the platform of one environment check (tasks/images).
+    # RUN_PLATFORM is the platform of one native build's check (tasks/images in prepare).
     plat="${RUN_PLATFORM:-$(task_container_platform)}"
     if [ "$plat" != "$(docker_host_platform)" ]; then
       export DOCKER_DEFAULT_PLATFORM="$plat"

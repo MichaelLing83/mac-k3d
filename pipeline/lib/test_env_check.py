@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Unit tests for env_check (the first-time oracle + nop check in tasks/images)."""
+"""Unit tests for env_check (DeepSWE image decisions on an arm64 host, and the
+oracle + nop check of a native build that mac-k3d eval prepare runs)."""
 
 from __future__ import annotations
 
@@ -127,10 +128,15 @@ class PassRuleTests(unittest.TestCase):
         got = self.verdict({"reward": grade(35, P2P)}, {"reward": grade(F2P, P2P)})
         self.assertEqual(got["reason"], "environment check failed: oracle f2p 35/37 on built linux/arm64")
 
-    def test_no_image_is_a_fail_that_is_not_stored(self):
-        got = env_check.no_image("native build failed", source="built", platform="linux/arm64")
-        self.assertEqual((got["pass"], got["stored"]), (False, False))
-        self.assertEqual(got["reason"], "environment check failed: native build failed on built linux/arm64")
+    def test_a_failed_native_check_names_its_cause_and_whether_prepare_may_fix_it(self):
+        stored = self.verdict({"reward": grade(35, P2P)}, None)
+        self.assertEqual(env_check.native_failure(stored), ("native check failed: oracle f2p 35/37", False))
+        cached = {"verdict": stored, "checked_in": "local#0"}
+        self.assertEqual(env_check.native_failure(cached), ("native check failed: oracle f2p 35/37", False))
+        crashed = self.verdict({"text": "-1\n"}, None)
+        self.assertEqual(env_check.native_failure(crashed),
+                         ("native check failed: oracle verifier crashed (reward -1.0)", True))
+        self.assertEqual(env_check.native_failure({}), ("native check failed: no result", True))
 
     def test_oracle_only_judges_the_first_half(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,7 +234,10 @@ class CacheTests(unittest.TestCase):
     def test_a_result_that_is_not_stored_leaves_the_cache_alone(self):
         store = self.root / "store"
         key = self.key()
-        verdict = env_check.no_image("native build failed", source="built", platform="linux/arm64")
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict = env_check.judge(jobs(Path(tmp), "oracle", text="-1\n"), None,
+                                      source="built", platform="linux/arm64")
+        self.assertFalse(verdict["stored"])
         env_check.record(store=store, task="alpha", key=key, verdict=verdict,
                          build_record=self.root / "env_check.json", image="", reused=False)
         self.assertFalse(env_check.store_path(store, "alpha").exists())
@@ -259,66 +268,77 @@ class BuildRecordTests(unittest.TestCase):
         self.store = self.root / "store"
         self.build = self.root / "env_check.json"
         self.selected = self.root / "selected_tasks.txt"
-        self.skipped = self.root / "skipped_tasks.txt"
 
     def tearDown(self):
         self._tmp.cleanup()
 
-    def check(self, tid: str, source: str, platform: str, oracle: dict, nop: dict | None = None) -> dict:
-        key = {"source": source, "platform": platform, "image_id": f"sha256:{tid}"}
+    def check(self, tid: str, oracle: dict, nop: dict | None = None) -> dict:
+        key = {"source": "built", "platform": "linux/arm64", "image_id": f"sha256:{tid}",
+               "dockerfile_sha256": "dfhash", "base_image": "mars-base@sha256:111"}
         with tempfile.TemporaryDirectory() as tmp:
             o = jobs(Path(tmp), "oracle", reward=oracle)
             n = jobs(Path(tmp), "nop", reward=nop) if nop is not None else None
-            verdict = env_check.judge(o, n, source=source, platform=platform)
+            verdict = env_check.judge(o, n, source="built", platform="linux/arm64")
         return env_check.record(store=self.store, task=tid, key=key, verdict=verdict, build_record=self.build,
                                 image=f"img:{tid}", reused=False)
 
-    def finish(self) -> dict:
-        return env_check.finish(build_record=self.build, selected=self.selected, skipped=self.skipped,
-                                benchmark="deepswe", host_platform="linux/arm64")
+    def emulate(self, tid: str, reason: str = "not prepared on this Mac", hint: bool = True) -> dict:
+        return env_check.emulated(build_record=self.build, task=tid, image=f"img:{tid}", reason=reason, hint=hint)
 
-    def test_a_fallback_keeps_the_native_attempt_and_settles_one_platform(self):
+    def settle(self) -> dict:
+        return env_check.settle(build_record=self.build, selected=self.selected, benchmark="deepswe",
+                                host_platform="linux/arm64")
+
+    def test_a_native_entry_records_its_build_and_check(self):
+        entry = self.check("alpha", ORACLE_PASS, NOP_PASS)
+        self.assertEqual((entry["mode"], entry["source"], entry["platform"], entry["pass"]),
+                         ("native", "built", "linux/arm64", True))
+        self.assertEqual((entry["dockerfile_sha256"], entry["base_image"]), ("dfhash", "mars-base@sha256:111"))
+        self.assertNotIn("attempts", entry)
+
+    def test_an_emulated_entry_has_the_reason_and_a_prepare_hint_only_when_prepare_helps(self):
+        entry = self.emulate("alpha")
+        self.assertEqual((entry["mode"], entry["source"], entry["platform"]), ("emulated", "published", "linux/amd64"))
+        self.assertEqual((entry["reason"], entry["hint"]), ("not prepared on this Mac", env_check.PREPARE_HINT))
+        self.assertEqual(self.emulate("beta", "x86-64-only Dockerfile", hint=False)["hint"], "")
+        self.assertNotIn("oracle", entry)
+
+    def test_emulated_from_a_failed_check_takes_its_reason(self):
+        self.check("alpha", grade(35, P2P))
+        verdict = self.root / "verdict.json"
+        with tempfile.TemporaryDirectory() as tmp:
+            verdict.write_text(json.dumps(env_check.judge(jobs(Path(tmp), "oracle", reward=grade(35, P2P)), None,
+                                                          source="built", platform="linux/arm64")), encoding="utf-8")
+        self.assertEqual(run("emulated", "--build-record", str(self.build), "--task", "alpha",
+                             "--image", "img:alpha", "--verdict", str(verdict)), 0)
+        entry = json.loads(self.build.read_text(encoding="utf-8"))["tasks"]["alpha"]
+        self.assertEqual((entry["mode"], entry["reason"], entry["hint"]),
+                         ("emulated", "native check failed: oracle f2p 35/37", ""))
+        self.assertEqual(run("emulated", "--build-record", str(self.build), "--task", "alpha"), 2)
+
+    def test_settle_picks_one_platform_for_the_selection(self):
         self.selected.write_text("alpha\nbeta\n", encoding="utf-8")
-        self.check("alpha", "built", "linux/arm64", grade(35, P2P))
-        entry = self.check("alpha", "published", "linux/amd64", ORACLE_PASS, NOP_PASS)
-        self.check("beta", "published", "linux/amd64", ORACLE_PASS, NOP_PASS)
-        self.assertEqual(entry["attempts"], [{
-            "source": "built", "platform": "linux/arm64", "pass": False, "reused": False,
-            "reason": "environment check failed: oracle f2p 35/37 on built linux/arm64",
-        }])
-        got = self.finish()
-        self.assertEqual((got["passed"], got["out"], got["platform"]), (["alpha", "beta"], [], "linux/amd64"))
+        self.check("alpha", ORACLE_PASS, NOP_PASS)
+        self.check("beta", ORACLE_PASS, NOP_PASS)
+        self.assertEqual(self.settle(), {"native": ["alpha", "beta"], "emulated": [], "platform": "linux/arm64"})
+        self.assertEqual(env_check.platform(self.build, self.selected), "linux/arm64")
+        self.emulate("alpha")
+        self.emulate("beta")
+        self.assertEqual(self.settle()["platform"], "linux/amd64")
         self.assertEqual(env_check.platform(self.build, self.selected), "linux/amd64")
         self.selected.write_text("alpha\n", encoding="utf-8")
         self.assertEqual(env_check.platform(self.build, self.selected), "")
 
-    def test_a_failed_question_is_kept_out_with_its_reason(self):
-        self.selected.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
-        self.skipped.write_text("gamma\tleak scan: solution in repo\n", encoding="utf-8")
-        self.check("alpha", "built", "linux/arm64", ORACLE_PASS, NOP_PASS)
-        self.check("beta", "built", "linux/arm64", ORACLE_PASS, grade(F2P, P2P))
-        got = self.finish()
-        self.assertEqual((got["passed"], got["out"], got["platform"]), (["alpha"], ["beta", "gamma"], "linux/arm64"))
-        self.assertEqual(self.skipped.read_text(encoding="utf-8").splitlines(), [
-            "gamma\tleak scan: solution in repo",
-            "beta\tenvironment check failed: nop f2p 37/37 (passes without the fix) on built linux/arm64",
-        ])
-
-    def test_passing_questions_must_share_a_platform(self):
+    def test_settle_refuses_a_mix_and_a_question_without_a_decision(self):
         self.selected.write_text("alpha\nbeta\n", encoding="utf-8")
-        self.check("alpha", "built", "linux/arm64", ORACLE_PASS, NOP_PASS)
-        self.check("beta", "published", "linux/amd64", ORACLE_PASS, NOP_PASS)
+        self.check("alpha", ORACLE_PASS, NOP_PASS)
         with self.assertRaises(SystemExit) as caught:
-            self.finish()
-        self.assertIn("disagree on the platform", str(caught.exception))
-
-    def test_finish_exits_3_when_every_question_is_out(self):
-        self.selected.write_text("alpha\n", encoding="utf-8")
-        self.check("alpha", "built", "linux/arm64", APPLY_FAILED)
-        code = run("finish", "--build-record", str(self.build), "--selected", str(self.selected),
-                   "--skipped", str(self.skipped), "--host-platform", "linux/arm64")
-        self.assertEqual(code, 3)
-        self.assertIn("alpha\tenvironment check failed: oracle patch did not apply", self.skipped.read_text())
+            self.settle()
+        self.assertIn("no image decision for beta", str(caught.exception))
+        self.emulate("beta")
+        with self.assertRaises(SystemExit) as caught:
+            self.settle()
+        self.assertIn("mixes native (alpha) and emulated (beta)", str(caught.exception))
 
     def test_a_reused_result_keeps_where_it_was_checked(self):
         key = {"source": "built", "platform": "linux/arm64", "image_id": "sha256:a"}
@@ -335,24 +355,26 @@ class ProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             build = Path(tmp) / "env_check.json"
             entry = {
-                "source": "built", "platform": "linux/arm64", "image": "img:alpha", "image_id": "sha256:a",
-                "pass": True, "reason": "", "checked_in": "local#0", "checked_at": "now", "reused": False,
-                "dockerfile_sha256": "dfhash", "base_image": "mars-base@sha256:111",
+                "mode": "native", "source": "built", "platform": "linux/arm64", "image": "img:alpha",
+                "image_id": "sha256:a", "pass": True, "reason": "", "checked_in": "local#0", "checked_at": "now",
+                "reused": False, "dockerfile_sha256": "dfhash", "base_image": "mars-base@sha256:111",
                 "oracle": {**grade(F2P, P2P), "apply_failed": False, "crash": False},
                 "nop": {**grade(0, P2P), "apply_failed": False, "crash": False},
-                "attempts": [{"source": "published", "platform": "linux/amd64", "pass": False,
-                              "reason": "pull failed", "reused": False, "extra": 1}],
             }
-            build.write_text(json.dumps({"tasks": {"alpha": entry, "other": entry}}), encoding="utf-8")
-            got = env_check_record(build, ["alpha", "missing"])
+            emulated = {"mode": "emulated", "source": "published", "platform": "linux/amd64", "image": "img:beta",
+                        "reason": "not prepared on this Mac", "hint": env_check.PREPARE_HINT}
+            build.write_text(json.dumps({"tasks": {"alpha": entry, "beta": emulated, "other": entry}}),
+                             encoding="utf-8")
+            got = env_check_record(build, ["alpha", "beta", "missing"])
             self.assertEqual(env_check_record(Path(tmp) / "absent.json", ["alpha"]), {})
-        self.assertEqual(list(got), ["alpha"])
+        self.assertEqual(list(got), ["alpha", "beta"])
         row = got["alpha"]
+        self.assertEqual(row["mode"], "native")
         self.assertEqual(row["oracle"], {"f2p_passed": F2P, "f2p_total": F2P, "p2p_passed": P2P,
                                          "p2p_total": P2P, "reward": 1})
         self.assertEqual(row["nop"]["f2p_passed"], 0)
         self.assertEqual((row["base_image"], row["dockerfile_sha256"]), ("mars-base@sha256:111", "dfhash"))
-        self.assertNotIn("extra", row["attempts"][0])
+        self.assertEqual(got["beta"], emulated)
 
     def test_image_inspect_records_the_image_platform(self):
         outputs = (
@@ -374,7 +396,7 @@ class ProvenanceTests(unittest.TestCase):
 
 class ShellScenarioTests(unittest.TestCase):
     def test_tasks_images_with_fake_docker_and_harbor(self):
-        """amd64 published, arm64 native, reuse, fallback, kept out, all out, prewarm."""
+        """amd64 untouched; arm64 eval native or emulated with its reason; prepare builds, checks and reuses."""
         env = dict(os.environ)
         for name in ("DEEPSWE_DIR", "DEEPSWE_DOCKER_PLATFORM", "MAC_K3D_SHARE", "MAC_K3D_EVAL_WORKDIR"):
             env.pop(name, None)

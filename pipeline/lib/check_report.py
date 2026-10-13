@@ -148,37 +148,43 @@ def _environment_units(protocol: dict) -> list[tuple[str, dict, dict, dict]]:
     return [("eval_protocol", worker, checks, platforms)]
 
 
+def _native(entry: dict) -> bool:
+    return (entry.get("mode") or ("native" if entry.get("source") == "built" else "emulated")) == "native"
+
+
 def environment_errors(doc: dict) -> list[str]:
-    """Every image ran on the task containers' platform, and every scored DeepSWE question had a proven image."""
+    """Every image ran on the task containers' platform, and a scored question that ran a native
+    DeepSWE build had a passing check. The published image under emulation needs no check."""
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else {}
     errors: list[str] = []
-    passed: set[str] = set()
     scored = tasks_with_trials(doc)
     for label, worker, checks, platforms in _environment_units(protocol):
         want = str(worker.get("container_platform") or "")
-        kept_out = set()
+        proven = set()
         for tid, entry in sorted(checks.items()):
-            if not isinstance(entry, dict) or entry.get("pass") is not True:
-                kept_out.add(str(tid))
+            if not isinstance(entry, dict):
                 continue
-            passed.add(str(tid))
             got = str(entry.get("platform") or "")
             if want and got != want:
-                errors.append(f"{label}.env_check.{tid}: checked on {got or '-'}, but the task containers ran {want}")
+                errors.append(f"{label}.env_check.{tid}: {got or '-'} image, but the task containers ran {want}")
+            if not _native(entry):
+                continue
+            if entry.get("pass") is True:
+                proven.add(str(tid))
+            elif str(tid) in scored:
+                errors.append(f"{label}.env_check.{tid}: native build without a passing check (mac-k3d eval prepare)")
         if not want:
             continue
         for tid, got in sorted(platforms.items()):
-            if str(tid) in scored and str(tid) not in kept_out and str(got) != want:
+            if str(tid) in scored and str(got) != want:
                 errors.append(f"{label}: image of {tid} is {got}, but the task containers ran {want} (container_platform.json)")
-    if doc.get("suite") == "deepswe":
-        top = protocol.get("env_check") if isinstance(protocol.get("env_check"), dict) else {}
-        passed |= {str(tid) for tid, e in top.items() if isinstance(e, dict) and e.get("pass") is True}
-        unproven = sorted(scored - passed)
-        if unproven:
-            errors.append(
-                "eval_protocol.env_check: scored DeepSWE questions have no passing environment check "
-                f"(tasks/images oracle + nop): {', '.join(unproven)}"
-            )
+        if doc.get("suite") == "deepswe" and want != "linux/amd64":
+            unproven = sorted(str(tid) for tid in platforms if str(tid) in scored and str(tid) not in proven)
+            if unproven:
+                errors.append(
+                    f"{label}: scored DeepSWE questions ran {want} images with no passing native check "
+                    f"(mac-k3d eval prepare): {', '.join(unproven)}"
+                )
     return errors
 
 

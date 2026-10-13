@@ -47,7 +47,8 @@ pub enum Command {
     /// Edit harness / LLM / model / benchmark / questions on a YAML file (no sed)
     Set(commands::SetArgs),
 
-    /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs
+    /// Run iCode / DeepSeek eval (DeepSWE or LoLBench) locally or via Jenkins *_one_task jobs;
+    /// `eval prepare` readies a Mac's DeepSWE images first
     Eval(commands::EvalArgs),
 
     /// Extract the pipeline scripts this binary was built with (Jenkins builds use this)

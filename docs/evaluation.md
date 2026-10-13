@@ -27,7 +27,7 @@ Each task's `cpus`, `memory_mb` and `storage_mb` come from its own `task.toml` a
 
 Harbor’s agent budget is the task’s `agent.timeout_sec` (often 10800s on DeepSWE) with timeout multiplier 1. A rollout that ends near 5100s is iCode stopping itself, not Harbor cutting the trial.
 
-The `report` phase stores `eval_protocol` on `artifact.json` (iCode mode, source, and `iCode under test`, model params, concurrency, `cpus_each`, the timeout note, `isolation`: what the agent could see at `/opt/icode-host`, and `env_check`: the image each question ran on and its first-time check). `provenance.md`, next to `summary.md`, prints all of it. `summary.md` and `report.html` keep a short Provenance block (pipeline commit, one line per worker, the environment check count, an isolation status) that links to `provenance.md`.
+The `report` phase stores `eval_protocol` on `artifact.json` (iCode mode, source, and `iCode under test`, model params, concurrency, `cpus_each`, the timeout note, `isolation`: what the agent could see at `/opt/icode-host`, and, on a Mac, `env_check`: whether each DeepSWE question ran natively or emulated, and why). `provenance.md`, next to `summary.md`, prints all of it. `summary.md` and `report.html` keep a short Provenance block (pipeline commit, one line per worker, a Mac's `Environment: N native, M emulated` line and its `Emulated` reasons, an isolation status) that links to `provenance.md`.
 
 DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-empty `TASKS` list wins; otherwise one `TASK`; otherwise `N_TASKS` is the first N sorted ids, skipping the first `TASK_OFFSET` of them. Full suite sizes are DeepSWE 113, LoLBench 20, and SWE-bench Pro 731. `N_ROLLOUTS` is how many attempts each question gets. Job default is 4.
 
@@ -73,7 +73,7 @@ The merge writes one `artifact.json` / `summary.md` / `report.html` under `aggre
 **Build status.** A failure stays at the level where it happened:
 
 - A rollout that failed (Harbor exception, OOM kill, missing `reward.json`) is listed under Unscored with its cause, or scored with the grader's result. Its `one_task` build prints `WARNING: <n> rollouts have no score (causes above; see Unscored in summary.md)` and keeps its result.
-- A question that cannot run (a leak-scan hit, see [Leak scan](#same-protocol-for-every-benchmark-and-model); or no image that passed the [environment check](#environment-check-eval_protocolenv_check)) is skipped and named under `Questions without a score`; the shard runs its other questions.
+- A question that cannot run (a leak-scan hit, see [Leak scan](#same-protocol-for-every-benchmark-and-model)) is skipped and named under `Questions without a score`; the shard runs its other questions. A Mac question without a proven native build is not skipped: it runs emulated ([Environment check](#environment-check-eval_protocolenv_check)).
 - The dispatcher turns UNSTABLE only when a shard ended `FAILURE`, `ABORTED` or `NOT_BUILT`, and lists it under `Shards that did not succeed`. Its questions count as not run.
 - A shard that ended `FAILURE` before Harbor started (no `harbor_runs/jenkins-<n>/`) is queued once more; the dispatcher prints `Retried once after failing before Harbor started: …`. The shard's post step sets `env.HARBOR_STARTED='1'` once that folder exists, and the dispatcher reads it from `run.buildVariables`. A shard that failed after Harbor started, or whose variables cannot be read, is never retried, so no token is spent twice. A user abort is never retried.
 
@@ -82,11 +82,11 @@ The merged `eval_protocol` starts from the protocol the first shard's own report
 - `isolation.leak_scan`: the union of `hit_tasks` and the sum of `statuses`. Each shard's `report_sha256` moves to its shard row as `leak_scan_sha256`.
 - `isolation.canary`: `pass` only when every such shard recorded `pass`, `fail` when any shard failed (a stopped shard's failure counts too), `missing` when one has no record. Task, failed, warning, node and `fallback_from` lists are unions, and each shard row keeps its canary `status` and `summary_sha256`.
 - `isolation.trial_network` (same pool): `free` is the smallest, and `need_by_shard` renders as `need 8 · 1 (by shard)`.
-- `env_check`: one entry per merged question. When shards on different workers checked the same question, a pass wins over a fail. Each shard row keeps its own `env_check`, and `provenance.md` prints every shard's checks with a Worker column, so a question proven natively on a Mac and on the published image on Linux shows both, with their counts.
+- `env_check`: one entry per merged question that ran on a Mac; a native pass wins over an emulated entry. Each shard row keeps its own `env_check`, and `provenance.md` prints every Mac shard's rows with a Worker column, so a question that ran natively on one Mac and emulated on another shows both. Linux shards have none.
 - `resources` and `doc["resources"]`: one node runs its shards one after another, so each node counts once (its largest plan), and nodes add up. Concurrency, `cpu_lock_qty` and the Timing line use the sum; the Resources line gets one sub-line per node. `declared.per_task` is the union, `peak` the maximum, `tasks` the sum.
 - `container_mem_max_gb` is the largest shard peak, and `aggregate/container_mem.jsonl` keeps every shard's rows with a `shard` field. `skipped_questions` is the union of the shards' `skipped_tasks.txt`.
 
-`eval_protocol.shards` keeps one entry per shard: `shard`, `builds`, `worker`, `resources`, `model_params`, `icode_version`, `egress_probe`, `trial_network`, `leak_scan_sha256`, `canary`, `env_check` (that shard's environment check per question) and `image_platforms` (the platform of each question's image). With a plan, each entry also has the shard's `result`, plus `not_run` (or `not_run_count` and `not_run_offset`) when it ran no trials. `provenance.md` prints one `Worker (shard N jenkins-M)` line for each, ending with that shard's `egress probe Harbor default <image>` or `egress probe substituted <image>`, then `trial networks <pool> /<prefix> (<free> free)` when that shard checked its trial subnets. A shard with no trials reads like `Worker (shard 2 jenkins-61): FAILURE before any trial · 2 questions not run: wazero-multi-module-snapshots, ytt-jsonpath-query-api`. The merged `Egress probe:` line appears only when every shard that recorded a probe used the same image, and the merged `Trial networks:` line only when every shard that checked used the same mode, pool and prefix. The image table lists only the merged questions; each shard's tasks phase also keeps only its own selection. `Requester` names the dispatcher build (`--build-url`) and the Jenkins user who started it (`--requester-user`). Every job sets `BUILD_USER` from `currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')`, which also covers an API token's owner for `mac-k3d eval --job`. A dispatcher forwards that user to its shards in the hidden `REQUESTED_BY` parameter. A build that no user started stays `unknown`, and `eval --local` records `local <login>`. The model label is `openai/<model>`, as in a single run's report. When the shards differ in model, API base, provider, reasoning effort, `max_tokens`, `max_iterations` or the iCode commit or release sha256, the merge sets `model_params_status: mixed`, lists the differences in `model_params_mismatch`, prints a WARNING, and adds a `Shards differ` line to `provenance.md` and to the short Provenance block. The short block has one `Worker <node> (shard N jenkins-M): os … · containers …` line per shard. A value a shard did not record, because it stopped before recording it, is unknown rather than different.
+`eval_protocol.shards` keeps one entry per shard: `shard`, `builds`, `worker`, `resources`, `model_params`, `icode_version`, `egress_probe`, `trial_network`, `leak_scan_sha256`, `canary`, `env_check` (a Mac shard's native or emulated choice per question) and `image_platforms` (the platform of each question's image). With a plan, each entry also has the shard's `result`, plus `not_run` (or `not_run_count` and `not_run_offset`) when it ran no trials. `provenance.md` prints one `Worker (shard N jenkins-M)` line for each, ending with that shard's `egress probe Harbor default <image>` or `egress probe substituted <image>`, then `trial networks <pool> /<prefix> (<free> free)` when that shard checked its trial subnets. A shard with no trials reads like `Worker (shard 2 jenkins-61): FAILURE before any trial · 2 questions not run: wazero-multi-module-snapshots, ytt-jsonpath-query-api`. The merged `Egress probe:` line appears only when every shard that recorded a probe used the same image, and the merged `Trial networks:` line only when every shard that checked used the same mode, pool and prefix. The image table lists only the merged questions; each shard's tasks phase also keeps only its own selection. `Requester` names the dispatcher build (`--build-url`) and the Jenkins user who started it (`--requester-user`). Every job sets `BUILD_USER` from `currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')`, which also covers an API token's owner for `mac-k3d eval --job`. A dispatcher forwards that user to its shards in the hidden `REQUESTED_BY` parameter. A build that no user started stays `unknown`, and `eval --local` records `local <login>`. The model label is `openai/<model>`, as in a single run's report. When the shards differ in model, API base, provider, reasoning effort, `max_tokens`, `max_iterations` or the iCode commit or release sha256, the merge sets `model_params_status: mixed`, lists the differences in `model_params_mismatch`, prints a WARNING, and adds a `Shards differ` line to `provenance.md` and to the short Provenance block. The short block has one `Worker <node> (shard N jenkins-M): os … · containers …` line per shard. A value a shard did not record, because it stopped before recording it, is unknown rather than different.
 
 Merge an already-collected set of shards by hand:
 
@@ -163,36 +163,50 @@ A tree sanitized by an older sanitizer version has already lost its stdlib sourc
 - The canary proves isolation on the tasks it ran on, on that worker. `CANARY=on` covers only the first selected task whose trial started; run `CANARY=only` on the whole suite after a Harbor, Docker or kernel change.
 - LoLBench task allowlists declare `openrouter.ai`, `api.openai.com` and `api.anthropic.com` for the agent phase. The canary warns when they are reachable; closing them needs a versioned task overlay (tracked in the integration log).
 - **Harbor has no contamination gate.** `harbor job summarize` is a removed shim that only prints a deprecation notice, and `harbor analyze` is rubric-only. Neither reads the gold patch, scans a transcript for leakage, or can reject a trial. Every control in this table is therefore mac-k3d's, and delegating scheduling to Harbor did not delegate integrity.
-- The environment check below runs for DeepSWE only, as a written exception to the rule above. It proves the task image, not the harness, and its pass rule reads the F2P/P2P counts of DeepSWE's grader. DeepSWE is also the only suite where an arm64 worker swaps the published image for its own build. LoLBench's native builds are not proven this way yet, and SWE-bench Pro runs its published images as they are. The test is `test_images_and_env_checks_must_match_the_task_containers` in `test_report.py`.
+- The environment check below is for DeepSWE on a Mac only, as a written exception to the rule above. It proves a native build of the task image, not the harness, and its pass rule reads the F2P/P2P counts of DeepSWE's grader. DeepSWE is the only suite where an arm64 worker swaps the published image for its own build. LoLBench's native builds are not proven this way yet, and the published images (DeepSWE on Linux or emulated, SWE-bench Pro) run as they are, with no check. The test is `test_a_native_question_needs_a_passing_check_and_images_match_the_task_containers` in `test_report.py`.
 
 ### Environment check: `eval_protocol.env_check`
 
-Before any rollout, `tasks/images` proves the image each DeepSWE question will run on, on that worker ([pipeline.md](pipeline.md#deepswe-on-linux-and-macos) has the image choice per host). Harbor's oracle agent applies the reference solution: every fail-to-pass (F2P) test must pass, there must be at least one, and every pass-to-pass (P2P) test must pass. Then its nop agent changes nothing: at least one F2P test must fail, and every P2P test must still pass. No model is called. A patch that does not apply (`apply_failed`), a crashed verifier (`reward.txt` `-1`), a missing `reward.json` or a timeout is a fail. The answer is stored on the worker under `$MAC_K3D_SHARE/env-check/deepswe/<id>.json` and reused while the image id, the task files, `HARBOR_VERSION` and (for a native build) the Dockerfile and the base digest stay the same.
+A Linux worker runs every DeepSWE question on its published linux/amd64 image, which Harbor pulls at the trial, and records no `env_check`. A Mac worker runs a question natively only on a build that `mac-k3d eval prepare` made and proved on that Mac, and every other question on the published image under emulation. [pipeline.md](pipeline.md#deepswe-on-linux-and-macos) has the rules and the reasons.
 
-A question with no image that passed is kept out of Harbor: its reason goes into `skipped_tasks.txt` (for example `environment check failed: oracle f2p 35/37 on published linux/amd64`), and the report lists it under `Questions without a score` and in `provenance.md` under `Kept out of Harbor`. The build fails only when every selected question is out.
+The check is Harbor's oracle agent, then its nop agent:
 
-`eval_protocol.env_check[<id>]` records, for each scored question:
+- **oracle:** applies the reference solution. Every fail-to-pass (F2P) test must pass, there must be at least one, and every pass-to-pass (P2P) test must pass.
+- **nop:** changes nothing. At least one F2P test must fail, and every P2P test must still pass.
+
+No model is called. A patch that does not apply (`apply_failed`), a crashed verifier (`reward.txt` `-1`), a missing `reward.json` or a timeout is a fail. The answer is stored on the Mac under `$MAC_K3D_SHARE/env-check/deepswe/<id>.json`. An eval trusts it only while these stay the same:
+
+- the image id;
+- the task files;
+- `HARBOR_VERSION`;
+- the Dockerfile and the base digest.
+
+An eval never runs the check itself.
+
+No question is kept out over its image: an emulated question still runs and is scored. `eval_protocol.env_check[<id>]` records, for each question on a Mac:
 
 | Field | Meaning |
 |---|---|
-| `source` | `published` (the image `task.toml` names) or `built` (a native build of `environment/Dockerfile`) |
-| `platform` | The platform the check ran on, for example `linux/arm64` |
-| `image`, `image_id` | The official name the trials used, and the image id that was checked |
-| `pass`, `reason` | The verdict, and why it failed |
-| `oracle`, `nop` | `f2p_passed`, `f2p_total`, `p2p_passed`, `p2p_total` and `reward` from each agent's `reward.json` |
-| `checked_in`, `checked_at` | The build that ran the check (`deepswe_one_task#12`, `local#0`) and when |
-| `reused` | `true` when this build reused the stored answer instead of running Harbor |
-| `dockerfile_sha256`, `base_image` | A native build only: the Dockerfile's sha256 and the pinned base (`DEEPSWE_BASE_IMAGE`) |
-| `attempts` | Earlier tries in the same build, for example a native build that failed before the published image passed |
+| `mode` | `native` (the prepared build) or `emulated` (the published image) |
+| `source` | `built` (a native build of `environment/Dockerfile`) or `published` (the image `task.toml` names) |
+| `platform` | `linux/arm64` for a native build, `linux/amd64` emulated |
+| `image`, `image_id` | The official name the trials used, and the native build's image id |
+| `pass`, `reason` | Native: the stored verdict. Emulated: why the question could not run natively, for example `not prepared on this Mac` or `native check failed: oracle f2p 35/37` |
+| `hint` | Emulated: `run mac-k3d eval prepare --benchmark deepswe` when that could make it native, else empty |
+| `oracle`, `nop` | Native: `f2p_passed`, `f2p_total`, `p2p_passed`, `p2p_total` and `reward` from each agent's `reward.json` |
+| `checked_in`, `checked_at` | Native: the run that checked it (`local#0` for `prepare`) and when |
+| `reused` | Native: `true` (an eval always reuses the stored check) |
+| `dockerfile_sha256`, `base_image` | Native: the Dockerfile's sha256 and the pinned base (`DEEPSWE_BASE_IMAGE`) |
 
-`eval_protocol.images[<id>].platform` is the platform of the image the trials used (`docker image inspect`). `provenance.md` prints the check as an `## Environment check` table (Task, Worker, Source, Platform, Image, oracle F2P, oracle P2P, nop F2P, nop P2P, Result, Checked in, Reused). The short block in `summary.md` and `report.html` reads `Environment check: N of T passed (M reused, K kept out)`.
+`eval_protocol.images[<id>].platform` is the platform of the image the trials used (`docker image inspect`). `provenance.md` prints an `## Environment` table: Task, Worker, Environment, Platform, Image, oracle F2P, oracle P2P, nop F2P, nop P2P, Checked in, Reused, Reason. The short block in `summary.md` and `report.html` reads `Environment: N native, M emulated on <node>`, then one `Emulated on <node> (<reason>; <hint>): <ids>` line per reason.
 
 `check_report.py` fails a run when:
-- a scored DeepSWE question has no passing `env_check`;
-- a passing check ran on another platform than the task containers (`container_platform.json`);
+- a scored question's native build has no passing check;
+- on a worker whose task containers ran `linux/arm64`, a scored DeepSWE question has no passing native check;
+- an `env_check` entry's platform is not the task containers' platform (`container_platform.json`);
 - the image of a scored question has another platform than the task containers. A merged run checks this per shard, against that shard's worker.
 
-To compare a Mac with a Linux worker, read the check counts and rewards in both `provenance.md` files, not the image digests: a native build has its own digest, and an equal grade on the same tests is the proof that it is the same environment.
+To compare a Mac with a Linux worker, compare the rewards per question, not the image digests. An emulated question runs the same published image as Linux. A native build has its own digest; its oracle and nop counts in the Mac's `provenance.md`, on the same tests, are the proof that it grades like the published image.
 
 ## Where a run is stored
 
@@ -257,7 +271,7 @@ Pass@k is stored twice. `pass@k` / `macro_pass@1` / `c` / `n` / `pass_frac` are 
 | `scored_rollouts` | Rollouts with a verifier result that counts (`reward.json` present, no infra failure). `summary.md` prints `scored rollouts: S · unscored rollouts: U`; on a finished run S + U is questions × `N_ROLLOUTS`. |
 | `unscored_rollouts` | Sum of per-question `unscored`. `report/render` writes it to `eval-runs/unscored_rollouts.txt` and, above 0, prints `WARNING: U of T rollouts have no score (<causes>); see Unscored in summary.md`. The build result stays as it is (see Build status under [Which job to run](#which-job-to-run)). |
 | `oom_killed` / `oom_killed_rollouts` | On a rollout whose iCode exited 137 or whose Harbor exception names an out-of-memory kill; the count across the arm. `summary.md` prints `OOM-killed rollouts (iCode exit 137 or the container ran out of memory): N`, `report.html` adds `OOM-killed rollouts N.` to its summary sentence when above 0, and `evaluate/harbor_run` prints `WARNING: N trials ran out of memory (…): <trials>`. Each trial container has the task's memory limit (`task.toml`, 8192 MB for DeepSWE), so the kill stays inside that trial. |
-| `skipped_questions` | `<task>: <reason>` per question the run skipped (no image that passed the environment check, or a leak-scan hit), from `eval-runs/skipped_tasks.txt`; also written as `skipped_questions.txt`. `summary.md` prints `Questions without a score: N — <task> (<cause>) · …`, naming skipped questions and questions none of whose rollouts were scored, with the cause from the skip or from the rollouts' notes. Those questions are also rows in the Unscored table of `summary.md` and `report.html`. Skipped questions stay in `selected_tasks.txt`, so padded Pass@k counts them as failed and scored-only Pass@k leaves them out. |
+| `skipped_questions` | `<task>: <reason>` per question the run skipped (a leak-scan hit), from `eval-runs/skipped_tasks.txt`; also written as `skipped_questions.txt`. `summary.md` prints `Questions without a score: N — <task> (<cause>) · …`, naming skipped questions and questions none of whose rollouts were scored, with the cause from the skip or from the rollouts' notes. Those questions are also rows in the Unscored table of `summary.md` and `report.html`. Skipped questions stay in `selected_tasks.txt`, so padded Pass@k counts them as failed and scored-only Pass@k leaves them out. |
 | `unscored_tasks` | Questions with `unscored > 0`, highest `unscored_frac` first. Clean questions are omitted. |
 | `pass_methods` | `padded` and `scored` formula strings for the two Pass@k families. |
 | `timing.eta_note` | Present only when the report covers an incomplete Harbor run (`progress.json` `done < needed`). A finished run does not invent an ETA. |

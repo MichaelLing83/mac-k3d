@@ -284,7 +284,7 @@ A Mac worker runs the same seven phases and writes the same files as a Linux wor
    ```
 
 3. **Docker Desktop** > Settings:
-   - General: **Start Docker Desktop when you sign in**, and **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** (SWE-bench Pro's published images are linux/amd64 only, and a DeepSWE question that cannot be built natively falls back to its published amd64 image; that path refuses to start without it).
+   - General: **Start Docker Desktop when you sign in**, and **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** (SWE-bench Pro's published images are linux/amd64 only, and a DeepSWE question without a prepared native build runs its published amd64 image; that path refuses to start without it).
    - Resources: memory at least 18 GB (two 8 GB DeepSWE tasks plus 2 GB), CPUs as many as you will set `cpu_cores` to, and a disk image of about 200 GB.
    - Apply & restart.
 4. **Download** `mac-k3d-darwin-aarch64` and clear quarantine as in [step 1](#1-download-the-binary).
@@ -297,12 +297,29 @@ Then follow [B. Worker](#b-worker--jenkins-agent). What `setup` and `config` do 
 | Default `cpu_cores` | logical CPUs | the smaller of the Mac's CPUs and Docker Desktop's; a larger value is refused |
 | Agent service | systemd user unit, kept after logout by linger | LaunchAgent, restarts 5 s after it exits; needs automatic login |
 | `config` / `status` warnings | none | automatic login off; sleep not 0 |
+| DeepSWE images | nothing to do: Harbor pulls the published images at the trial | `mac-k3d eval prepare --benchmark deepswe` once, below |
+
+**Prepare DeepSWE**, once, after the agent is online. Run it as the user that runs the agent:
+
+```bash
+mac-k3d eval prepare --benchmark deepswe
+```
+
+It builds every question natively for arm64 on the pinned base, proves each build with Harbor's oracle and nop agents (no model), and tags it with the official image name.
+
+- It takes hours and about 120 GB of Docker disk.
+- A rerun redoes only what changed.
+- It lists the questions it cannot make native, with the reason. Those questions run on the published image under Rosetta. So does every DeepSWE question until `prepare` has run.
+- Run it again after a `DEEPSWE_REF`, `DEEPSWE_BASE_IMAGE` or Harbor version change, or a Docker prune.
+- Run it when no DeepSWE build is running on this Mac.
+
+Details: [commands.md](commands.md#eval-prepare).
 
 iCode under test on a Mac:
 
 | Mode | What the Mac needs |
 |------|--------------------|
-| release | A Linux drop for the task containers' CPU type: `icode-linux-x86_64-full-v*` for DeepSWE and SWE-bench Pro, `icode-linux-aarch64-full-v*` for LoLBench. Upload one `.tar.gz` holding both and the build picks the right one ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
+| release | A Linux drop for the task containers' CPU type: `icode-linux-aarch64-full-v*` for LoLBench and natively prepared DeepSWE, `icode-linux-x86_64-full-v*` for SWE-bench Pro and emulated DeepSWE. Upload one `.tar.gz` holding both and the build picks the right one ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
 | git | Nothing extra. The iCode runtime is built inside a Linux container of the task platform (`ICODE_LINUX_BUILD_IMAGE`), because a macOS venv cannot run in a Linux container |
 
 Before the first real run, do the parity trial in [testing/mac-mini-worker.md](testing/mac-mini-worker.md).

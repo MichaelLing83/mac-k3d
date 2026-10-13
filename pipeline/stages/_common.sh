@@ -171,8 +171,8 @@ dockerfile_needs_amd64() {
 # images, published for linux/amd64 only (Rosetta on Apple silicon).
 # DeepSWE: DEEPSWE_DOCKER_PLATFORM when set; linux/amd64 on an x86-64 host (the
 # published images); on an arm64 host the host platform only when tasks/images
-# built and checked every selected question natively ($WORKDIR/env_check.json),
-# else linux/amd64 (the published images, emulated).
+# found a prepared, proven native build for every selected question
+# ($WORKDIR/env_check.json), else linux/amd64 (the published images, emulated).
 # LoLBench builds for the Docker host unless a selected Dockerfile downloads an
 # x86-64-only build. An x86-64 host always gets linux/amd64.
 task_container_platform() {
@@ -210,9 +210,9 @@ task_container_platform() {
   printf '%s\n' "$host"
 }
 
-# The platform tasks/images settled for the selected DeepSWE questions: the one
-# every question that runs was checked on. Empty before tasks/images ran, or
-# when env_check.json is for another selection.
+# The platform tasks/images settled for the selected DeepSWE questions on an
+# arm64 host. Empty before tasks/images ran, or when env_check.json is for
+# another selection.
 env_check_platform() {
   [ -s "$WORKDIR/env_check.json" ] || return 0
   python3 "$PIPELINE_LIB/env_check.py" platform \

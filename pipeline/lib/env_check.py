@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
-"""First-time environment check of a benchmark question on this machine.
+"""Native DeepSWE builds on an arm64 worker, and the check that proves them.
 
-tasks/images proves the image a worker will run a question on before any
-rollout. Harbor's oracle agent applies the reference solution: every
-fail-to-pass (F2P) and pass-to-pass (P2P) test must pass. Its nop agent changes
-nothing: some F2P test must fail and every P2P test must pass. No model is
-called. The result is stored per machine and reused while its key matches:
+`mac-k3d eval prepare --benchmark deepswe` builds each question's Dockerfile
+natively and proves the build once: Harbor's oracle agent applies the reference
+solution (every fail-to-pass (F2P) and pass-to-pass (P2P) test must pass), and
+its nop agent changes nothing (some F2P test must fail, every P2P test must
+pass). No model is called. The result is stored per machine and reused while
+its key matches:
 
     $MAC_K3D_SHARE/env-check/<benchmark>/<task>.json
 
+An eval (tasks/images) runs a question natively only on a build with a stored
+pass, and every other question on the published linux/amd64 image under
+emulation, with the reason in the build's env_check.json. x86-64 workers run
+the published images as they are and have no env_check.json entries.
+
   image     the official image name a task.toml declares
-  key       the cache key of one question's image (JSON)
+  key       the cache key of one native build (JSON)
   cached    the stored entry when its key matches: exit 0 for a pass, 2 for a
             fail; exit 1 when nothing matches
   judge     the pass rule applied to the oracle and nop jobs dirs (JSON
             verdict; exit 0 on pass, 1 on fail; --oracle-only judges the
-            oracle half, --failed records a build or pull that left no image)
-  record    store a verdict and add it to the build's env_check.json; exit 1 on fail
-  finish    settle the build's platform, list failed questions in
-            skipped_tasks.txt; exit 3 when every selected question is out
+            oracle half)
+  record    store a verdict and make it the build's native entry; exit 1 on fail
+  emulated  the build's entry for a question on the published image, and why
+  settle    the task-container platform of the selection: native only when
+            every selected question is
   platform  the task-container platform env_check.json settles for the selection
 
 A verdict with no grader result (Harbor stopped before the verifier wrote
-reward.json or reward.txt: an image pull, compose or timeout) or with a crashed
-verifier (reward.txt -1) fails this build but is not stored, so the next build
-checks again.
+reward.json or reward.txt: compose or a timeout) or with a crashed verifier
+(reward.txt -1) is not stored, so the next prepare checks again.
 """
 
 from __future__ import annotations
@@ -43,6 +49,8 @@ from provenance import docker_image_name, sha256_file, task_fingerprints
 SCHEMA = "mac-k3d-env-check-v1"
 SOURCES = ("published", "built")
 COUNTS = ("f2p_total", "f2p_passed", "p2p_total", "p2p_passed")
+EMULATED_PLATFORM = "linux/amd64"
+PREPARE_HINT = "run mac-k3d eval prepare --benchmark deepswe"
 
 
 def _load(path: Path) -> dict:
@@ -190,19 +198,6 @@ def oracle_passes(oracle_jobs: Path) -> bool:
     return not _why("oracle", trial_result(oracle_jobs), oracle_jobs)
 
 
-def no_image(reason: str, *, source: str, platform: str) -> dict:
-    """A native build or a pull that left nothing to check. Not stored: it may be the network."""
-    return {
-        "pass": False,
-        "stored": False,
-        "source": source,
-        "platform": platform,
-        "oracle": None,
-        "nop": None,
-        "reason": f"environment check failed: {reason} on {source} {platform}",
-    }
-
-
 def judge(oracle_jobs: Path | None, nop_jobs: Path | None, *, source: str, platform: str) -> dict:
     """The pass rule. oracle: f2p_passed == f2p_total > 0 and p2p_passed == p2p_total.
     nop: f2p_passed < f2p_total and p2p_passed == p2p_total. Anything else fails."""
@@ -241,6 +236,10 @@ def _build_label() -> str:
 
 
 def _summary(entry: dict) -> str:
+    if entry.get("mode") == "emulated":
+        line = f"emulated on published {entry.get('platform')}: {entry.get('reason') or '-'}"
+        return line + (f"; {entry['hint']}" if entry.get("hint") else "")
+
     def counts(name: str) -> str:
         r = entry.get(name)
         if not isinstance(r, dict) or r.get("f2p_total") is None:
@@ -270,11 +269,7 @@ def record(
     checked_in: str = "",
     checked_at: str = "",
 ) -> dict:
-    """Store a fresh verdict, and make it this build's current one for the task.
-
-    An earlier verdict for the same task in this build (a native build that
-    failed, before the published image) stays under ``attempts``.
-    """
+    """Store a fresh verdict, and make it this build's native entry for the task."""
     if not reused:
         checked_in = checked_in or _build_label()
         checked_at = checked_at or _now()
@@ -291,6 +286,7 @@ def record(
             }
             _write(path, {"schema": SCHEMA, "task": task, "results": results})
     entry = {
+        "mode": "native",
         "source": key.get("source"),
         "platform": key.get("platform"),
         "image": image,
@@ -302,54 +298,80 @@ def record(
         "checked_in": checked_in,
         "checked_at": checked_at,
         "reused": reused,
+        "dockerfile_sha256": key.get("dockerfile_sha256") or "",
+        "base_image": key.get("base_image") or "",
     }
-    if key.get("source") == "built":
-        entry["dockerfile_sha256"] = key.get("dockerfile_sha256") or ""
-        entry["base_image"] = key.get("base_image") or ""
-    doc = _load(build_record)
-    tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
-    prev = tasks.get(task) if isinstance(tasks.get(task), dict) else None
-    if prev is not None:
-        earlier = [a for a in prev.get("attempts") or [] if isinstance(a, dict)]
-        earlier.append({k: prev.get(k) for k in ("source", "platform", "pass", "reason", "reused")})
-        entry["attempts"] = earlier
-    tasks[task] = entry
-    doc.update({"schema": SCHEMA, "tasks": tasks})
-    _write(build_record, doc)
+    _set_entry(build_record, task, entry)
     return entry
 
 
-def finish(*, build_record: Path, selected: Path, skipped: Path, benchmark: str, host_platform: str) -> dict:
-    """The platform every passing question shares, and the questions kept out."""
+def _set_entry(build_record: Path, task: str, entry: dict) -> None:
+    doc = _load(build_record)
+    tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
+    tasks[task] = entry
+    doc.update({"schema": SCHEMA, "tasks": tasks})
+    _write(build_record, doc)
+
+
+def native_failure(verdict: dict) -> tuple[str, bool]:
+    """Why a native build's check failed, and whether another prepare could change it.
+
+    ``verdict`` is a bare verdict (judge) or a stored entry (cached). A stored
+    fail is the grader's answer; one that was not stored (a crash, a timeout)
+    may pass next time.
+    """
+    inner = verdict.get("verdict") if isinstance(verdict.get("verdict"), dict) else verdict
+    where = f"{inner.get('source')} {inner.get('platform')}"
+    detail = str(inner.get("reason") or "").removeprefix("environment check failed: ").removesuffix(f" on {where}")
+    return f"native check failed: {detail or 'no result'}", not inner.get("stored")
+
+
+def emulated(*, build_record: Path, task: str, image: str, reason: str, hint: bool) -> dict:
+    """This build runs ``task`` on the published linux/amd64 image, under emulation, because ``reason``."""
+    entry = {
+        "mode": "emulated",
+        "source": "published",
+        "platform": EMULATED_PLATFORM,
+        "image": image,
+        "reason": reason,
+        "hint": PREPARE_HINT if hint else "",
+    }
+    _set_entry(build_record, task, entry)
+    return entry
+
+
+def settle(*, build_record: Path, selected: Path, benchmark: str, host_platform: str) -> dict:
+    """The task-container platform of the selection: native only when every selected question is."""
     ids = _ids(selected)
     doc = _load(build_record)
     tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
-    passed = [tid for tid in ids if isinstance(tasks.get(tid), dict) and tasks[tid].get("pass") is True]
-    out = [tid for tid in ids if tid not in passed]
-    platforms = sorted({str(tasks[tid].get("platform") or "") for tid in passed})
-    if len(platforms) > 1:
-        raise SystemExit(f"ERROR: checked questions disagree on the platform ({', '.join(platforms)})")
-    listed = {line.split("\t", 1)[0] for line in _ids(skipped)}
-    with skipped.open("a", encoding="utf-8") as fh:
-        for tid in out:
-            if tid in listed:
-                continue
-            entry = tasks.get(tid) if isinstance(tasks.get(tid), dict) else {}
-            reason = str(entry.get("reason") or "environment check did not run").replace("\t", " ").replace("\n", " ")
-            fh.write(f"{tid}\t{reason}\n")
+    missing = [tid for tid in ids if not isinstance(tasks.get(tid), dict)]
+    if missing:
+        raise SystemExit(f"ERROR: no image decision for {', '.join(missing)}")
+    native = [tid for tid in ids if tasks[tid].get("mode") == "native" and tasks[tid].get("pass") is True]
+    emulated_ids = [tid for tid in ids if tasks[tid].get("mode") == "emulated"]
+    if native and emulated_ids:
+        raise SystemExit(
+            f"ERROR: one run mixes native ({', '.join(native)}) and emulated ({', '.join(emulated_ids)}) questions"
+        )
+    if native and len(native) == len(ids):
+        plat = host_platform
+    elif len(emulated_ids) == len(ids):
+        plat = EMULATED_PLATFORM
+    else:
+        plat = ""
     doc.update(
         {
             "schema": SCHEMA,
             "benchmark": benchmark,
             "host_platform": host_platform,
-            "platform": platforms[0] if platforms else "",
+            "platform": plat,
             "selected": ids,
             "tasks": tasks,
         }
     )
     _write(build_record, doc)
-    return {"passed": passed, "out": out, "platform": doc["platform"],
-            "reused": sum(1 for tid in passed if tasks[tid].get("reused") is True)}
+    return {"native": native, "emulated": emulated_ids, "platform": plat}
 
 
 def platform(build_record: Path, selected: Path) -> str:
@@ -360,7 +382,7 @@ def platform(build_record: Path, selected: Path) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="First-time environment check (oracle + nop)")
+    parser = argparse.ArgumentParser(description="DeepSWE image decisions on an arm64 host: native builds and their check, or emulated")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     img = sub.add_parser("image")
@@ -386,7 +408,6 @@ def main(argv: list[str] | None = None) -> int:
     jud.add_argument("--oracle", default="")
     jud.add_argument("--nop", default="")
     jud.add_argument("--oracle-only", action="store_true")
-    jud.add_argument("--failed", default="", help="no image to check, and why")
     jud.add_argument("--key", required=True)
     jud.add_argument("--out", default="")
 
@@ -399,10 +420,17 @@ def main(argv: list[str] | None = None) -> int:
     rec.add_argument("--image", default="")
     rec.add_argument("--reused", action="store_true")
 
-    fin = sub.add_parser("finish")
+    emu = sub.add_parser("emulated")
+    emu.add_argument("--build-record", required=True)
+    emu.add_argument("--task", required=True)
+    emu.add_argument("--image", default="")
+    emu.add_argument("--reason", default="", help="why the question cannot run natively")
+    emu.add_argument("--verdict", default="", help="the native check that failed (judge or cached output)")
+    emu.add_argument("--hint", action="store_true", help="mac-k3d eval prepare would fix it")
+
+    fin = sub.add_parser("settle")
     fin.add_argument("--build-record", required=True)
     fin.add_argument("--selected", required=True)
-    fin.add_argument("--skipped", required=True)
     fin.add_argument("--benchmark", default=os.environ.get("BENCHMARK") or "deepswe")
     fin.add_argument("--host-platform", default="")
 
@@ -442,15 +470,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.oracle_only:
             return 0 if args.oracle and oracle_passes(Path(args.oracle)) else 1
         want = _load(Path(args.key))
-        where = {"source": str(want.get("source") or ""), "platform": str(want.get("platform") or "")}
-        if args.failed:
-            verdict = no_image(args.failed, **where)
-        else:
-            verdict = judge(
-                Path(args.oracle) if args.oracle else None,
-                Path(args.nop) if args.nop else None,
-                **where,
-            )
+        verdict = judge(
+            Path(args.oracle) if args.oracle else None,
+            Path(args.nop) if args.nop else None,
+            source=str(want.get("source") or ""),
+            platform=str(want.get("platform") or ""),
+        )
         if not args.out:
             print("ERROR: judge needs --out", file=sys.stderr)
             return 2
@@ -473,20 +498,29 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"env check: {args.task} {_summary(entry)}")
         return 0 if entry["pass"] else 1
-    if args.cmd == "finish":
-        got = finish(
+    if args.cmd == "emulated":
+        reason, hint = args.reason, args.hint
+        if args.verdict:
+            reason, hint = native_failure(_load(Path(args.verdict)))
+        if not reason:
+            print("ERROR: emulated needs --reason or --verdict", file=sys.stderr)
+            return 2
+        entry = emulated(build_record=Path(args.build_record), task=args.task, image=args.image,
+                         reason=reason, hint=hint)
+        print(f"images: {args.task} {_summary(entry)}")
+        return 0
+    if args.cmd == "settle":
+        got = settle(
             build_record=Path(args.build_record),
             selected=Path(args.selected),
-            skipped=Path(args.skipped),
             benchmark=args.benchmark,
             host_platform=args.host_platform,
         )
-        total = len(got["passed"]) + len(got["out"])
         print(
-            f"env check: {len(got['passed'])} of {total} passed ({got['reused']} reused, {len(got['out'])} kept out)"
+            f"images: {len(got['native'])} native, {len(got['emulated'])} emulated"
             + (f"; task containers {got['platform']}" if got["platform"] else "")
         )
-        return 0 if got["passed"] else 3
+        return 0
     print(platform(Path(args.record), Path(args.selected)))
     return 0
 

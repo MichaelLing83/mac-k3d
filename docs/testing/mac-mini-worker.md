@@ -51,32 +51,32 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 
 ## 2. Parity trial
 
-### Prewarm the DeepSWE images
+### Prepare the DeepSWE images (Mac only)
 
-Each worker proves a DeepSWE question's image once (a native build on the Mac, then Harbor's oracle and nop agents) and reuses that answer ([pipeline.md](../pipeline.md#deepswe-on-linux-and-macos)). Do it before the trial, so the timed builds compare rollouts, not first-time checks. On the Mac and on the Linux worker, as the user that runs the agent (the store is that user's `~/.local/share/mac-k3d/env-check/`, and Docker Desktop's images are per user), with no build running:
+The Mac runs a DeepSWE question natively only on a build that `mac-k3d eval prepare` made and proved on it: a native build, then Harbor's oracle and nop agents, with no model ([pipeline.md](../pipeline.md#deepswe-on-linux-and-macos)). Every other question runs the published image under Rosetta, as the Linux worker runs it natively. The Linux worker needs nothing: Harbor pulls its images at the trial.
+
+On the Mac, as the user that runs the agent (the store is that user's `~/.local/share/mac-k3d/env-check/`, and Docker Desktop's images are per user), with no DeepSWE build running:
 
 ```bash
-TASKS=abs-module-cache-flags,cliffy-config-file-parsing,ipython-session-bundle-replay \
-  bash ~/.local/share/mac-k3d/pipeline/tools/prewarm_task_images.sh
+mac-k3d eval prepare --benchmark deepswe \
+  --tasks abs-module-cache-flags,cliffy-config-file-parsing,ipython-session-bundle-replay
 ```
 
-`~/.local/share/mac-k3d/pipeline` is the pipeline `setup` and `config` extract from the binary, the same commit the Jenkins builds run. Without `TASKS`, it prewarms every question at `DEEPSWE_REF`: hours, and roughly 120 GB of Docker disk.
+Without `--tasks` it prepares every question at `DEEPSWE_REF`: hours, and roughly 120 GB of Docker disk. Its files go to `~/.local/share/mac-k3d/prepare/`.
 
-**Expect on the Mac:**
+**Expect:**
 - `images: linux/arm64 host, native builds on public.ecr.aws/x8v8d7g8/mars-base@sha256:91db…`;
 - for the two questions that build natively, `env check: <id> pass on built linux/arm64 (oracle f2p n/n p2p m/m; nop f2p k/n p2p m/m)`, with k below n;
-- for `cliffy-config-file-parsing`, `its Dockerfile downloads an x86-64-only build; the published linux/amd64 image, emulated`, then `env check: cliffy-config-file-parsing pass on published linux/amd64 (…)`;
-- at the end, `prewarm deepswe: 3 of 3 questions ready`.
+- for `cliffy-config-file-parsing`, `images: cliffy-config-file-parsing emulated on published linux/amd64: its Dockerfile downloads an x86-64-only build`;
+- at the end, `prepare deepswe (linux/arm64): 3 questions, 2 native, 1 emulated`, then `cliffy-config-file-parsing: its Dockerfile downloads an x86-64-only build` under `emulated`.
 
-**Expect on Linux:** `images: linux/amd64 host, published images`, the same three `pass on published linux/amd64` lines, and `3 of 3 questions ready`. A second prewarm on either machine prints `reused from local#0` for each question and runs no Harbor trial.
+A second `prepare` prints `reused from local#0` for each native question and runs no Harbor trial. On the Linux worker, `prepare` prints `nothing to prepare: Linux workers use the published images, which Harbor pulls`.
 
-This is also the first run of BuildKit's `--build-context` on Docker Desktop. If `~/.local/share/mac-k3d/eval-runs/env-check/<id>/build.log` shows `unknown flag: --build-context`, or the build pulls `mars-base:latest` instead of the digest, stop and file it. A question that is kept out prints its reason and is listed after `kept out:`.
+This is also the first run of BuildKit's `--build-context` on Docker Desktop. Stop and file it if `~/.local/share/mac-k3d/prepare/env-check/<id>/build.log` shows `unknown flag: --build-context`, or if the build pulls `mars-base:latest` instead of the digest. A question whose build or check failed is listed under `emulated` with its reason.
 
-To compare the two image sources on the Mac itself, with no model, check the published image too:
+To see the stored check of each native build, with no model:
 
 ```bash
-DEEPSWE_DOCKER_PLATFORM=linux/amd64 TASKS=abs-module-cache-flags,ipython-session-bundle-replay \
-  bash ~/.local/share/mac-k3d/pipeline/tools/prewarm_task_images.sh
 python3 - ~/.local/share/mac-k3d/env-check/deepswe/{abs-module-cache-flags,ipython-session-bundle-replay}.json <<'PY'
 import json, sys
 for path in sys.argv[1:]:
@@ -89,7 +89,7 @@ for path in sys.argv[1:]:
 PY
 ```
 
-Each question should print the same counts for `built linux/arm64` and `published linux/amd64`. The forced run points the official image name at the published image. The next native build points it back. So run it only when no other DeepSWE build is running on the Mac.
+The oracle must pass every F2P and P2P test and the nop must fail some F2P test, the same rule the published image meets.
 
 ### Run the trial
 
@@ -97,7 +97,7 @@ Run the same questions on both workers, in both iCode modes. Pin each dispatcher
 
 | Benchmark | Questions | Container platform on the Mac |
 |-----------|-----------|-------------------------------|
-| DeepSWE | `TASKS=abs-module-cache-flags,cliffy-config-file-parsing,ipython-session-bundle-replay` | `linux/arm64` (native) for the two builds that pass their check; `cliffy-config-file-parsing` is `linux/amd64 emulated` and, because one iCode build serves the run, moves the other two with it unless they are separate `one_task` builds ([pipeline.md](../pipeline.md#deepswe-on-linux-and-macos)) |
+| DeepSWE | `TASKS=abs-module-cache-flags,cliffy-config-file-parsing,ipython-session-bundle-replay` | `linux/arm64` (native) for the two questions `prepare` proved; `cliffy-config-file-parsing` is `linux/amd64 emulated`. A dispatcher runs each question as its own `one_task` build, so the choice stays per question ([pipeline.md](../pipeline.md#deepswe-on-linux-and-macos)) |
 | LoLBench | `TASKS=ruff_1,fastapi_1,kafka_1` | `linux/arm64` (native) |
 | SWE-bench Pro | `N_TASKS=3` (the first three in byte order, the same on both workers) | `linux/amd64 emulated` (Rosetta) |
 
@@ -114,7 +114,7 @@ done
 
 **Release mode** needs the upload, so use the job page: `<suite>_some_task` > Build with Parameters, the same questions, `N_ROLLOUTS=1`, `AGENT_LABEL` and `AGGREGATE_LABEL` the node, and the **same** `ICODE_RELEASE_FILE` for both workers: one `.tar.gz` holding `icode-linux-x86_64-full-vX.Y.Z` and `icode-linux-aarch64-full-vX.Y.Z` ([icode-harness-inputs.md](../icode-harness-inputs.md#linux-and-macos-workers)). Uploading the same file keeps the recorded release sha256 equal.
 
-The Mac's first git build of a commit downloads uv's Python and wheels into `~/.local/share/mac-k3d/uv-cache-linux-arm64` (DeepSWE when the native build is used, LoLBench) and `uv-cache-linux-amd64` (DeepSWE when the run fell back to the published image, SWE-bench Pro); the second build of that commit reuses them.
+The Mac's first git build of a commit downloads uv's Python and wheels into `~/.local/share/mac-k3d/uv-cache-linux-arm64` (DeepSWE native, LoLBench) and `uv-cache-linux-amd64` (DeepSWE emulated, SWE-bench Pro); the second build of that commit reuses them.
 
 ### What must match
 
@@ -132,7 +132,6 @@ def facts(d):
         "iCode": (icode.get("git") or {}).get("sha") or (icode.get("release") or {}).get("sha256"),
         "questions": sorted(t["id"] for t in d["icode"]["tasks"]),
         "images": {k: v.get("id") for k, v in sorted(ep.get("images", {}).items())},
-        "env_check counts": {k: (v.get("oracle"), v.get("nop")) for k, v in sorted((ep.get("env_check") or {}).items())},
         "runtime_sha256": iso.get("runtime_sha256"),
         "leak_scan": iso.get("leak_scan", {}).get("statuses"),
         "canary": (iso.get("canary") or {}).get("status"),
@@ -146,19 +145,19 @@ for key in fa:
     print(("SAME " if fa[key] == fb[key] else "DIFF ") + key, "" if fa[key] == fb[key] else f"\n  linux {fa[key]}\n  mac   {fb[key]}")
 for ta, tb in zip(sorted(a["icode"]["tasks"], key=lambda t: t["id"]), sorted(b["icode"]["tasks"], key=lambda t: t["id"])):
     print(f'{ta["id"]}: reward {ta.get("reward")} / {tb.get("reward")}  dur_s {ta.get("dur_s", 0):.0f} / {tb.get("dur_s", 0):.0f}  unscored {ta.get("unscored")} / {tb.get("unscored")}')
-for tid in sorted(set(a.get("eval_protocol", {}).get("env_check") or {}) | set(b.get("eval_protocol", {}).get("env_check") or {})):
-    ca, cb = ((d.get("eval_protocol", {}).get("env_check") or {}).get(tid, {}) for d in (a, b))
-    print(f'{tid}: env check {ca.get("source")} {ca.get("platform")} / {cb.get("source")} {cb.get("platform")}')
+for tid, e in sorted((b.get("eval_protocol", {}).get("env_check") or {}).items()):
+    counts = "" if e.get("mode") != "native" else f' oracle {e.get("oracle")} nop {e.get("nop")}'
+    print(f'{tid}: mac {e.get("mode")} {e.get("platform")} {e.get("reason") or ""}{counts}')
 PY
 ```
 
-The same facts are in each run's `provenance.md`, next to `summary.md`: the `## Environment check` table shows the source, platform and oracle and nop counts per question, and a merged run has one row per shard with a Worker column.
+The same facts are in each run's `provenance.md`, next to `summary.md`. On the Mac, its `## Environment` table shows per question whether it ran native or emulated, the native check's oracle and nop counts, and the reason for an emulated question. A merged run has one row per shard, with a Worker column. The Linux run has no such table.
 
 | Row | DeepSWE | SWE-bench Pro | LoLBench |
 |-----|---------|---------------|----------|
 | `iCode`, `questions`, `pipeline`, `harbor`, `model` | SAME | SAME | SAME |
-| `images` (image id) | DIFF expected when the Mac built natively; SAME when both used the published image | SAME: the same amd64 image | DIFF expected: arm64 Hub tag on the Mac, a local amd64 build on Linux |
-| `env_check counts` (oracle and nop F2P/P2P and reward per question) | SAME: this is the proof that a native build grades like the published image | SAME (none recorded) | SAME (none recorded) |
+| `images` (image id) | DIFF expected when the Mac ran natively; SAME for an emulated question (the published image) | SAME: the same amd64 image | DIFF expected: arm64 Hub tag on the Mac, a local amd64 build on Linux |
+| Mac `env_check` (the `mac` lines) | `native` for the two prepared questions, with oracle F2P n/n and nop F2P below n; `cliffy-config-file-parsing` `emulated` with its reason | none | none |
 | `runtime_sha256` (git mode) | may DIFF: the venv is the same commit built in a container | may DIFF | DIFF expected (another CPU type) |
 | `leak_scan`, `canary`, `anticheat` | SAME: every rollout `clean`, canary `pass` | SAME | SAME |
 | Files under each shard's `eval-runs/` | the same names | the same names | the same names |
@@ -166,7 +165,7 @@ The same facts are in each run's `provenance.md`, next to `summary.md`: the `## 
 | Duration | Mac within 1.5× of Linux when native, within 2× under Rosetta | within 2× | within 1.5× (native) |
 | OOM retries | none on either | none | none |
 
-A row that should be SAME and is DIFF is a defect: stop and file it before running anything else on the Mac. Also check each Mac shard's console for `OK task containers linux/amd64 (emulated on linux/arm64)` or `(native)` and for `env check: <id> pass … reused from local#0` (the prewarm's answer), and the `summary.md` Worker line ending `os Darwin · containers …`.
+A row that should be SAME and is DIFF is a defect: stop and file it before running anything else on the Mac. Also check each Mac shard's console for `OK task containers linux/amd64 (emulated on linux/arm64)` or `(native)` and for `env check: <id> pass … reused from local#0` (prepare's answer). Its `summary.md` should have a Worker line ending `os Darwin · containers …`. The DeepSWE dispatcher's merged `summary.md` should say `Environment: 2 native, 1 emulated on macos-<hostname>` and `Emulated on macos-<hostname> (its Dockerfile downloads an x86-64-only build): cliffy-config-file-parsing`.
 
 To list each shard's files, `tar -tzf` both backups and compare the sorted paths with the build number and timestamps removed:
 
@@ -190,6 +189,6 @@ diff linux.files mac.files && echo "OK same files"
 | `jenkins_agent.cpu_cores is N but Docker Desktop gives containers M CPUs` from `config` | `cpu_cores` in `worker.yaml` larger than Docker's CPU limit | Lower `cpu_cores`, or raise Docker's CPUs |
 | Node offline after a restart | Automatic login off, or FileVault on | Section 1, first row |
 | Git build stops in `uv sync` with a TLS or timeout error in the container | A VPN with a small MTU (the Environment stage prints the MTU hint) | Turn the VPN off for the build, or lower Docker's MTU |
-| `env check: <id> fail on built linux/arm64 (oracle f2p a/b)`, then the question runs `linux/amd64` | The native build grades differently from the published image; the stored fail keeps it on the published image on this Mac | File it with `eval-runs/env-check/<id>/build.log` and `built-oracle/`. After a fix, delete `~/.local/share/mac-k3d/env-check/deepswe/<id>.json` so it is checked again |
-| Tasks fails with `no selected question has a proven environment` | Every selected question failed its check on both images, or its pull or build failed | The reason per question is in `eval-runs/skipped_tasks.txt`; the Harbor logs are under `eval-runs/env-check/<id>/` |
-| Tasks fails with `timed out waiting for the node lock images` | Another build's first-time check held the lock longer than `MAC_K3D_IMAGES_LOCK_WAIT` (default 10800 s) | Prewarm the questions ([Prewarm the DeepSWE images](#prewarm-the-deepswe-images)) |
+| `summary.md` says `Emulated on <node> (not prepared on this Mac; run mac-k3d eval prepare --benchmark deepswe)`, or `prepared for other task files or another Harbor version` | `prepare` has not run since onboarding, or since a `DEEPSWE_REF`, base or Harbor change, or a Docker prune | [Prepare the DeepSWE images](#prepare-the-deepswe-images-mac-only) |
+| `prepare` lists `<id>: native check failed: oracle f2p a/b` | The native build grades differently from the published image; the stored fail keeps the question emulated on this Mac | File it with `~/.local/share/mac-k3d/prepare/env-check/<id>/build.log` and `built-oracle/`. After a fix, `prepare --tasks <id> --rebuild` |
+| `prepare` lists `<id>: native build failed (see …/build.log); a rerun may make it native` and exits 1 | The build failed (network, disk, or `--build-context`) | Read the log, then run `prepare` again; only that question is redone |

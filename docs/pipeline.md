@@ -70,12 +70,12 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `env/model_api` | `DEEPSEEK_MODEL` is served by `GET /models`. Skipped with a note when no key is set | — |
 | `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)). Question images are fetched later, see [Benchmark checkout and question images](#benchmark-checkout-and-question-images) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
 | `tasks/select` | Picks the questions from `TASK`, `TASKS`, `N_TASKS` and `TASK_OFFSET`; every later step reads this file. `TASK_OFFSET` counts in `suite_tasks.txt`, every task dir in byte order (`LC_ALL=C`), so all workers cut the same slices | `selected_tasks.txt`, `selected_tasks_offset.txt`, `suite_tasks.txt` |
-| `tasks/images` | DeepSWE: the image each question runs on, proved once per worker by Harbor's oracle and nop agents; a question with no proven image is kept out ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). Settles the task containers' platform before `tasks/icode`. LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. SWE-bench Pro images are pulled by Harbor at the trial | `env_check.json`, `env-check/<id>/`, `skipped_tasks.txt` |
+| `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE on an x86-64 host and SWE-bench Pro: nothing; Harbor pulls the images at the trial. DeepSWE on an arm64 host: each question runs natively on the build `mac-k3d eval prepare` made and proved, else on the published image under emulation, with the reason; it never builds, pulls or checks ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). Settles the task containers' platform before `tasks/icode` | `env_check.json` (arm64 DeepSWE) |
 | `tasks/icode` | Resolves the iCode under test: a release drop, or a git clone built with `uv sync`. Prints `iCode under test:` (git SHA or release sha256) before any canary or rollout. Never changes iCode's source | `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) or `icode_release.json` |
 | `tasks/icode_sandbox` | Makes a git build runnable at `/opt/icode-host`: embedded CPython, sanitized venv, wrapper, probe. A release drop keeps its own binary | — |
 | `tasks/agent` | Harbor's Python can import `icode_harbor_agent` and `patch_harbor_agent` | — |
 | `tasks/isolation` | Builds the one read-only mount and refuses a tree that overlaps a benchmark; checks the model API host is on the network allowlist; records both | `agent_mounts.json`, `eval_protocol_inputs.json` |
-| `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. A hit question is appended to `skipped_tasks.txt`, after the questions `tasks/images` kept out; the build stops only when every selected question is out | `anticheat_leakscan.json`, `skipped_tasks.txt` |
+| `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. A hit question is skipped; the build stops only when every selected question is hit | `anticheat_leakscan.json`, `skipped_tasks.txt` |
 | `evaluate/slots` | Clears this build's Harbor job, memory samples, and any OOM list left by the previous build in this workspace, then divides `CPU_LOCK_QTY` by each task's declared `cpus` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
 | `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user. A Harbor that exits non-zero before any trial finished fails the step with Harbor's last `…Error:` line | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
@@ -101,7 +101,7 @@ A build runs the same seven phases, the same steps and the same Harbor command o
 | `tasks/icode` git build | `uv sync` on the host when its CPU type matches the containers | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
 | Provenance `Worker` line | `/proc/cpuinfo` | `sysctl` |
 
-SWE-bench Pro always runs `linux/amd64`, because Harbor runs its prebuilt images and those are published for amd64 only. DeepSWE uses that published image on an x86-64 host and a native build of the task Dockerfile on an arm64 host ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). LoLBench runs the Docker host's platform (`linux/arm64` on Apple silicon), unless a selected task's Dockerfile downloads an x86-64-only build. On an arm64 host an amd64 task runs emulated (Rosetta in Docker Desktop, QEMU on Linux). `container_platform.json` records the platform, and the report's `Worker` line ends with `os Darwin · containers linux/arm64` (or `linux/amd64 emulated`). Per-OS command differences for operators are in [dependencies.md](dependencies.md#linux-and-macos).
+SWE-bench Pro always runs `linux/amd64`, because Harbor runs its prebuilt images and those are published for amd64 only. DeepSWE uses that published image on an x86-64 host. On an arm64 host it uses the native build `mac-k3d eval prepare` made of the task Dockerfile, else the published image under emulation ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). LoLBench runs the Docker host's platform (`linux/arm64` on Apple silicon), unless a selected task's Dockerfile downloads an x86-64-only build. On an arm64 host an amd64 task runs emulated (Rosetta in Docker Desktop, QEMU on Linux). `container_platform.json` records the platform, and the report's `Worker` line ends with `os Darwin · containers linux/arm64` (or `linux/amd64 emulated`). Per-OS command differences for operators are in [dependencies.md](dependencies.md#linux-and-macos).
 
 ## Where the benchmarks come from
 
@@ -122,9 +122,9 @@ A worker needs two different downloads before a question can run, and different 
 | | Benchmark checkout | Question image |
 |---|---|---|
 | What it is | The benchmark's git repo: one text folder per question | A prebuilt container filesystem for one question: OS, toolchain and the project at its base commit |
-| Who fetches it | mac-k3d, `tasks/benchmark` (`pin_benchmark_sha` in `_common.sh`) | DeepSWE and LoLBench: `tasks/images`, before `tasks/icode`. SWE-bench Pro: Harbor, when that question's trial environment starts in `evaluate` |
-| From where | GitHub, at the pinned commit | A container registry, at the address in the task's `task.toml` |
-| When | The first build in that job's workspace; again only when the pin changes | The first trial of that question on that worker |
+| Who fetches it | mac-k3d, `tasks/benchmark` (`pin_benchmark_sha` in `_common.sh`) | Harbor, when that question's trial environment starts in `evaluate` (LoLBench: `tasks/images` first, below). A Mac's native DeepSWE builds: `mac-k3d eval prepare`, before any eval |
+| From where | GitHub, at the pinned commit | A container registry, at the address in the task's `task.toml` (a native build: the task's Dockerfile on the pinned base) |
+| When | The first build in that job's workspace; again only when the pin changes | The first trial of that question on that worker (a native build: when `prepare` runs) |
 | Kept in | `$WORKDIR/deep-swe` (`eval-runs/` in the job's Jenkins workspace) | The worker's Docker image store, shared by every job on that worker |
 | Covers | All questions at once (DeepSWE: 113 folders) | One question; each question has its own image |
 
@@ -151,7 +151,7 @@ The checkout does not contain the image, only its address. A DeepSWE question fo
 - `task.toml`: declared `cpus`/`memory_mb`, verifier settings, and `[environment] docker_image = "public.ecr.aws/d3j8x8q7/swe-bench-202605:<id>-v1.1"`
 - `environment/Dockerfile`: the recipe the benchmark authors built that image from
 
-The checkout is the same files on Linux and macOS. The image is not in the clone. `tasks/images` prepares it, proves it, and tags it with the official name before any iCode rollout. Harbor never passes `--force-build`, so it starts that local tag. The images stay until someone prunes Docker, so disk use grows with the number of different questions a worker has run (`env/host` checks `WORKER_MIN_DISK_GB` before each build).
+The checkout is the same files on Linux and macOS. The image is not in the clone. Harbor never passes `--force-build` and pulls an image only when its name is missing locally, so a local tag under the official name is the one it starts. The images stay until someone prunes Docker, so disk use grows with the number of different questions a worker has run (`env/host` checks `WORKER_MIN_DISK_GB` before each build).
 
 ### DeepSWE on Linux and macOS
 
@@ -160,59 +160,80 @@ Both machines clone `github.com/datacurve-ai/deep-swe` at `DEEPSWE_REF`. Each qu
 ```text
 clone the question (same files on both machines)
         |
-        +-- Linux x86-64
-        |     pull swe-bench-202605:<id>-v1.1     (already amd64, so native)
-        |     oracle + nop once, store the result
-        |     later builds of this question reuse that result
-        |     then the real iCode rollout
+        +-- Linux x86-64 (as before)
+        |     nothing in tasks/images
+        |     Harbor pulls swe-bench-202605:<id>-v1.1 at the trial (already amd64, so native)
         |
         +-- Apple silicon (or a Linux arm64 host)
-              build the Dockerfile on arm64
-              using mars-base at the pinned digest
-              tag it mac-k3d/deepswe-native:<id> and with the official name
-              oracle + nop on that build
-                 pass -> run the rollout as linux/arm64
-                 fail, or the Dockerfile is x86-only
-                      (cliffy-config-file-parsing downloads an x86-64 Deno build)
-                      -> pull the published amd64 image
-                         and run it under Rosetta (QEMU on Linux arm64)
-                         oracle + nop on that image too
-                            pass -> rollout under emulation
-                            fail -> skip the question, no rollout
+              once, before any eval: mac-k3d eval prepare --benchmark deepswe
+                build the Dockerfile on arm64, on mars-base at the pinned digest
+                tag it mac-k3d/deepswe-native:<id> and with the official name
+                oracle + nop on that build, store the result
+                   pass -> keep the tag
+                   fail, a failed build, or an x86-only Dockerfile
+                        (cliffy-config-file-parsing downloads an x86-64 Deno build)
+                        -> untag the official name, print the reason
+              every eval (no build, pull or check):
+                prepared and proven -> tag the official name, run linux/arm64
+                anything else       -> untag the official name; Harbor pulls the
+                                       published amd64 image and runs it under
+                                       Rosetta (QEMU on Linux arm64); the reason
+                                       goes into the report
 ```
 
-`tasks/images` (`deepswe_images` in `pipeline/stages/tasks/images.sh`) does this before `tasks/icode`, so the iCode drop or venv matches the platform the questions will actually run on. The check uses Harbor's oracle agent (applies the reference solution: every fail-to-pass and pass-to-pass test must pass) and then its nop agent (changes nothing: some fail-to-pass test must fail, every pass-to-pass test must pass). The nop runs only after the oracle passes. No model is called, and nothing from iCode is mounted. The check trials use the canary's network setup (egress probe, trial subnets, teardown) under `$WORKDIR/env-check/<id>/`.
+`tasks/images` (`deepswe_images` in `pipeline/stages/tasks/images.sh`) makes the eval's choice before `tasks/icode`, so the iCode drop or venv matches the platform the questions will run on. On an x86-64 host it does nothing for DeepSWE, as before the native work: the published image is the benchmark's own and is used as is, with no check.
 
-The result is stored at `$MAC_K3D_SHARE/env-check/deepswe/<id>.json`, one entry per image source and platform (`published linux/amd64`, `built linux/arm64`). Its key is the image id, the sha256 of `task.toml`, of the tests and of the solution, `HARBOR_VERSION`, and for a native build the Dockerfile sha256 and the base digest. A later build of that question on that machine reuses the entry while every part of the key matches, with no Harbor call. A pass is stored, and so is a fail the grader answered (for example `oracle f2p 35/37`), so a broken image is not checked again on every build. Four kinds of fail are not stored, and the next build checks again: a pull or native build that failed, a trial Harbor stopped before the verifier wrote `reward.json` (a compose error or a timeout), a crashed verifier (`reward.txt` holds `-1`, for example after running out of memory), and a nop that never ran. To force a fresh check, delete that file, or remove the `mac-k3d/deepswe-native:<id>` image (a new build has a new image id).
+**Prepare.** `mac-k3d eval prepare --benchmark deepswe` ([commands.md](commands.md#eval-prepare)) extracts the pipeline and runs `pipeline/tools/prewarm_task_images.sh`: `env/harbor`, `tasks/benchmark`, then `tasks/select` and `tasks/images` with `MAC_K3D_DEEPSWE_PREPARE=1`, one question at a time. The native build is ours, so it is checked; the published image is the benchmark's, so it is not. The check uses Harbor's oracle agent (applies the reference solution: every fail-to-pass and pass-to-pass test must pass) and then its nop agent (changes nothing: some fail-to-pass test must fail, every pass-to-pass test must pass). The nop runs only after the oracle passes. No model is called, and nothing from iCode is mounted. The check trials use the canary's network setup (egress probe, trial subnets, teardown) under `env-check/<id>/` in the prepare folder.
 
-A native build is tagged `mac-k3d/deepswe-native:<id>`. It gets the official name, which the verifier's `tests/Dockerfile` starts `FROM`, only when its stored result is a pass or just before its check runs. Other builds of the question may be running on this worker, so a stored fail never moves that name. On the published path, `docker image rm <official>` drops the name from a native build (the build itself stays) before the pull. The check holds the per-worker `images` lock for one question at a time, waiting up to `MAC_K3D_IMAGES_LOCK_WAIT` seconds (default 10800) for another build's check.
+The result is stored at `$MAC_K3D_SHARE/env-check/deepswe/<id>.json`. Its key is the image id, the sha256 of `task.toml`, of the tests and of the solution, `HARBOR_VERSION`, the Dockerfile sha256 and the base digest. A rerun of `prepare` reuses the result while every part of the key matches, with no Harbor call, so it redoes only what changed. A pass is stored, and so is a fail the grader answered (for example `oracle f2p 35/37`), so a broken build is not checked again. These are not stored, and the next `prepare` tries them again:
 
-A question whose image fails the check is appended to `skipped_tasks.txt` with the reason (for example `environment check failed: nop f2p 37/37 (passes without the fix) on built linux/arm64`). `tasks/leakscan` appends its hits after it, and `evaluate` skips every id in that file. The report lists those questions under skipped questions and in `provenance.md`. The build stops only when every selected question is out. One iCode build serves the whole run, so if any selected question needs the published image, every question in that run uses it (`linux/amd64`, emulated on an arm64 host). A Jenkins `one_task` build is one question, so the choice stays per question. `DEEPSWE_DOCKER_PLATFORM` forces one platform and does not fall back. `DEEPSWE_DOCKER_PLATFORM=linux/amd64` on a Mac runs the published image for a side-by-side comparison.
+- a failed build;
+- a trial Harbor stopped before the verifier wrote `reward.json` (a compose error or a timeout);
+- a crashed verifier (`reward.txt` holds `-1`, for example after running out of memory);
+- a nop that never ran.
 
-`pipeline/tools/prewarm_task_images.sh` runs only `env/harbor`, `tasks/benchmark`, `tasks/select` and `tasks/images`, one question at a time, so each question gets its own image (no run-wide fallback) and its stored result. Run it once on an idle worker, as the user that runs the agent, so real builds reuse the results. It takes the `images` lock under `~/.mac-k3d/locks`, not the one Jenkins builds take under the agent root, so a build running at the same time is not held back:
+`prepare` exits 1 while any of these is left. `--rebuild` (`DEEPSWE_REBUILD=1`) builds even when the build is current, which gives a new image id and so a fresh check.
 
-```bash
-bash pipeline/tools/prewarm_task_images.sh                  # every DeepSWE question at DEEPSWE_REF
-TASKS=cliffy-config-file-parsing bash pipeline/tools/prewarm_task_images.sh
-```
+**Eval.** On an arm64 host a question runs natively only when:
 
-It prints `prewarm deepswe: N of T questions ready`, lists each question kept out with its reason, and exits 1 when any is out.
+- `mac-k3d/deepswe-native:<id>` exists;
+- its labels match the current Dockerfile sha256 and `DEEPSWE_BASE_IMAGE`;
+- the store has a pass for its key.
+
+Then `docker tag` points the official name at it; the verifier's `tests/Dockerfile` also starts `FROM` that name. Every other question runs emulated. If the official name points at a non-amd64 image, `docker image rm` removes that tag; the native build stays. Harbor then pulls the published image at the trial, as on Linux. `env_check.json` records each question's choice and reason, and the report prints them:
+
+| Reason | Hint |
+|---|---|
+| `its Dockerfile downloads an x86-64-only build`, `its Dockerfile is not FROM mars-base:latest (…)` | none: it cannot build natively |
+| `native check failed: oracle f2p 35/37` (a stored fail) | none: the grader's answer |
+| `not prepared on this Mac`, `prepared for another Dockerfile or base pin`, `prepared for other task files or another Harbor version (now …)`, `native check failed: oracle left no reward.json`, `native build failed (see …/build.log)` | `run mac-k3d eval prepare --benchmark deepswe` |
+| `another selected question runs emulated (one iCode build per run)`, `DEEPSWE_DOCKER_PLATFORM=linux/amd64` | none |
+
+Nothing is kept out of Harbor over its image: an emulated question still runs. One iCode build serves the whole run, so if any selected question runs emulated, every question in that run does (`linux/amd64`). A Jenkins `one_task` build is one question, so the choice stays per question. `DEEPSWE_DOCKER_PLATFORM` forces one platform:
+
+- `linux/amd64` on a Mac runs every question emulated, for a side-by-side comparison;
+- `linux/arm64` fails the build unless every selected question is prepared and proven.
 
 What this costs:
 
-- **First run of a question on a worker:** two test-suite runs (oracle, then nop), plus a native build on arm64. That is minutes per question. On disk, `docker images` reports 4 to 5 GB per published image, but about 3 GB of that is layers they share; `docker system df -v` gives each about 1 GB of its own. The 106 on the Linux worker hold about 105 GB of their own layers, so plan on roughly 120 GB for the whole suite on one worker. A native build is similar, and a question that fell back on arm64 keeps both. It happens in the `tasks` phase, which runs before the Jenkins CPU lock. At most one check runs per worker at a time (the `images` lock), using up to the question's declared CPUs (2 for DeepSWE) on top of the builds that hold the lock. The prewarm script, run once on an idle worker, keeps this out of real runs.
-- **Local multi-question runs:** one native fail moves that run to `linux/amd64`, as above. On Jenkins each `one_task` build is one question, so the choice is exact per question.
-- **Two modes at once on one worker:** the official name points at one image. A build with `DEEPSWE_DOCKER_PLATFORM=linux/amd64`, or a local run that fell back, re-points it at the published image, and a native build of the same question re-points it back. Both builds still check their own image, but a trial that starts its verifier while the other mode holds the name grades on the other image. `evaluate/harbor_run` inspects the image again after Harbor, so `check_report` fails the run when the name still points at the other platform's image then. A switch that was undone before Harbor finished leaves no trace. Run a side-by-side comparison only when no other DeepSWE build is running on that worker.
-- **Parity across OSes:** a native build has its own image digest, so Linux and macOS are compared by the check counts and rewards in `provenance.md` (oracle and nop F2P/P2P per question), not by digests.
-- **Docker Desktop:** the base pin goes in through BuildKit's `--build-context mars-base:latest=docker-image://<pin>`, which was run on Linux Docker. It has not run on Docker Desktop yet (the Mac mini's first prewarm is that test). A builder that rejects the flag fails the native build, and the question falls back to the published image.
+- **Prepare, once per Mac:** a native build and two test-suite runs (oracle, then nop) per question, which is minutes per question and hours for all 113.
+  - On disk, `docker images` reports 4 to 5 GB per image, but about 3 GB of that is layers they share.
+  - `docker system df -v` gives each image about 1 GB of its own, so plan on roughly 120 GB for the whole suite.
+  - Run it again after changing `DEEPSWE_REF`, `DEEPSWE_BASE_IMAGE` or `HARBOR_VERSION`, or after a Docker prune.
+- **An eval:** on a Mac, seconds per question (a `docker tag` or `docker image rm`); on Linux, nothing. An emulated question's first trial waits while Harbor pulls the published image, as on Linux.
+- **Run prepare or a forced comparison alone:** the official name points at one image. `prepare`, or a build with `DEEPSWE_DOCKER_PLATFORM=linux/amd64`, re-points it, so run either only when no other DeepSWE build is running on that Mac. `evaluate/harbor_run` inspects the image again after Harbor, so `check_report` fails a run whose name pointed at the other platform's image by then.
+- **Parity across OSes:** a native build has its own image digest. Compare a Mac with Linux by the native check's counts in `provenance.md` and by the rewards, not by digests.
+- **Docker Desktop:** the base pin goes in through BuildKit's `--build-context mars-base:latest=docker-image://<pin>`.
+  - This has run on Linux Docker but not on Docker Desktop yet; the Mac mini's first `prepare` is that test.
+  - A builder that rejects the flag fails the native build, and the question runs emulated with that reason.
 
 | Benchmark | Image address | Who makes sure it is there |
 |---|---|---|
-| DeepSWE | `public.ecr.aws/d3j8x8q7/swe-bench-202605:…`, one per question | `tasks/images`: pull on an x86-64 host; native `docker build` on `DEEPSWE_BASE_IMAGE` on an arm64 host, with the published image as the fallback above |
+| DeepSWE | `public.ecr.aws/d3j8x8q7/swe-bench-202605:…`, one per question | Harbor pulls it at the trial. On an arm64 host, `mac-k3d eval prepare` builds it natively on `DEEPSWE_BASE_IMAGE` beforehand, and an eval only tags or untags the official name |
 | LoLBench | `docker_image` in `task.toml` (default `smartdub26/lolbench:<id>-1.0.0`) | `tasks/images` before Harbor: keeps a local image built for this CPU, retags a leftover Harbor build, or builds the task's Dockerfile (`ensure_task_image` in `_common.sh`), because the published tags do not cover every architecture |
 | SWE-bench Pro | `jefzda/sweap-images:…`, written by `swebenchpro_tasks.py` | Harbor pulls it at the trial |
 
-The `env` phase fetches neither. It checks that the worker can run any evaluation (Docker, compose, Harbor, the egress probe, a free trial subnet, the model API), pulling only the small egress probe image when it is missing. So on a brand-new machine `mac-k3d setup` installs the tools, the first build's `tasks` phase clones the benchmark, and `tasks/images` pulls or builds each selected DeepSWE image and runs its first check, which can take several minutes. A pull or build that fails, or a check that fails on the published image, keeps that question out of Harbor; the build's other questions still run.
+The `env` phase fetches neither. It checks that the worker can run any evaluation (Docker, compose, Harbor, the egress probe, a free trial subnet, the model API), pulling only the small egress probe image when it is missing. So on a brand-new machine `mac-k3d setup` installs the tools, the first build's `tasks` phase clones the benchmark, and each question's first trial waits while Harbor pulls its image, which can take several minutes for a large image. A pull that fails, for a missing image or a damaged Docker store, fails that question's trial; the build's other questions still run. A Mac worker runs `mac-k3d eval prepare --benchmark deepswe` once after onboarding ([new-machine.md](new-machine.md)); until then its DeepSWE questions run emulated.
 
 ## How Harbor is called
 
@@ -276,7 +297,7 @@ Every scored run makes these binding: the canary runs once per shard (`CANARY_AL
 
 ## Outputs
 
-- **Report** (`report/render`): `eval-runs/output/<suite>/<run>/` with `artifact.json`, `summary.md`, `report.html`, `provenance.md`, and `container_mem.jsonl` / `skipped_questions.txt` when written. `provenance.md` holds the full provenance (Harbor, benchmark pin, pipeline, each worker, isolation, images, the environment check per question); `summary.md` and `report.html` keep a short Provenance block that links to it. Jenkins archives the folder (`last_output.txt`).
+- **Report** (`report/render`): `eval-runs/output/<suite>/<run>/` with `artifact.json`, `summary.md`, `report.html`, `provenance.md`, and `container_mem.jsonl` / `skipped_questions.txt` when written. `provenance.md` holds the full provenance (Harbor, benchmark pin, pipeline, each worker, isolation, images, and on a Mac each DeepSWE question's environment, native or emulated, with the reason); `summary.md` and `report.html` keep a short Provenance block that links to it. Jenkins archives the folder (`last_output.txt`).
 - **Analysis** (`archive/analysis`): `cost-token-report.md` in the same folder. `pipeline/lib/cost_token_report.py` still runs by hand on older runs.
 - **Archive** (`archive/backup`): first gzips and masks this build's transcripts in place (`archive_run.py compress`), then writes `<root>/output/<suite>/<run>.tar.gz`, where `<root>` is the extracted pipeline on Jenkins (`$WORKSPACE/mac-k3d-pipeline`) or the checkout locally. `MAC_K3D_BACKUP_ROOT` or `MAC_K3D_OUTPUT_ROOT` moves it. On Jenkins the step writes the archive's workspace path to `last_backup.txt`, and a `one_task` build archives that file too, so the `.tar.gz` downloads from the build page. A shard skips it. A backup root outside the workspace stays on the worker only.
 - **Combined archive** (`some_task`, `full_suite_task`): after the merge, the dispatcher's `Aggregate` stage runs `cost_token_report.py` and `archive_run.py` over `aggregate/`, giving `backup/<suite>/<RUN_GROUP>.tar.gz` (for example `deepswe_full_suite_task-12.tar.gz`) on the dispatcher build page. It holds no transcripts; they stay in the shard builds that the report's `Transcripts:` line names.
@@ -292,9 +313,9 @@ Every scored run makes these binding: the canary runs once per shard (`CANARY_AL
 | `baseline.sh`, `grade_baseline.sh` | The optional LLM-only arm (no iCode), graded by Harbor's verifier |
 | `check_report.sh` | Validate a run's `artifact.json` |
 | `e1_reach_jenkins.sh` | This PC can reach the Jenkins login page |
-| `prewarm_task_images.sh` | Run `tasks/images` alone for each selected question, with no iCode and no model: DeepSWE images are prepared and checked once ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)), LoLBench images built |
+| `prewarm_task_images.sh` | The engine of `mac-k3d eval prepare`: `tasks/images` alone for each selected question, with no iCode and no model. On an arm64 host DeepSWE questions are built natively and checked once ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)); on x86-64 there is nothing to prepare. `BENCHMARK=lolbench` builds the LoLBench images |
 | `test_icode_input.sh`, `test_icode_build.sh` | Fixture tests for `icode_input.sh` and `tasks/icode` |
-| `test_env_check.sh` | Fixture test for `tasks/images` and the environment check, with a fake `docker` and `harbor` |
+| `test_env_check.sh` | Fixture test for DeepSWE in `tasks/images`, `prepare` included, with a fake `docker` and `harbor` |
 
 ## Old stage names
 

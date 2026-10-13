@@ -52,16 +52,31 @@ class PhaseLayoutTests(unittest.TestCase):
 
     def test_tasks_images_settles_the_platform_before_icode(self):
         listed = steps("tasks")
-        # The environment check picks the task containers' platform, which picks the iCode drop or venv.
+        # The image decision picks the task containers' platform, which picks the iCode drop or venv.
         self.assertLess(listed.index("tasks/images"), listed.index("tasks/icode"))
-        # It lists the questions it keeps out first; the leak scan appends to that list.
-        self.assertLess(listed.index("tasks/images"), listed.index("tasks/leakscan"))
-        leakscan = (STAGES / "tasks" / "leakscan.sh").read_text(encoding="utf-8")
-        self.assertNotIn('rm -f "$SKIPPED_TASKS"', leakscan)
         images = (STAGES / "tasks" / "images.sh").read_text(encoding="utf-8")
-        self.assertIn('rm -f "$WORKDIR/skipped_tasks.txt" "$WORKDIR/env_check.json"', images)
+        self.assertIn('rm -f "$WORKDIR/env_check.json"', images)
+        # Only the leak scan keeps questions out.
+        self.assertNotIn("skipped_tasks", images)
         env = (STAGES / "env.sh").read_text(encoding="utf-8")
         self.assertIn('"$WORKDIR/env_check.json"', env)
+
+    def test_an_eval_never_builds_pulls_or_checks_deepswe_images(self):
+        text = (STAGES / "tasks" / "images.sh").read_text(encoding="utf-8")
+        bodies = dict(re.findall(r"^([a-z_]+)\(\) \{\n(.*?)^\}", text, re.M | re.S))
+        heavy = ("docker build", "run_check_agent", "build_env_check_cmd", "use_built", "check_native")
+        reach = {name for name, body in bodies.items() if any(re.search(rf"\b{w}\b", body) for w in heavy)}
+        self.assertEqual(reach, {"use_built", "run_check_agent", "check_native", "prepare_question"})
+        self.assertNotIn("docker pull", text)
+        main = bodies["deepswe_images"]
+        self.assertEqual(text.count('prepare_question "'), 1)
+        branch = re.search(r'\n  if \[ "\$PREPARE" = 1 \]; then\n((?:    .*\n)+)  else\n((?:    .*\n)+)  fi\n',
+                           main[main.index("node_lock images"):])
+        self.assertIsNotNone(branch, "deepswe_images has no PREPARE branch after the lock")
+        self.assertIn('prepare_question "', branch.group(1))
+        self.assertNotIn("prepare_question", branch.group(2))
+        self.assertIn("choose_images", branch.group(2))
+        self.assertLess(main.index("linux/amd64 ]; then"), main.index("node_lock images"))
 
     def test_every_step_file_is_run_by_its_phase(self):
         listed = {step for phase in phases() for step in steps(phase)}
@@ -72,7 +87,7 @@ class PhaseLayoutTests(unittest.TestCase):
             self.assertIn(rel, listed, f"{rel}.sh is not in any phase's STEPS")
 
     def test_only_evaluate_steps_source_harbor_cmd(self):
-        # tasks/images runs the first-time environment check (oracle + nop) through it.
+        # tasks/images checks a native DeepSWE build (oracle + nop) through it, in mac-k3d eval prepare.
         allowed = {STAGES / "tasks" / "images.sh"}
         for path in sorted(STAGES.rglob("*.sh")):
             if "harbor_cmd.sh" not in path.read_text(encoding="utf-8") or path == HARBOR_CMD:

@@ -36,11 +36,15 @@ from score_results import (  # noqa: E402
 FIXTURE = LIB / "testdata" / "report-min.json"
 
 
-def passing_env_check(task_ids, platform: str = "linux/amd64") -> dict:
-    """tasks/images' record of a published image whose oracle and nop checks passed."""
+PREPARE_HINT = "run mac-k3d eval prepare --benchmark deepswe"
+
+
+def native_env_check(task_ids, platform: str = "linux/arm64") -> dict:
+    """tasks/images' record on a Mac of a prepared native build whose oracle and nop checks passed."""
     return {
         str(tid): {
-            "source": "published",
+            "mode": "native",
+            "source": "built",
             "platform": platform,
             "image": f"public.ecr.aws/d3j8x8q7/swe-bench-202605:{tid}-v1.1",
             "image_id": "sha256:" + "e" * 64,
@@ -56,10 +60,24 @@ def passing_env_check(task_ids, platform: str = "linux/amd64") -> dict:
     }
 
 
-def official_protocol_inputs(task_ids=()) -> dict:
-    """The provenance a comparison artifact must carry on every run."""
+def emulated_env_check(task_ids, reason: str = "not prepared on this Mac", hint: str = PREPARE_HINT) -> dict:
+    """tasks/images' record on a Mac of a question that runs the published image under emulation."""
     return {
-        "env_check": passing_env_check(task_ids),
+        str(tid): {
+            "mode": "emulated",
+            "source": "published",
+            "platform": "linux/amd64",
+            "image": f"public.ecr.aws/d3j8x8q7/swe-bench-202605:{tid}-v1.1",
+            "reason": reason,
+            "hint": hint,
+        }
+        for tid in task_ids
+    }
+
+
+def official_protocol_inputs(task_ids=()) -> dict:
+    """The provenance a comparison artifact must carry on every run (a Linux worker: no env_check)."""
+    return {
         "harbor": {"version": "0.22.0"},
         "benchmark": {
             "url": "https://github.com/datacurve-ai/deep-swe",
@@ -3370,7 +3388,7 @@ class ProvenanceTests(unittest.TestCase):
             self.assertIn("- Agent mount: /opt/icode-host read-only true (1 mount)", prov)
             self.assertIn("- Leak scan: mac-k3d-leakscan-v1 · hit tasks none · clean 1", prov)
             self.assertIn("| alpha | sha256:image | - | tomlhash | testshash |", prov)
-            self.assertNotIn("## Environment check", prov)
+            self.assertNotIn("## Environment", prov)
             doc["anticheat"] = {"status": "ok", "version": "v1", "counts": {"clean": 4}}
             last = summary_markdown(doc).rstrip().splitlines()[-1]
             self.assertTrue(last.startswith("- Anti-cheat `v1`: clean **4**"), last)
@@ -3407,7 +3425,6 @@ class ProvenanceTests(unittest.TestCase):
             "requester": {"user": "unknown", "build_url": "unknown"},
             "pipeline": {"commit": "abcdef", "dirty": False},
             "isolation": valid_isolation(),
-            "env_check": passing_env_check(["alpha", "beta", "gamma"]),
         }
         doc["anticheat"] = {"status": "ok", "version": "mac-k3d-anticheat-v1"}
         doc["icode_git"] = {
@@ -3421,7 +3438,7 @@ class ProvenanceTests(unittest.TestCase):
         doc["eval_protocol"]["harbor"] = {"version": "0.22.0"}
         self.assertEqual(validate(doc), [])
 
-    def test_provenance_md_holds_each_workers_environment_check(self):
+    def test_reports_say_which_questions_ran_native_or_emulated_and_why(self):
         from render_report import demo_artifact, write_report
 
         doc = demo_artifact()
@@ -3429,88 +3446,93 @@ class ProvenanceTests(unittest.TestCase):
             out = Path(tmp)
             write_report(doc, out)
             self.assertFalse((out / "provenance.md").exists(), "no eval_protocol, no provenance.md")
-            checks = passing_env_check(["alpha"])
+            checks = native_env_check(["alpha"])
             checks["alpha"]["reused"] = True
-            checks["beta"] = {
-                **passing_env_check(["beta"])["beta"],
-                "pass": False,
-                "reason": "environment check failed: oracle f2p 35/37 on published linux/amd64",
-                "oracle": {"f2p_passed": 35, "f2p_total": 37, "p2p_passed": 5, "p2p_total": 5, "reward": 0.0},
-                "nop": None,
-                "attempts": [{"source": "built", "platform": "linux/arm64", "pass": False,
-                              "reason": "environment check failed: native build failed on built linux/arm64",
-                              "reused": False}],
-            }
+            checks.update(emulated_env_check(["beta"]))
+            checks.update(emulated_env_check(["gamma"], "its Dockerfile downloads an x86-64-only build", ""))
             doc["eval_protocol"] = {"worker": {"node": "mac-mini"}, "pipeline": {"commit": "abc"}, "env_check": checks}
-            doc["skipped_questions"] = ["beta: environment check failed: oracle f2p 35/37 on published linux/amd64"]
+            doc["skipped_questions"] = ["delta: leak scan: gold patch in the iCode tree"]
             write_report(doc, out)
             summary = (out / "summary.md").read_text(encoding="utf-8")
             page = (out / "report.html").read_text(encoding="utf-8")
             prov = (out / "provenance.md").read_text(encoding="utf-8")
-        line = "Environment check: 1 of 2 passed (1 reused, 1 kept out)"
-        self.assertIn(f"- {line}\n", summary)
-        self.assertIn(f"<li>{line}</li>", page)
-        self.assertIn(f"- {line}\n", prov)
-        self.assertIn("| Task | Worker | Source | Platform | Image | oracle F2P | oracle P2P | nop F2P | nop P2P | Result |", prov)
+        lines = (
+            "Environment: 1 native, 2 emulated on mac-mini",
+            f"Emulated on mac-mini (not prepared on this Mac; {PREPARE_HINT}): beta",
+            "Emulated on mac-mini (its Dockerfile downloads an x86-64-only build): gamma",
+        )
+        for line in lines:
+            self.assertIn(f"- {line}\n", summary)
+            self.assertIn(f"<li>{line}</li>", page)
+        self.assertIn(f"- {lines[0]}\n", prov)
+        self.assertIn("| Task | Worker | Environment | Platform | Image | oracle F2P | oracle P2P | nop F2P | nop P2P | "
+                      "Checked in | Reused | Reason |", prov)
         self.assertIn(
-            f"| alpha | mac-mini | published | linux/amd64 | sha256:{'e' * 64} | 3/3 | 5/5 | 0/3 | 5/5 | pass | "
-            "deepswe_one_task#7 | yes |",
+            f"| alpha | mac-mini | native | linux/arm64 | sha256:{'e' * 64} | 3/3 | 5/5 | 0/3 | 5/5 | "
+            "deepswe_one_task#7 | yes | - |",
             prov,
         )
-        self.assertIn("| beta | mac-mini | published | linux/amd64 | sha256:", prov)
-        self.assertIn("| 35/37 | 5/5 | - | - | kept out: oracle f2p 35/37 on published linux/amd64 |", prov)
-        self.assertIn("- beta on mac-mini: built linux/arm64 failed first (native build failed on built linux/arm64)", prov)
-        self.assertIn("## Kept out of Harbor\n\n- beta: environment check failed: oracle f2p 35/37", prov)
+        self.assertIn("| beta | mac-mini | emulated | linux/amd64 | public.ecr.aws/d3j8x8q7/swe-bench-202605:beta-v1.1 "
+                      f"| - | - | - | - | - | - | not prepared on this Mac; {PREPARE_HINT} |", prov)
+        self.assertIn("| - | - | its Dockerfile downloads an x86-64-only build |", prov)
+        self.assertIn("## Kept out of Harbor\n\n- delta: leak scan: gold patch in the iCode tree", prov)
 
-        # A merged run: Linux used the published image and the Mac its own build of the same question.
-        from provenance import env_check_rows, env_check_line
+        # A merged run: Linux has no entries; each Mac shows its own decision for the same question.
+        from provenance import EMULATED_IDS_SHOWN, emulated_lines, env_check_lines, env_check_rows
 
         merged = {
             "shards": [
-                {"shard": 1, "worker": {"node": "linux"}, "env_check": passing_env_check(["alpha"])},
-                {"shard": 2, "worker": {"node": "mac"}, "env_check": {
-                    "alpha": {**passing_env_check(["alpha"], "linux/arm64")["alpha"], "source": "built"}}},
+                {"shard": 1, "worker": {"node": "linux"}},
+                {"shard": 2, "worker": {"node": "mac"}, "env_check": native_env_check(["alpha"])},
+                {"shard": 3, "worker": {"node": "mac-2"}, "env_check": emulated_env_check(["alpha"])},
             ]
         }
         rows = env_check_rows(merged)
-        self.assertEqual([(r["worker"], r["source"], r["platform"]) for r in rows],
-                         [("linux", "published", "linux/amd64"), ("mac", "built", "linux/arm64")])
-        self.assertEqual(env_check_line(rows), "Environment check: 2 of 2 passed (0 reused, 0 kept out)")
+        self.assertEqual([(r["worker"], r["mode"], r["platform"]) for r in rows],
+                         [("mac", "native", "linux/arm64"), ("mac-2", "emulated", "linux/amd64")])
+        self.assertEqual(env_check_lines(rows), ["Environment: 1 native, 0 emulated on mac",
+                                                 "Environment: 0 native, 1 emulated on mac-2"])
+        many = env_check_rows({"env_check": emulated_env_check([f"q{i:02d}" for i in range(EMULATED_IDS_SHOWN + 2)]),
+                               "worker": {"node": "mac"}})
+        self.assertTrue(emulated_lines(many)[0].endswith(", q09 and 2 more (see provenance.md)"), emulated_lines(many))
 
-    def test_images_and_env_checks_must_match_the_task_containers(self):
+    def test_a_native_question_needs_a_passing_check_and_images_match_the_task_containers(self):
         from check_report import environment_errors
 
-        def run(suite="deepswe", **protocol):
+        def run(suite="deepswe", container="linux/arm64", **protocol):
             return {
                 "suite": suite,
                 "icode": {"tasks": [{"id": "alpha", "n_scored": 1}, {"id": "beta", "n_scored": 0}]},
-                "eval_protocol": {"worker": {"container_platform": "linux/arm64"}, **protocol},
+                "eval_protocol": {"worker": {"container_platform": container}, **protocol},
             }
 
-        built = passing_env_check(["alpha"], "linux/arm64")
+        built = native_env_check(["alpha"])
         native = {"alpha": {"id": "sha256:1", "platform": "linux/arm64"}}
+        published = {"alpha": {"id": "sha256:2", "platform": "linux/amd64"}}
         self.assertEqual(environment_errors(run(env_check=built, images=native)), [])
-        errors = environment_errors(run(env_check=built, images={"alpha": {"platform": "linux/amd64"}}))
+        errors = environment_errors(run(env_check=built, images=published))
         self.assertEqual(errors, ["eval_protocol: image of alpha is linux/amd64, but the task containers ran "
                                   "linux/arm64 (container_platform.json)"])
-        errors = environment_errors(run(env_check=passing_env_check(["alpha"]), images=native))
-        self.assertIn("eval_protocol.env_check.alpha: checked on linux/amd64, but the task containers ran linux/arm64",
-                      errors)
+        # Emulated: the published image, no check needed; a Linux run has no entries at all.
+        emulated = emulated_env_check(["alpha"])
+        self.assertEqual(environment_errors(run(container="linux/amd64", env_check=emulated, images=published)), [])
+        self.assertEqual(environment_errors(run(container="linux/amd64", images=published)), [])
+        errors = environment_errors(run(env_check=emulated, images=native))
+        self.assertIn("eval_protocol.env_check.alpha: linux/amd64 image, but the task containers ran linux/arm64", errors)
+        # A native run needs every scored question proven.
         missing = environment_errors(run(images=native))
-        self.assertEqual(len(missing), 1)
-        self.assertIn("no passing environment check", missing[0])
-        self.assertIn(": alpha", missing[0])
+        self.assertEqual(missing, ["eval_protocol: scored DeepSWE questions ran linux/arm64 images with no passing "
+                                   "native check (mac-k3d eval prepare): alpha"])
         self.assertEqual(environment_errors(run("lolbench", images=native)), [])
-        # A question kept out by its check has no trials; one that has trials was not kept out.
-        kept_out = {**built, "beta": {**built["alpha"], "pass": False, "reason": "environment check failed: x"}}
-        self.assertEqual(environment_errors(run(env_check=kept_out, images={**native, "beta": {"platform": "linux/amd64"}})), [])
         failed = {"alpha": {**built["alpha"], "pass": False}}
-        self.assertTrue(environment_errors(run(env_check=failed, images=native)))
+        self.assertIn("eval_protocol.env_check.alpha: native build without a passing check (mac-k3d eval prepare)",
+                      environment_errors(run(env_check=failed, images=native)))
+        unscored = {**built, "beta": {**built["alpha"], "pass": False}}
+        self.assertEqual(environment_errors(run(env_check=unscored, images=native)), [])
 
         merged = run(
             shards=[
-                {"shard": 1, "worker": {"container_platform": "linux/amd64"}, "env_check": passing_env_check(["alpha"]),
-                 "image_platforms": {"alpha": "linux/amd64"}},
+                {"shard": 1, "worker": {"container_platform": "linux/amd64"}, "image_platforms": {"alpha": "linux/amd64"}},
                 {"shard": 2, "worker": {"container_platform": "linux/arm64"}, "env_check": built,
                  "image_platforms": {"alpha": "linux/arm64"}},
             ]
@@ -4413,8 +4435,8 @@ class AgentIsolationTests(unittest.TestCase):
 
     def test_task_containers_keep_amd64_only_environments(self):
         """SWE-bench Pro runs its amd64-only prebuilt images. DeepSWE runs the published amd64
-        image on an x86-64 host, and natively on arm64 only when tasks/images proved a native
-        build for every selected question (env_check.json). LoLBench is native unless a
+        image on an x86-64 host, and natively on arm64 only when tasks/images found a prepared,
+        proven native build for every selected question (env_check.json). LoLBench is native unless a
         Dockerfile downloads an x86-64-only build."""
         native = {"selected": ["t1"], "platform": "linux/arm64"}
         cases = (

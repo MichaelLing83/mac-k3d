@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Fixture tests for tasks/images.sh's DeepSWE environment check, with a fake
-# docker and harbor (no daemon, no network): the published image on an x86-64
-# host, a pinned native build on arm64, reuse with no Harbor call, the
-# fallback to the published image, and questions kept out of Harbor.
+# Fixture tests for tasks/images.sh's DeepSWE images, with a fake docker and
+# harbor (no daemon, no network). An x86-64 host does nothing (Harbor pulls).
+# An arm64 eval never builds, pulls or checks: it runs a question natively on
+# a prepared, proven build, else on the published image emulated, with the
+# reason. mac-k3d eval prepare (MAC_K3D_DEEPSWE_PREPARE=1 and its engine,
+# prewarm_task_images.sh) builds on the pinned base, checks once and reuses.
 set -euo pipefail
 
 STAGES="$(cd "$(dirname "$0")/../stages" && pwd)"
@@ -201,149 +203,204 @@ harbor_calls() { grep -c . "$MACHINE/docker/harbor.log" || true; }
 docker_calls() { grep -c "^$1 " "$MACHINE/docker/docker.log" || true; }
 record() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$WORK/env_check.json" "$1"; }
 show() { cat "$MACHINE/out.txt" >&2; }
+prepare() { run_images "$@" MAC_K3D_DEEPSWE_PREPARE=1; }
+entry() { record "d['tasks']['$1']['$2']"; }
+# An arm64 image under question $1's official name, as an older native build left it.
+seed_native_official() {
+  mkdir -p "$MACHINE/ctx"
+  PATH="$BIN:$PATH" FAKE_STATE="$MACHINE/docker" FAKE_ARCH=aarch64 \
+    docker build -t "registry.example/swe:$1-v1.1" "$MACHINE/ctx" >/dev/null
+}
+PREPARE_HINT="run mac-k3d eval prepare --benchmark deepswe"
+OFFICIAL="registry.example/swe:alpha-v1.1"
 
-# 1. x86-64 Linux: the published image, checked once with oracle then nop, no build.
+# 1. x86-64 Linux, as before this work: no build, pull, tag or check; Harbor pulls at the trial.
 new_machine linux
-run_images alpha x86_64 || { show; fail "first amd64 run failed"; }
-[ "$(docker_calls build)" = 0 ] || { show; fail "an x86-64 host built an image"; }
-[ "$(docker_calls pull)" = 1 ] || { show; fail "expected one pull of the published image"; }
-[ "$(cut -d' ' -f1-3 "$MACHINE/docker/harbor.log" | tr '\n' ,)" = "oracle alpha published,nop alpha published," ] \
-  || { show; fail "expected oracle then nop on the published image: $(cat "$MACHINE/docker/harbor.log")"; }
-grep -q "DOCKER_DEFAULT_PLATFORM=$" "$MACHINE/docker/harbor.log" || fail "native amd64 check set DOCKER_DEFAULT_PLATFORM"
-[ -s "$MACHINE/share/env-check/deepswe/alpha.json" ] || fail "no stored check"
-[ "$(record 'd["platform"]')" = linux/amd64 ] || fail "platform $(record 'd["platform"]')"
-[ "$(record 'd["tasks"]["alpha"]["oracle"]["f2p_passed"]')" = 20 ] || fail "oracle counts not recorded"
+run_images alpha,beta x86_64 || { show; fail "amd64 run failed"; }
+[ ! -s "$MACHINE/docker/docker.log" ] || { show; fail "an x86-64 host changed images: $(cat "$MACHINE/docker/docker.log")"; }
+[ "$(harbor_calls)" = 0 ] || { show; fail "an x86-64 host ran Harbor in tasks/images"; }
+[ ! -e "$WORK/env_check.json" ] || fail "an x86-64 host wrote env_check.json"
+[ ! -e "$MACHINE/share/env-check" ] || fail "an x86-64 host stored a check"
+grep -q "Harbor pulls the published DeepSWE images" "$MACHINE/out.txt" || { show; fail "amd64 message"; }
 [ "$(container_platform x86_64)" = linux/amd64 ] || fail "x86-64 task containers not linux/amd64"
-grep -q "env check: 1 of 1 passed (0 reused, 0 kept out)" "$MACHINE/out.txt" || { show; fail "summary line"; }
-ok "x86-64 host checks the published image once (oracle + nop), builds nothing"
+ok "x86-64 host leaves DeepSWE images to Harbor: zero docker and harbor calls"
 
-# 2. The next build of that question on that machine reuses the stored check.
-run_images alpha x86_64 || { show; fail "second amd64 run failed"; }
-[ "$(harbor_calls)" = 0 ] || { show; fail "reuse still ran Harbor"; }
-[ "$(docker_calls pull)" = 0 ] || { show; fail "reuse pulled again"; }
-[ "$(record 'd["tasks"]["alpha"]["reused"]')" = True ] || fail "reuse not recorded"
-grep -q "1 reused" "$MACHINE/out.txt" || { show; fail "reuse not in the summary"; }
-ok "a stored check is reused with no Harbor call"
-
-# 3. A published fail keeps that question out; the build goes on with the other.
-run_images alpha,beta x86_64 FAKE_ORACLE_PUBLISHED_BETA="35 37 3 3" || { show; fail "one failing question stopped the build"; }
-grep -qx $'beta\tenvironment check failed: oracle f2p 35/37 on published linux/amd64' "$WORK/skipped_tasks.txt" \
-  || { show; fail "skipped_tasks.txt: $(cat "$WORK/skipped_tasks.txt")"; }
-grep -q "^alpha" "$WORK/skipped_tasks.txt" && fail "a passing question was kept out"
-ok "a published image that fails its check keeps only that question out"
-
-# 4. The stored fail is reused; when every question is out the build stops.
-if run_images beta x86_64; then
-  show
-  fail "a build with every question out passed"
-fi
-[ "$(harbor_calls)" = 0 ] || { show; fail "a stored fail ran Harbor again"; }
-grep -q "no selected question has a proven environment" "$MACHINE/out.txt" || { show; fail "all-out message"; }
-ok "a stored fail is reused; every question out stops the build"
-
-# 5. A trial that leaves no reward.json fails this build but is not stored.
-new_machine flaky
-run_images alpha x86_64 FAKE_ORACLE_PUBLISHED=none && { show; fail "no reward.json passed"; }
-grep -q "oracle left no reward.json" "$WORK/skipped_tasks.txt" || fail "reason: $(cat "$WORK/skipped_tasks.txt")"
-[ ! -e "$MACHINE/share/env-check/deepswe/alpha.json" ] || fail "a Harbor error was stored"
-run_images alpha x86_64 || { show; fail "retry after a Harbor error failed"; }
-[ "$(harbor_calls)" = 2 ] || { show; fail "the retry did not check again"; }
-ok "a check with no grader result is retried by the next build"
-
-# 6. arm64: a native build on the pinned base, tagged with the official name, checked natively.
+# 2. arm64 eval, nothing prepared: emulated with the prepare hint; an official
+#    name left on an arm64 image is untagged so Harbor pulls the published one.
 new_machine mac
-run_images alpha aarch64 || { show; fail "first arm64 run failed"; }
+seed_native_official alpha
+run_images alpha aarch64 || { show; fail "unprepared arm64 eval failed"; }
+[ "$(grep -c . "$MACHINE/docker/docker.log")" = 1 ] && grep -qx "rmi $OFFICIAL" "$MACHINE/docker/docker.log" \
+  || { show; fail "expected only the untag of $OFFICIAL: $(cat "$MACHINE/docker/docker.log")"; }
+[ "$(harbor_calls)" = 0 ] || { show; fail "an eval ran a check"; }
+[ "$(entry alpha mode)" = emulated ] && [ "$(entry alpha source)" = published ] || fail "alpha: $(record 'd["tasks"]["alpha"]')"
+[ "$(entry alpha reason)" = "not prepared on this Mac" ] || fail "reason: $(entry alpha reason)"
+[ "$(entry alpha hint)" = "$PREPARE_HINT" ] || fail "hint: $(entry alpha hint)"
+[ "$(record 'd["platform"]')" = linux/amd64 ] || fail "platform $(record 'd["platform"]')"
+[ "$(container_platform aarch64)" = linux/amd64 ] || fail "unprepared eval did not run emulated"
+grep -q "images: 0 native, 1 emulated" "$MACHINE/out.txt" || { show; fail "summary line"; }
+ok "arm64 eval with nothing prepared runs emulated, with zero build, pull and harbor calls"
+
+# 3. prepare: a native build on the pinned base, tagged with the official name, checked natively, stored.
+prepare alpha aarch64 || { show; fail "prepare failed"; }
 grep -q "^build mac-k3d/deepswe-native:alpha platform= context=$BASE_FROM=docker-image://public.ecr.aws/x8v8d7g8/mars-base@sha256:" \
   "$MACHINE/docker/docker.log" || { show; cat "$MACHINE/docker/docker.log" >&2; fail "native build without the pinned base"; }
-grep -q "^tag mac-k3d/deepswe-native:alpha registry.example/swe:alpha-v1.1$" "$MACHINE/docker/docker.log" \
+grep -qx "tag mac-k3d/deepswe-native:alpha $OFFICIAL" "$MACHINE/docker/docker.log" \
   || fail "native build not tagged with the official name"
-[ "$(docker_calls pull)" = 0 ] || fail "a native run pulled the published image"
+[ "$(docker_calls pull)" = 0 ] || fail "prepare pulled the published image"
 [ "$(cut -d' ' -f1-3 "$MACHINE/docker/harbor.log" | tr '\n' ,)" = "oracle alpha built,nop alpha built," ] \
   || fail "expected oracle then nop on the native build: $(cat "$MACHINE/docker/harbor.log")"
 grep -q "DOCKER_DEFAULT_PLATFORM=$" "$MACHINE/docker/harbor.log" || fail "native check ran emulated"
-[ "$(record 'd["platform"]')" = linux/arm64 ] || fail "platform $(record 'd["platform"]')"
-[ "$(record 'd["tasks"]["alpha"]["base_image"]')" = "$(sed -n 's/^DEEPSWE_BASE_IMAGE=//p' "$STAGES/../config/toolchain.env")" ] \
+[ "$(python3 -c 'import json,sys; print(list(json.load(open(sys.argv[1]))["results"]))' \
+  "$MACHINE/share/env-check/deepswe/alpha.json")" = "['built linux/arm64']" ] || fail "no stored native check"
+[ "$(entry alpha mode)" = native ] && [ "$(entry alpha pass)" = True ] || fail "alpha: $(record 'd["tasks"]["alpha"]')"
+[ "$(entry alpha base_image)" = "$(sed -n 's/^DEEPSWE_BASE_IMAGE=//p' "$STAGES/../config/toolchain.env")" ] \
   || fail "base image not recorded"
-[ "$(container_platform aarch64)" = linux/arm64 ] || fail "native check did not make the task containers linux/arm64"
-ok "arm64 host builds natively on the pinned base and checks that build"
+ok "prepare builds natively on the pinned base, tags the official name, and stores oracle + nop"
 
-# 7. Reuse on arm64: no rebuild, no Harbor call, the tag still names the build.
-run_images alpha aarch64 || { show; fail "second arm64 run failed"; }
-[ "$(docker_calls build)" = 0 ] || { show; fail "an unchanged Dockerfile was rebuilt"; }
-[ "$(harbor_calls)" = 0 ] || { show; fail "arm64 reuse ran Harbor"; }
-[ "$(container_platform aarch64)" = linux/arm64 ] || fail "reuse lost the native platform"
-ok "arm64 reuses the build and its check"
+prepare alpha aarch64 || { show; fail "second prepare failed"; }
+[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] || { show; fail "a second prepare did the work again"; }
+[ "$(entry alpha reused)" = True ] || fail "second prepare did not reuse the check"
+ok "a second prepare reuses the build and its check"
 
-# 8. A native fail falls back to the published image under emulation and checks it.
-new_machine mac-fallback
-run_images alpha aarch64 FAKE_ORACLE_BUILT="18 20 3 3" || { show; fail "fallback run failed"; }
-grep -q "^rmi registry.example/swe:alpha-v1.1$" "$MACHINE/docker/docker.log" || fail "official tag not moved off the native build"
-grep -q "^pull registry.example/swe:alpha-v1.1 platform=linux/amd64$" "$MACHINE/docker/docker.log" || fail "published image not pulled for amd64"
-[ "$(cut -d' ' -f1-3 "$MACHINE/docker/harbor.log" | tr '\n' ,)" = "oracle alpha built,oracle alpha published,nop alpha published," ] \
-  || fail "harbor calls: $(cat "$MACHINE/docker/harbor.log")"
-grep -q "published DOCKER_DEFAULT_PLATFORM=linux/amd64" "$MACHINE/docker/harbor.log" || fail "published check not emulated"
-[ "$(record 'd["platform"]')" = linux/amd64 ] || fail "platform $(record 'd["platform"]')"
-[ "$(record 'd["tasks"]["alpha"]["attempts"][0]["reason"]')" = "environment check failed: oracle f2p 18/20 on built linux/arm64" ] \
-  || fail "native attempt not kept: $(record 'd["tasks"]["alpha"]')"
-[ "$(container_platform aarch64)" = linux/amd64 ] || fail "fallback did not make the task containers linux/amd64"
-[ ! -s "$WORK/skipped_tasks.txt" ] || fail "a question with a proven published image was kept out"
-run_images alpha aarch64 FAKE_ORACLE_BUILT="18 20 3 3" || { show; fail "fallback reuse failed"; }
-[ "$(harbor_calls)" = 0 ] || { show; fail "fallback reuse ran Harbor: $(cat "$MACHINE/docker/harbor.log")"; }
-# Other builds may be running this question: a stored native fail leaves the tag alone.
-[ "$(docker_calls tag)" = 0 ] || { show; fail "fallback reuse moved the official tag to the native build"; }
-[ "$(docker_calls rmi)" = 0 ] && [ "$(docker_calls pull)" = 0 ] || { show; fail "fallback reuse pulled the published image again"; }
-ok "a native fail falls back to the published image, emulated, and both answers are reused"
+# 4. arm64 eval after prepare: native, with no build, pull or check; the official name is re-tagged.
+PATH="$BIN:$PATH" FAKE_STATE="$MACHINE/docker" docker image rm "$OFFICIAL" >/dev/null
+run_images alpha aarch64 || { show; fail "prepared arm64 eval failed"; }
+[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] && [ "$(docker_calls pull)" = 0 ] \
+  || { show; fail "an eval built, pulled or checked"; }
+grep -qx "tag mac-k3d/deepswe-native:alpha $OFFICIAL" "$MACHINE/docker/docker.log" || fail "official name not re-tagged"
+[ "$(entry alpha mode)" = native ] && [ "$(entry alpha reused)" = True ] || fail "alpha: $(record 'd["tasks"]["alpha"]')"
+[ "$(container_platform aarch64)" = linux/arm64 ] || fail "prepared eval did not run linux/arm64"
+run_images alpha aarch64 || { show; fail "third eval failed"; }
+[ ! -s "$MACHINE/docker/docker.log" ] || fail "an eval with the tag in place changed images: $(cat "$MACHINE/docker/docker.log")"
+ok "arm64 eval uses the prepared build natively, with zero build, pull and harbor calls"
 
-# 9. An x86-64-only Dockerfile is not built on arm64; one such question moves the run to amd64.
-new_machine mac-mixed
-run_images alpha,cliffy aarch64 || { show; fail "mixed run failed"; }
-grep -q "^build mac-k3d/deepswe-native:cliffy" "$MACHINE/docker/docker.log" && fail "built an x86-64-only Dockerfile natively"
-grep -q "cliffy: its Dockerfile downloads an x86-64-only build" "$MACHINE/out.txt" || { show; fail "no reason for cliffy"; }
-[ "$(record 'd["tasks"]["alpha"]["source"]')" = published ] || fail "alpha not moved to the published image"
-[ "$(record 'd["tasks"]["cliffy"]["source"]')" = published ] || fail "cliffy not on the published image"
+# 5. A Harbor upgrade: the stored check no longer matches, so the eval runs emulated and says to prepare.
+run_images alpha aarch64 HARBOR_VERSION=0.23.0 || { show; fail "eval after a Harbor change failed"; }
+[ "$(entry alpha mode)" = emulated ] || fail "a check for another Harbor version was trusted"
+[ "$(entry alpha reason)" = "prepared for other task files or another Harbor version (now 0.23.0)" ] \
+  || fail "reason: $(entry alpha reason)"
+[ "$(entry alpha hint)" = "$PREPARE_HINT" ] || fail "no prepare hint"
+grep -qx "rmi $OFFICIAL" "$MACHINE/docker/docker.log" || fail "official name still names the native build"
+[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] || { show; fail "the eval checked or built"; }
+ok "a changed HARBOR_VERSION runs emulated with the prepare hint"
+
+# 6. One emulated question makes the whole run emulated (one iCode build per run).
+run_images alpha,beta aarch64 || { show; fail "mixed eval failed"; }
+[ "$(entry beta reason)" = "not prepared on this Mac" ] || fail "beta: $(entry beta reason)"
+[ "$(entry alpha mode)" = emulated ] || fail "alpha ran native next to an emulated question"
+[ "$(entry alpha reason)" = "another selected question runs emulated (one iCode build per run)" ] \
+  || fail "alpha reason: $(entry alpha reason)"
 [ "$(record 'd["platform"]')" = linux/amd64 ] || fail "mixed run platform $(record 'd["platform"]')"
-ok "an x86-64-only Dockerfile uses the published image and the run follows it"
+ok "a run with one emulated question runs all its questions emulated"
 
-# 10. DEEPSWE_DOCKER_PLATFORM=linux/amd64 forces the published image on arm64.
-new_machine mac-forced
+# 7. --rebuild builds again and checks the new build; the eval then runs it natively.
+prepare alpha aarch64 DEEPSWE_REBUILD=1 || { show; fail "rebuild failed"; }
+[ "$(docker_calls build)" = 1 ] && [ "$(harbor_calls)" = 2 ] || { show; fail "rebuild did not build and check again"; }
+run_images alpha aarch64 || { show; fail "eval after rebuild failed"; }
+[ "$(entry alpha mode)" = native ] || fail "rebuilt alpha not native"
+ok "DEEPSWE_REBUILD=1 (--rebuild) builds and checks again"
+
+# 8. A changed Dockerfile: the build is out of date, so the eval runs emulated and says to prepare.
+printf 'RUN echo changed\n' >>"$WORK/deep-swe/tasks/alpha/environment/Dockerfile"
+run_images alpha aarch64 || { show; fail "eval after a Dockerfile change failed"; }
+[ "$(entry alpha reason)" = "prepared for another Dockerfile or base pin" ] || fail "reason: $(entry alpha reason)"
+[ "$(entry alpha hint)" = "$PREPARE_HINT" ] || fail "no prepare hint"
+[ "$(docker_calls build)" = 0 ] || fail "an eval rebuilt"
+ok "an out-of-date native build runs emulated with the prepare hint"
+
+# 9. DEEPSWE_DOCKER_PLATFORM: linux/amd64 forces emulation; the host platform needs every question proven.
 run_images alpha aarch64 DEEPSWE_DOCKER_PLATFORM=linux/amd64 || { show; fail "forced amd64 run failed"; }
-[ "$(docker_calls build)" = 0 ] || fail "forced amd64 built natively"
-[ "$(record 'd["tasks"]["alpha"]["source"]')" = published ] || fail "forced amd64 did not use the published image"
-ok "DEEPSWE_DOCKER_PLATFORM=linux/amd64 forces the published image"
+[ "$(entry alpha reason)" = "DEEPSWE_DOCKER_PLATFORM=linux/amd64" ] || fail "forced reason: $(entry alpha reason)"
+if run_images beta aarch64 DEEPSWE_DOCKER_PLATFORM=linux/arm64; then
+  show
+  fail "forced linux/arm64 ran an unprepared question"
+fi
+grep -q "have no proven native build" "$MACHINE/out.txt" || { show; fail "forced arm64 message"; }
+ok "DEEPSWE_DOCKER_PLATFORM forces one platform"
 
-# 11. A native build that fails falls back, and is not stored.
+# 10. A failed check: prepare untags the official name and stores the fail; evals run emulated, no hint.
+new_machine mac-fail
+prepare alpha aarch64 FAKE_ORACLE_BUILT="18 20 3 3" || { show; fail "prepare with a failing check failed"; }
+[ "$(cut -d' ' -f1-3 "$MACHINE/docker/harbor.log" | tr '\n' ,)" = "oracle alpha built," ] \
+  || fail "harbor calls: $(cat "$MACHINE/docker/harbor.log")"
+grep -qx "rmi $OFFICIAL" "$MACHINE/docker/docker.log" || fail "official name left on a build that failed its check"
+[ -s "$MACHINE/share/env-check/deepswe/alpha.json" ] || fail "the grader's fail was not stored"
+[ "$(entry alpha mode)" = emulated ] && [ "$(entry alpha reason)" = "native check failed: oracle f2p 18/20" ] \
+  || fail "alpha: $(record 'd["tasks"]["alpha"]')"
+[ "$(entry alpha hint)" = "" ] || fail "a stored fail has a prepare hint"
+run_images alpha aarch64 || { show; fail "eval after a failed check failed"; }
+[ "$(entry alpha reason)" = "native check failed: oracle f2p 18/20" ] && [ "$(entry alpha hint)" = "" ] \
+  || fail "eval reason: $(record 'd["tasks"]["alpha"]')"
+[ "$(harbor_calls)" = 0 ] || fail "an eval checked again"
+prepare alpha aarch64 FAKE_ORACLE_BUILT="18 20 3 3" || { show; fail "second prepare failed"; }
+[ "$(harbor_calls)" = 0 ] || { show; fail "a stored fail was checked again"; }
+ok "a failed check is stored; the official name is untagged and evals run emulated without a hint"
+
+# 11. A check with no grader result is not stored: emulated with the hint, and prepare checks again.
+new_machine mac-flaky
+prepare alpha aarch64 FAKE_ORACLE_BUILT=none || { show; fail "prepare with no reward.json failed"; }
+[ "$(entry alpha reason)" = "native check failed: oracle left no reward.json" ] || fail "reason: $(entry alpha reason)"
+[ "$(entry alpha hint)" = "$PREPARE_HINT" ] || fail "an unfinished check has no prepare hint"
+[ ! -e "$MACHINE/share/env-check/deepswe/alpha.json" ] || fail "a Harbor error was stored"
+prepare alpha aarch64 || { show; fail "retry failed"; }
+[ "$(harbor_calls)" = 2 ] && [ "$(entry alpha mode)" = native ] || { show; fail "the retry did not check again"; }
+ok "a check with no grader result is retried by the next prepare"
+
+# 12. An x86-64-only Dockerfile is never built natively: emulated, with a permanent reason.
+new_machine mac-x86
+prepare cliffy aarch64 || { show; fail "prepare of an x86-only question failed"; }
+[ "$(docker_calls build)" = 0 ] && [ "$(harbor_calls)" = 0 ] || { show; fail "an x86-64-only Dockerfile was built or checked"; }
+[ "$(entry cliffy reason)" = "its Dockerfile downloads an x86-64-only build" ] && [ "$(entry cliffy hint)" = "" ] \
+  || fail "cliffy: $(record 'd["tasks"]["cliffy"]')"
+run_images cliffy aarch64 || { show; fail "eval of an x86-only question failed"; }
+[ "$(entry cliffy mode)" = emulated ] && [ "$(entry cliffy hint)" = "" ] || fail "cliffy eval: $(record 'd["tasks"]["cliffy"]')"
+ok "an x86-64-only Dockerfile runs emulated with its reason and no hint"
+
+# 13. A failed native build: emulated with the log and the hint; nothing stored.
 new_machine mac-nobuild
-run_images alpha aarch64 FAKE_BUILD_FAIL=1 || { show; fail "build-fail fallback run failed"; }
-[ "$(record 'd["tasks"]["alpha"]["attempts"][0]["reason"]')" = \
-  "environment check failed: native build failed (see $WORK/env-check/alpha/build.log) on built linux/arm64" ] \
-  || fail "build failure reason: $(record 'd["tasks"]["alpha"]')"
-[ "$(record 'd["tasks"]["alpha"]["source"]')" = published ] || fail "no fallback after a failed build"
-ok "a failed native build falls back to the published image"
+prepare alpha aarch64 FAKE_BUILD_FAIL=1 || { show; fail "prepare with a failing build failed"; }
+[ "$(entry alpha reason)" = "native build failed (see $WORK/env-check/alpha/build.log)" ] \
+  || fail "reason: $(entry alpha reason)"
+[ "$(entry alpha hint)" = "$PREPARE_HINT" ] || fail "a failed build has no prepare hint"
+[ ! -e "$MACHINE/share/env-check/deepswe/alpha.json" ] || fail "a failed build was stored"
+ok "a failed native build runs emulated and is tried again by the next prepare"
 
-# 12. prewarm_task_images.sh prepares each question on its own: alpha stays native
-#     next to cliffy, and the next real build of alpha reuses both answers.
-new_machine mac-prewarm
+# 14. The engine (mac-k3d eval prepare): one line per question it could not make
+#     native, then evals reuse its work. On x86-64 it has nothing to prepare.
+new_machine mac-engine
 git -c init.defaultBranch=main init -q "$WORK/deep-swe"
 git -C "$WORK/deep-swe" add -A
 git -C "$WORK/deep-swe" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -qm fixture
 REF="$(git -C "$WORK/deep-swe" rev-parse HEAD)"
-: >"$MACHINE/docker/harbor.log"
-: >"$MACHINE/docker/docker.log"
-env -u DEEPSWE_DOCKER_PLATFORM -u DEEPSWE_DIR -u WORKSPACE -u BUILD_NUMBER -u JOB_NAME -u TASK -u N_TASKS \
-  -u MAC_K3D_HARBOR_DRY_RUN \
-  PATH="$BIN:$PATH" HOME="$MACHINE/home" \
-  MAC_K3D_EVAL_WORKDIR="$WORK" MAC_K3D_SHARE="$MACHINE/share" \
-  MAC_K3D_HARBOR_PYTHON="$BIN/harbor-python" MAC_K3D_TRIAL_SUBNETS=off \
-  FAKE_STATE="$MACHINE/docker" FAKE_ARCH=aarch64 \
-  BENCHMARK=deepswe DEEPSWE_REF="$REF" DEEPSWE_TASK_COUNT=3 TASKS=alpha,cliffy \
-  bash "$STAGES/../tools/prewarm_task_images.sh" >"$MACHINE/out.txt" 2>&1 || { show; fail "prewarm failed"; }
-grep -q "^prewarm deepswe: 2 of 2 questions ready$" "$MACHINE/out.txt" || { show; fail "prewarm summary"; }
-[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["results"].keys() == {"built linux/arm64"})' \
-  "$MACHINE/share/env-check/deepswe/alpha.json")" = True ] || fail "alpha was not proven on its native build alone"
-[ -s "$MACHINE/share/env-check/deepswe/cliffy.json" ] || fail "cliffy not checked"
-run_images alpha aarch64 || { show; fail "build after prewarm failed"; }
-[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] || { show; fail "the build after prewarm did the work again"; }
-[ "$(record 'd["platform"]')" = linux/arm64 ] || fail "prewarmed alpha did not run native"
-ok "prewarm proves each question on its own image, and the next build reuses it"
+run_engine() {
+  local arch="$1"
+  shift
+  : >"$MACHINE/docker/harbor.log"
+  : >"$MACHINE/docker/docker.log"
+  env -u DEEPSWE_DOCKER_PLATFORM -u DEEPSWE_DIR -u WORKSPACE -u BUILD_NUMBER -u JOB_NAME -u TASK -u N_TASKS \
+    -u MAC_K3D_HARBOR_DRY_RUN -u MAC_K3D_DEEPSWE_PREPARE \
+    PATH="$BIN:$PATH" HOME="$MACHINE/home" \
+    MAC_K3D_EVAL_WORKDIR="$WORK" MAC_K3D_SHARE="$MACHINE/share" \
+    MAC_K3D_HARBOR_PYTHON="$BIN/harbor-python" MAC_K3D_TRIAL_SUBNETS=off \
+    FAKE_STATE="$MACHINE/docker" FAKE_ARCH="$arch" \
+    BENCHMARK=deepswe DEEPSWE_REF="$REF" DEEPSWE_TASK_COUNT=3 TASKS=alpha,cliffy "$@" \
+    bash "$STAGES/../tools/prewarm_task_images.sh" >"$MACHINE/out.txt" 2>&1
+}
+run_engine aarch64 || { show; fail "prepare engine failed"; }
+grep -qx "prepare deepswe (linux/arm64): 2 questions, 1 native, 1 emulated" "$MACHINE/out.txt" || { show; fail "engine summary"; }
+grep -qx "  cliffy: its Dockerfile downloads an x86-64-only build" "$MACHINE/out.txt" || { show; fail "engine reason for cliffy"; }
+run_images alpha aarch64 || { show; fail "eval after the engine failed"; }
+[ "$(harbor_calls)" = 0 ] && [ "$(docker_calls build)" = 0 ] || { show; fail "the eval after prepare did the work again"; }
+[ "$(record 'd["platform"]')" = linux/arm64 ] || fail "prepared alpha did not run native"
+run_engine aarch64 FAKE_BUILD_FAIL=1 DEEPSWE_REBUILD=1 && { show; fail "a failed build did not fail the engine"; }
+grep -q "^  alpha: native build failed (see .*); a rerun may make it native$" "$MACHINE/out.txt" \
+  || { show; fail "engine build-fail line"; }
+[ -s "$WORK/env-check/alpha/build.log" ] || fail "the next question's run removed alpha's build log"
+run_engine x86_64 || { show; fail "engine on x86-64 failed"; }
+grep -q "nothing to prepare: Linux workers use the published images, which Harbor pulls" "$MACHINE/out.txt" \
+  || { show; fail "x86-64 engine message"; }
+[ ! -s "$MACHINE/docker/docker.log" ] && [ "$(harbor_calls)" = 0 ] || { show; fail "the x86-64 engine touched images"; }
+ok "the prepare engine summarises each question, exits 1 when a rerun may help, and is a no-op on x86-64"
 
 echo "OK test_env_check.sh"

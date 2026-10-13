@@ -17,6 +17,84 @@ pub enum EvalAction {
     /// Write one row per question of a finished run into docs/testing/question-log.md
     /// (--job/--build for a Jenkins build; no flags for the last local run)
     Record(RecordArgs),
+    /// Prepare this worker's DeepSWE images before any eval: on an arm64 host (Apple
+    /// silicon) build each question natively, prove the build once with Harbor's oracle
+    /// and nop agents, and tag it with the official image name. Nothing to do on x86-64
+    Prepare(EvalPrepareArgs),
+}
+
+/// `mac-k3d eval prepare`: runs pipeline/tools/prewarm_task_images.sh.
+#[derive(Debug, Args)]
+pub struct EvalPrepareArgs {
+    /// Benchmark to prepare: deepswe
+    #[arg(long)]
+    pub benchmark: String,
+
+    /// Comma-separated question ids (default: every question at DEEPSWE_REF)
+    #[arg(long)]
+    pub tasks: Option<String>,
+
+    /// Build again even when a native build is current, then check it again
+    #[arg(long)]
+    pub rebuild: bool,
+}
+
+const PREPARE_SCRIPT: &str = "pipeline/tools/prewarm_task_images.sh";
+
+/// Env for the prepare engine. A question list comes only from --tasks.
+fn prepare_env(args: &EvalPrepareArgs, repo: &Path, workdir: &Path) -> Vec<(&'static str, OsString)> {
+    let mut env: Vec<(&'static str, OsString)> = vec![
+        ("MAC_K3D_ROOT", repo.into()),
+        ("MAC_K3D_EVAL_WORKDIR", workdir.into()),
+        ("BENCHMARK", "deepswe".into()),
+    ];
+    if let Some(tasks) = args.tasks.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        env.push(("TASKS", tasks.into()));
+    }
+    if args.rebuild {
+        env.push(("DEEPSWE_REBUILD", "1".into()));
+    }
+    env
+}
+
+fn run_prepare(args: EvalPrepareArgs) -> Result<()> {
+    if normalize_benchmark(&args.benchmark)? != "deepswe" {
+        return Err(Error::Config(format!(
+            "eval prepare covers --benchmark deepswe (got {}); LoLBench builds its images in each eval and \
+             Harbor pulls the SWE-bench Pro images",
+            args.benchmark
+        )));
+    }
+    if let Err(err) = crate::prepare::eval_assets::ensure_share_pipeline_reported() {
+        println!("Warning: could not extract pipeline ({err}).");
+    }
+    let repo = discover_repo_root()?;
+    let script = repo.join(PREPARE_SCRIPT);
+    if !script.is_file() {
+        return Err(Error::Config(format!("missing {}", script.display())));
+    }
+    let workdir = crate::prepare::eval_assets::share_dir().join("prepare");
+    std::fs::create_dir_all(&workdir)
+        .map_err(|e| Error::Config(format!("mkdir {}: {e}", workdir.display())))?;
+    let mut bash = Command::new("bash");
+    bash.arg(&script).current_dir(&repo);
+    for name in ["TASK", "TASKS", "N_TASKS", "TASK_OFFSET", "DEEPSWE_REBUILD", "MAC_K3D_DEEPSWE_PREPARE"] {
+        bash.env_remove(name);
+    }
+    let status = bash
+        .envs(prepare_env(&args, &repo, &workdir))
+        .status()
+        .map_err(|e| Error::CommandFailed {
+            cmd: format!("bash {}", script.display()),
+            source: e.into(),
+        })?;
+    if !status.success() {
+        return Err(Error::CommandFailed {
+            cmd: format!("bash {}", script.display()),
+            source: anyhow::anyhow!("exit {:?}", status.code()),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default, Args)]
@@ -107,8 +185,10 @@ pub struct EvalArgs {
 
 /// Interactive or staged iCode / DeepSeek / DeepSWE evaluation.
 pub async fn run(args: EvalArgs, config: &MacK3dConfig) -> Result<()> {
-    if let Some(EvalAction::Record(record)) = args.action {
-        return eval_record::run(record, config);
+    match args.action {
+        Some(EvalAction::Record(record)) => return eval_record::run(record, config),
+        Some(EvalAction::Prepare(prepare)) => return run_prepare(prepare),
+        None => {}
     }
     if let Some(job) = args.job.as_deref() {
         let req = QueueRequest::from_args(&args, eval_queue::parse_shape(job)?)?;
@@ -1031,6 +1111,119 @@ mod tests {
             "CPU_LOCK_QTY=4 (from the CPU_LOCK_QTY environment variable)"
         );
         assert!(cpu_lock_note(12, "nproc").contains("logical CPUs"));
+    }
+
+    #[derive(clap::Parser)]
+    struct EvalCli {
+        #[command(subcommand)]
+        action: EvalAction,
+    }
+
+    fn parse_prepare(argv: &[&str]) -> EvalPrepareArgs {
+        use clap::Parser;
+        match EvalCli::try_parse_from(argv).unwrap().action {
+            EvalAction::Prepare(args) => args,
+            other => panic!("not prepare: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_prepare_parses_its_flags() {
+        let args = parse_prepare(&["eval", "prepare", "--benchmark", "deepswe"]);
+        assert_eq!(args.benchmark, "deepswe");
+        assert!(args.tasks.is_none() && !args.rebuild);
+        let args = parse_prepare(&["eval", "prepare", "--benchmark", "deepswe", "--tasks", "a,b", "--rebuild"]);
+        assert_eq!(args.tasks.as_deref(), Some("a,b"));
+        assert!(args.rebuild);
+        use clap::Parser;
+        assert!(EvalCli::try_parse_from(["eval", "prepare"]).is_err(), "--benchmark is required");
+    }
+
+    #[test]
+    fn eval_prepare_env_passes_only_its_flags() {
+        let args = parse_prepare(&["eval", "prepare", "--benchmark", "deepswe"]);
+        let env = prepare_env(&args, Path::new("/repo"), Path::new("/share/prepare"));
+        assert_eq!(env_value(&env, "MAC_K3D_ROOT"), Some("/repo"));
+        assert_eq!(env_value(&env, "MAC_K3D_EVAL_WORKDIR"), Some("/share/prepare"));
+        assert_eq!(env_value(&env, "BENCHMARK"), Some("deepswe"));
+        assert_eq!(env_value(&env, "TASKS"), None);
+        assert_eq!(env_value(&env, "DEEPSWE_REBUILD"), None);
+
+        let args = parse_prepare(&["eval", "prepare", "--benchmark", "deepswe", "--tasks", " a,b ", "--rebuild"]);
+        let env = prepare_env(&args, Path::new("/repo"), Path::new("/w"));
+        assert_eq!(env_value(&env, "TASKS"), Some("a,b"));
+        assert_eq!(env_value(&env, "DEEPSWE_REBUILD"), Some("1"));
+    }
+
+    #[test]
+    fn eval_prepare_covers_deepswe_only() {
+        for bench in ["lolbench", "swebenchpro"] {
+            let args = parse_prepare(&["eval", "prepare", "--benchmark", bench]);
+            let err = run_prepare(args).unwrap_err().to_string();
+            assert!(err.contains("eval prepare covers --benchmark deepswe"), "{err}");
+        }
+        let args = parse_prepare(&["eval", "prepare", "--benchmark", "other"]);
+        assert!(run_prepare(args).is_err());
+    }
+
+    #[test]
+    fn eval_prepare_is_a_no_op_on_an_x86_64_host() {
+        let _serial = crate::test_support::global_state();
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let calls = dir.path().join("docker-calls");
+        let docker = bin.join("docker");
+        std::fs::write(
+            &docker,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = info ]; then echo x86_64; exit 0; fi\necho \"$*\" >>'{}'\nexit 1\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let env_file = dir.path().join("empty.env");
+        std::fs::write(&env_file, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&env_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut joined = OsString::from(&bin);
+        joined.push(":");
+        joined.push(&path);
+        let vars: [(&str, OsString); 4] = [
+            ("PATH", joined),
+            ("MAC_K3D_ROOT", env!("CARGO_MANIFEST_DIR").into()),
+            ("MAC_K3D_SHARE", dir.path().join("share").into()),
+            ("MAC_K3D_ENV_FILE", env_file.into()),
+        ];
+        let saved: Vec<_> = vars.iter().map(|(k, _)| (*k, std::env::var_os(k))).collect();
+        for (k, v) in &vars {
+            std::env::set_var(k, v);
+        }
+        let got = run_prepare(parse_prepare(&["eval", "prepare", "--benchmark", "deepswe"]));
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        got.unwrap();
+        assert!(!calls.exists(), "docker was asked for more than the host CPU");
+        assert!(dir.path().join("share/prepare").is_dir());
+    }
+
+    #[test]
+    fn prepare_script_ships_with_the_pipeline() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(root.join(PREPARE_SCRIPT).is_file());
     }
 
     #[test]

@@ -105,7 +105,7 @@ iCode always runs inside the task container, which is Linux on every worker, so 
 
 | Benchmark | Linux x86_64 or Intel Mac | Linux arm64 or Apple silicon Mac |
 |-----------|---------------------------|----------------------------------|
-| DeepSWE | `linux/amd64`, the published image | `linux/arm64`, a native build of the task Dockerfile; the published `linux/amd64` image under emulation when that build cannot be proven ([pipeline.md](pipeline.md#deepswe-on-linux-and-macos)) |
+| DeepSWE | `linux/amd64`, the published image | `linux/arm64`, the native build `mac-k3d eval prepare` proved; else the published `linux/amd64` image under emulation ([pipeline.md](pipeline.md#deepswe-on-linux-and-macos)) |
 | SWE-bench Pro | `linux/amd64` | `linux/amd64`, emulated: the official images are amd64 only |
 | LoLBench | `linux/amd64` | `linux/arm64`, unless a selected task's `environment/Dockerfile` downloads an x86-64-only build |
 

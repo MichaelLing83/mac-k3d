@@ -35,12 +35,14 @@ PROVENANCE_KEYS = (
     "isolation",
 )
 ENV_CHECK_FIELDS = (
+    "mode",
     "source",
     "platform",
     "image",
     "image_id",
     "pass",
     "reason",
+    "hint",
     "checked_in",
     "checked_at",
     "reused",
@@ -447,7 +449,8 @@ def _check_counts(result: object) -> dict | None:
 
 
 def env_check_record(record: Path, selected: list[str]) -> dict:
-    """tasks/images' environment check (env_check.json) for the selected questions."""
+    """tasks/images' image decision (env_check.json) for the selected questions: a
+    native build with its check, or the published image under emulation with the reason."""
     tasks = _load_json(record).get("tasks")
     if not isinstance(tasks, dict):
         return {}
@@ -457,15 +460,9 @@ def env_check_record(record: Path, selected: list[str]) -> dict:
         if not isinstance(entry, dict):
             continue
         row = {name: entry[name] for name in ENV_CHECK_FIELDS if name in entry}
-        row["oracle"] = _check_counts(entry.get("oracle"))
-        row["nop"] = _check_counts(entry.get("nop"))
-        attempts = [
-            {name: item.get(name) for name in ("source", "platform", "pass", "reason", "reused")}
-            for item in entry.get("attempts") or []
-            if isinstance(item, dict)
-        ]
-        if attempts:
-            row["attempts"] = attempts
+        if entry.get("mode") != "emulated":
+            row["oracle"] = _check_counts(entry.get("oracle"))
+            row["nop"] = _check_counts(entry.get("nop"))
         out[tid] = row
     return out
 
@@ -1057,17 +1054,19 @@ PROVENANCE_FILE = "provenance.md"
 ENV_CHECK_HEADERS = (
     "Task",
     "Worker",
-    "Source",
+    "Environment",
     "Platform",
     "Image",
     "oracle F2P",
     "oracle P2P",
     "nop F2P",
     "nop P2P",
-    "Result",
     "Checked in",
     "Reused",
+    "Reason",
 )
+# Question ids one `Emulated` line of the short Provenance block names; provenance.md has them all.
+EMULATED_IDS_SHOWN = 10
 
 
 def _ratio(result: object, passed: str, total: str) -> str:
@@ -1078,9 +1077,11 @@ def _ratio(result: object, passed: str, total: str) -> str:
 
 def _env_check_row(tid: str, entry: dict, worker: str) -> dict:
     oracle, nop = entry.get("oracle"), entry.get("nop")
+    mode = str(entry.get("mode") or ("native" if entry.get("source") == "built" else "emulated"))
     return {
         "task": tid,
         "worker": worker,
+        "mode": mode,
         "source": str(entry.get("source") or ""),
         "platform": str(entry.get("platform") or ""),
         "image": str(entry.get("image_id") or entry.get("image") or ""),
@@ -1090,9 +1091,9 @@ def _env_check_row(tid: str, entry: dict, worker: str) -> dict:
         "nop_p2p": _ratio(nop, "p2p_passed", "p2p_total"),
         "pass": entry.get("pass") is True,
         "reason": str(entry.get("reason") or ""),
+        "hint": str(entry.get("hint") or ""),
         "checked_in": str(entry.get("checked_in") or ""),
         "reused": entry.get("reused") is True,
-        "attempts": [a for a in entry.get("attempts") or [] if isinstance(a, dict)],
     }
 
 
@@ -1116,66 +1117,76 @@ def env_check_rows(protocol: dict) -> list[dict]:
     return rows
 
 
-def env_check_line(rows: list[dict]) -> str:
-    """`Environment check: N of T passed (M reused, K kept out)`; empty when no question was checked."""
-    if not rows:
-        return ""
-    passed = [row for row in rows if row["pass"]]
-    reused = sum(1 for row in passed if row["reused"])
-    return (
-        f"Environment check: {len(passed)} of {len(rows)} passed "
-        f"({reused} reused, {len(rows) - len(passed)} kept out)"
-    )
+def _workers(rows: list[dict]) -> list[str]:
+    return list(dict.fromkeys(row["worker"] for row in rows))
 
 
-def _env_check_result(row: dict) -> str:
-    if row["pass"]:
-        return "pass"
-    return "kept out: " + (row["reason"].removeprefix("environment check failed: ") or "failed")
+def env_check_lines(rows: list[dict]) -> list[str]:
+    """`Environment: N native, M emulated on <node>`, one per worker with a DeepSWE image
+    decision (an arm64 worker); none for a Linux worker, which uses the published images."""
+    lines = []
+    for worker in _workers(rows):
+        mine = [row for row in rows if row["worker"] == worker]
+        native = sum(1 for row in mine if row["mode"] == "native")
+        lines.append(f"Environment: {native} native, {len(mine) - native} emulated on {worker or '-'}")
+    return lines
+
+
+def emulated_lines(rows: list[dict]) -> list[str]:
+    """`Emulated on <node> (<reason>; <hint>): a, b`, one per worker and reason."""
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for row in rows:
+        if row["mode"] != "native":
+            groups.setdefault((row["worker"], row["reason"] or "-", row["hint"]), []).append(row["task"])
+    lines = []
+    for (worker, reason, hint), tids in groups.items():
+        shown = ", ".join(tids[:EMULATED_IDS_SHOWN])
+        if len(tids) > EMULATED_IDS_SHOWN:
+            shown += f" and {len(tids) - EMULATED_IDS_SHOWN} more (see {PROVENANCE_FILE})"
+        why = f"{reason}; {hint}" if hint else reason
+        lines.append(f"Emulated on {worker or '-'} ({why}): {shown}")
+    return lines
 
 
 def env_check_markdown(rows: list[dict]) -> list[str]:
-    """The Environment check section of provenance.md."""
+    """The Environment section of provenance.md."""
     if not rows:
         return []
     lines = [
-        "## Environment check",
+        "## Environment",
         "",
-        "Before any rollout, each worker proves the image it will use for a question: Harbor's oracle agent "
-        "applies the reference solution (every F2P and P2P test must pass), and its nop agent changes nothing "
-        "(some F2P test must fail, every P2P test must pass). The answer is stored on that worker and reused "
-        "while the image and the task files stay the same. A question that fails is kept out of Harbor.",
+        "A Linux worker runs every DeepSWE question on its published linux/amd64 image, which Harbor pulls "
+        "at the trial, and has no rows here. An arm64 worker runs a question natively only when "
+        "`mac-k3d eval prepare` built it on that worker and proved the build: Harbor's oracle agent applies "
+        "the reference solution (every F2P and P2P test must pass), and its nop agent changes nothing (some "
+        "F2P test must fail, every P2P test must pass). Every other question runs the published image under "
+        "emulation, for the reason given.",
         "",
-        f"- {env_check_line(rows)}",
+        *(f"- {line}" for line in env_check_lines(rows)),
         "",
         "| " + " | ".join(ENV_CHECK_HEADERS) + " |",
         "| " + " | ".join("---" for _ in ENV_CHECK_HEADERS) + " |",
     ]
     for row in rows:
+        native = row["mode"] == "native"
+        reason = row["reason"] if not native or not row["pass"] else ""
+        if row["hint"]:
+            reason = f"{reason}; {row['hint']}" if reason else row["hint"]
         cells = [
             row["task"],
             row["worker"] or "-",
-            row["source"] or "-",
+            row["mode"],
             row["platform"] or "-",
             row["image"] or "-",
             row["oracle_f2p"],
             row["oracle_p2p"],
             row["nop_f2p"],
             row["nop_p2p"],
-            _env_check_result(row),
-            row["checked_in"] or "-",
-            "yes" if row["reused"] else "no",
+            (row["checked_in"] or "-") if native else "-",
+            ("yes" if row["reused"] else "no") if native else "-",
+            reason or "-",
         ]
         lines.append("| " + " | ".join(str(c).replace("|", "/") for c in cells) + " |")
-    earlier = [
-        f"- {row['task']} on {row['worker'] or '-'}: {_cell(a.get('source'))} {_cell(a.get('platform'))} "
-        f"{'passed' if a.get('pass') is True else 'failed'} first"
-        + (f" ({str(a['reason']).removeprefix('environment check failed: ')})" if a.get("reason") else "")
-        for row in rows
-        for a in row["attempts"]
-    ]
-    if earlier:
-        lines.extend(["", "Earlier attempts in the same build:", "", *earlier])
     return lines
 
 
@@ -1199,9 +1210,8 @@ def provenance_brief(protocol: dict | None) -> list[str]:
         lines.extend(line for line in shard_worker_lines(view) if line.startswith("Shards differ"))
     else:
         lines.append(f"Worker {_cell(view['node'])}: os {_cell(view['os'])} · containers {_cell(view['containers'])}")
-    check = env_check_line(view["env_check"])
-    if check:
-        lines.append(check)
+    lines.extend(env_check_lines(view["env_check"]))
+    lines.extend(emulated_lines(view["env_check"]))
     iso = view["isolation"]
     if iso:
         hits = ", ".join(iso["leak_hits"])
@@ -1214,7 +1224,7 @@ def provenance_brief(protocol: dict | None) -> list[str]:
 
 
 def provenance_document(doc: dict) -> str:
-    """provenance.md: every provenance fact of the run, the environment check, and the questions kept out."""
+    """provenance.md: every provenance fact of the run, each question's environment, and the questions kept out."""
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     view = provenance_view(protocol)
     if view is None:

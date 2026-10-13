@@ -163,6 +163,38 @@ mac-k3d eval record --run eval-runs/output/deepswe/<run folder>
 
 An `artifact.json` from another run (a reused Jenkins workspace) is ignored. A `one_task` report belongs to the build when its `run_id` is `jenkins-<build>`. A `some_task` or `full_suite_task` merge belongs to the dispatcher build when its `run_id` is `<job>-<build>` (for example `deepswe_some_task-9`); that one command writes a row for every question in the merged report. A run that stopped before `report` still gets rows, from the console: the selected questions, the last `== phase/step` and the first `ERROR:` line, masked for keys and tokens. `--local` and `--stage all` copy their console to `eval-runs/last_console.log` and record themselves when they end, passed or failed. Re-recording a run keeps the `fix` column.
 
+### `eval prepare`
+
+Get a Mac worker's DeepSWE images ready before its first eval. The published DeepSWE images are linux/amd64 only, so without this an arm64 (Apple silicon) worker runs every question emulated. Run it on the worker once after onboarding. Run it again after a `DEEPSWE_REF` or `DEEPSWE_BASE_IMAGE` change or a Harbor upgrade: an eval runs a question emulated until its native build is proven for the current task files and Harbor version.
+
+```bash
+mac-k3d eval prepare --benchmark deepswe                      # every question at DEEPSWE_REF
+mac-k3d eval prepare --benchmark deepswe --tasks abs-module-cache-flags,cliffy-config-file-parsing
+mac-k3d eval prepare --benchmark deepswe --rebuild            # build and check again
+```
+
+| Flag | Description |
+|------|-------------|
+| `--benchmark deepswe` | Required. DeepSWE is the only benchmark with something to prepare: LoLBench builds its images in each eval, and Harbor pulls the SWE-bench Pro images |
+| `--tasks a,b` | Only these questions (default: every question at `DEEPSWE_REF`) |
+| `--rebuild` | Build again even when a native build is current, then check it again |
+
+For each question it builds the task Dockerfile natively on `DEEPSWE_BASE_IMAGE` as `mac-k3d/deepswe-native:<question>`, tags it with the official image name, and runs Harbor's oracle and nop agents on it once (no model call). The result is stored under `~/.local/share/mac-k3d/env-check/deepswe/`. A question runs emulated on the published image instead when:
+
+- its Dockerfile is x86-only or not `FROM` the base;
+- its build fails;
+- its check fails.
+
+The reason is printed, and the same reason appears in that worker's reports. The command ends with:
+
+```text
+prepare deepswe (linux/arm64): 113 questions, 110 native, 3 emulated
+emulated (the published linux/amd64 image in evals on this worker):
+  <question>: <reason>
+```
+
+It exits 1 when a rerun could still make a question native, that is a failed build or a check that did not finish. A stored check failure or an x86-only Dockerfile is not retried. On an x86-64 Linux worker it prints `nothing to prepare` and exits 0: Harbor pulls the published images at the trial. Its files go to `~/.local/share/mac-k3d/prepare/`. It holds the machine's `images` lock one question at a time, but a Jenkins build takes its lock under the agent's remote root, so do not run it while a DeepSWE build runs on the same Mac.
+
 ---
 
 ## `pipeline`

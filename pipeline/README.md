@@ -5,7 +5,7 @@
 | [`stages/`](stages/) | `run_all.sh`, one script per phase (`env.sh` … `archive.sh`) and its single-purpose steps (`env/`, `tasks/`, `evaluate/`, `anticheat/`, `score/`, `report/`, `archive/`) |
 | [`lib/`](lib/) | Harbor agents, isolation and anti-cheat checks, scoring, report, archive, testdata |
 | [`config/`](config/) | `toolchain.env` (Harbor, compose, buildx pins), `network-allowlist-v1.json`, `anticheat-v1.json`, `canary-v1.json`, harness labels |
-| [`tools/`](tools/) | Manual scripts that are not phases: canary only, the LLM-only baseline, report check, task image prewarm (`prewarm_task_images.sh`), fixture tests |
+| [`tools/`](tools/) | Manual scripts that are not phases: canary only, the LLM-only baseline, report check, the `mac-k3d eval prepare` engine (`prewarm_task_images.sh`), fixture tests |
 
 A build runs seven phases: `env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`. Only `evaluate` holds the worker's CPU lock; it runs the isolation canary and one `harbor run` over the selected questions, with `-n` slots planned from the cores the build locked ([optimization.md](../docs/optimization.md)). The phase map, every Harbor flag and the anti-cheat layers are in [docs/pipeline.md](../docs/pipeline.md).
 
