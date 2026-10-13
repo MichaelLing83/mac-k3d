@@ -4396,7 +4396,8 @@ class AgentIsolationTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, (tunnel_mtu, bridge_mtu, proc.stderr))
                 self.assertEqual("MTU 1280 but Docker's bridge uses 1500" in proc.stderr, warns,
                                  (tunnel_mtu, bridge_mtu, proc.stderr))
-                self.assertEqual("daemon.json" in proc.stderr, warns)
+                fix = "Settings > Docker Engine" if os.uname().sysname == "Darwin" else "/etc/docker/daemon.json"
+                self.assertEqual(fix in proc.stderr, warns, (tunnel_mtu, bridge_mtu, proc.stderr))
         for stage in ("env/host.sh", "evaluate/canary.sh", "evaluate/harbor_run.sh"):
             self.assertIn("\nwarn_docker_mtu\n", (STAGES / stage).read_text(encoding="utf-8"))
 

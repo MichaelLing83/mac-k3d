@@ -197,7 +197,9 @@ SENTINEL="gc-sentinel-not-for-logs"
 run_uv_sync() {
   rm -f "$FAKE_UV_DIR"/calls "$FAKE_UV_DIR"/env.*
   # get_bin_icode unsets these after the clone; an editor's git askpass must not leak in.
+  # The host uv path is the one under test here, also on a macOS host.
   ( unset GIT_ASKPASS MAC_K3D_GIT_TOKEN; export PATH="$FAKE_UV_DIR/bin:$PATH" FAKE_UV_FAIL="$1"
+    icode_container_build_needed() { return 1; }
     icode_uv_sync "$UV_TREE" gitcode.com "$2" ) \
     >"$FAKE_UV_DIR/out" 2>"$FAKE_UV_DIR/err"
 }

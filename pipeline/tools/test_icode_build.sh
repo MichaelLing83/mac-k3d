@@ -6,6 +6,14 @@ STAGES="$(cd "$(dirname "$0")/../stages" && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# These fixtures cover release shapes, not emulation: task containers native to
+# this host, so no Docker is needed for the Rosetta / QEMU check.
+export BENCHMARK=deepswe
+case "$(uname -m)" in
+  aarch64 | arm64) export DEEPSWE_DOCKER_PLATFORM=linux/arm64 ;;
+  *) export DEEPSWE_DOCKER_PLATFORM=linux/amd64 ;;
+esac
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
