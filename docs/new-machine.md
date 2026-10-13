@@ -284,7 +284,7 @@ A Mac worker runs the same seven phases and writes the same files as a Linux wor
    ```
 
 3. **Docker Desktop** > Settings:
-   - General: **Start Docker Desktop when you sign in**, and **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** (DeepSWE's and SWE-bench Pro's published images are linux/amd64 only; the build refuses to start without it).
+   - General: **Start Docker Desktop when you sign in**, and **Use Rosetta for x86_64/amd64 emulation on Apple Silicon** (SWE-bench Pro's published images are linux/amd64 only, and a DeepSWE question that cannot be built natively falls back to its published amd64 image; that path refuses to start without it).
    - Resources: memory at least 18 GB (two 8 GB DeepSWE tasks plus 2 GB), CPUs as many as you will set `cpu_cores` to, and a disk image of about 200 GB.
    - Apply & restart.
 4. **Download** `mac-k3d-darwin-aarch64` and clear quarantine as in [step 1](#1-download-the-binary).

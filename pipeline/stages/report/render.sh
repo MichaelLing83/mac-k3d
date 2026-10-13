@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# report/render: this run's artifact.json, summary.md and report.html under
-# $WORKDIR/output/<benchmark>/<run folder>. Records the folder in
+# report/render: this run's artifact.json, summary.md, report.html and
+# provenance.md under $WORKDIR/output/<benchmark>/<run folder>. Records the folder in
 # report_dir.txt for the archive phase, and the number of rollouts without a
 # score in unscored_rollouts.txt (Jenkins prints a warning above 0; the build
 # result stays as it is).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write one run's artifact.json, summary.md and report.html (report phase).
+"""Write one run's artifact.json, summary.md, report.html and provenance.md (report phase).
 
 The archive phase (archive_run.py) backs the run folder up afterwards.
 """
@@ -25,6 +25,7 @@ from eval_metrics import (
 )
 from score_results import OOM_CAUSE, infra_cause, load_json, parse_reward_value, rates_for_trial, trial_exception
 from icode_usage import find_icode_usage, icode_exit_code, icode_log_text, provider_error_marker
+from provenance import PROVENANCE_FILE
 from task_resources import cpu_count
 
 # iCode's built-in output cap. A run that recorded no max_tokens predates
@@ -397,6 +398,7 @@ def build_eval_protocol(
         "benchmark",
         "grader_overlay",
         "images",
+        "env_check",
         "worker",
         "requester",
         "pipeline",
@@ -905,10 +907,15 @@ def summary_markdown(doc: dict) -> str:
             lines.extend(_md_table(["Task", "unscored/n", "notes"], u_rows))
             lines.append("")
     if isinstance(protocol, dict):
-        from provenance import provenance_markdown
+        from provenance import provenance_brief
 
-        prov = provenance_markdown(protocol)
-        lines.extend(prov[1:] if prov and lines[-1] == "" else prov)
+        brief = provenance_brief(protocol)
+        if brief:
+            if lines[-1] != "":
+                lines.append("")
+            lines.extend(["### Provenance", ""])
+            lines.extend(f"- {line}" for line in brief[:-1])
+            lines.append(f"- {brief[-1].replace(PROVENANCE_FILE, f'[{PROVENANCE_FILE}]({PROVENANCE_FILE})')}")
     ac_line = anticheat_line(doc)
     if ac_line:
         if lines[-1] != "":
@@ -983,6 +990,13 @@ def write_report(doc: dict, out_dir: Path) -> Path:
     from report_html import report_html
 
     (out_dir / "report.html").write_text(report_html(doc), encoding="utf-8")
+    from provenance import provenance_document
+
+    prov = provenance_document(doc)
+    if prov:
+        (out_dir / PROVENANCE_FILE).write_text(prov, encoding="utf-8")
+    else:
+        (out_dir / PROVENANCE_FILE).unlink(missing_ok=True)
     return path
 
 

@@ -129,6 +129,59 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
     return errors
 
 
+def _environment_units(protocol: dict) -> list[tuple[str, dict, dict, dict]]:
+    """(label, worker, env_check, image platforms) per build that ran: each shard of a merged run, else the run."""
+    units = []
+    for row in _ran_shards(protocol):
+        worker = row.get("worker") if isinstance(row.get("worker"), dict) else {}
+        checks = row.get("env_check") if isinstance(row.get("env_check"), dict) else {}
+        platforms = row.get("image_platforms") if isinstance(row.get("image_platforms"), dict) else {}
+        units.append((f"eval_protocol.shards[{row.get('shard')}]", worker, checks, platforms))
+    if units:
+        return units
+    worker = protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {}
+    checks = protocol.get("env_check") if isinstance(protocol.get("env_check"), dict) else {}
+    images = protocol.get("images") if isinstance(protocol.get("images"), dict) else {}
+    platforms = {
+        tid: image.get("platform") for tid, image in images.items() if isinstance(image, dict) and image.get("platform")
+    }
+    return [("eval_protocol", worker, checks, platforms)]
+
+
+def environment_errors(doc: dict) -> list[str]:
+    """Every image ran on the task containers' platform, and every scored DeepSWE question had a proven image."""
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else {}
+    errors: list[str] = []
+    passed: set[str] = set()
+    scored = tasks_with_trials(doc)
+    for label, worker, checks, platforms in _environment_units(protocol):
+        want = str(worker.get("container_platform") or "")
+        kept_out = set()
+        for tid, entry in sorted(checks.items()):
+            if not isinstance(entry, dict) or entry.get("pass") is not True:
+                kept_out.add(str(tid))
+                continue
+            passed.add(str(tid))
+            got = str(entry.get("platform") or "")
+            if want and got != want:
+                errors.append(f"{label}.env_check.{tid}: checked on {got or '-'}, but the task containers ran {want}")
+        if not want:
+            continue
+        for tid, got in sorted(platforms.items()):
+            if str(tid) in scored and str(tid) not in kept_out and str(got) != want:
+                errors.append(f"{label}: image of {tid} is {got}, but the task containers ran {want} (container_platform.json)")
+    if doc.get("suite") == "deepswe":
+        top = protocol.get("env_check") if isinstance(protocol.get("env_check"), dict) else {}
+        passed |= {str(tid) for tid, e in top.items() if isinstance(e, dict) and e.get("pass") is True}
+        unproven = sorted(scored - passed)
+        if unproven:
+            errors.append(
+                "eval_protocol.env_check: scored DeepSWE questions have no passing environment check "
+                f"(tasks/images oracle + nop): {', '.join(unproven)}"
+            )
+    return errors
+
+
 def official_provenance_errors(doc: dict) -> list[str]:
     """Every comparison artifact must record the same provenance. There is no smoke exception."""
     errors: list[str] = []
@@ -152,6 +205,7 @@ def official_provenance_errors(doc: dict) -> list[str]:
             errors.append(f"missing eval_protocol.grader_overlay.{key}")
     if not isinstance(protocol.get("images"), dict):
         errors.append("missing eval_protocol.images")
+    errors.extend(environment_errors(doc))
     worker = protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {}
     for key in ("node", "docker_version", "kernel", "cpu_model"):
         if not _nonempty_str(worker.get(key)):

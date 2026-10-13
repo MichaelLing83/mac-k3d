@@ -24,6 +24,7 @@ REPORT_FILES = (
     "artifact.json",
     "summary.md",
     "report.html",
+    "provenance.md",
     "cost-token-report.md",
     "container_mem.jsonl",
     "skipped_questions.txt",

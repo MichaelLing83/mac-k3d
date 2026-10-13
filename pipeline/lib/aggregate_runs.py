@@ -47,7 +47,17 @@ from task_resources import cpu_count  # noqa: E402
 VERDICTS = ("clean", "flagged", "rejected", "not_run")
 # What has to match for the shards to be one measurement of one iCode setup.
 COMPARED_MODEL_PARAMS = ("model", "api_base", "provider", "reasoning_effort", "max_tokens", "max_iterations")
-INPUT_PROTOCOL_KEYS = ("harbor", "benchmark", "grader_overlay", "images", "worker", "requester", "pipeline", "isolation")
+INPUT_PROTOCOL_KEYS = (
+    "harbor",
+    "benchmark",
+    "grader_overlay",
+    "images",
+    "env_check",
+    "worker",
+    "requester",
+    "pipeline",
+    "isolation",
+)
 
 
 def shard_report_protocol(shard: Path, builds: list[str], own_only: bool = False) -> dict | None:
@@ -195,6 +205,18 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
     canary = isolation_record_of(protocol, "canary")
     if canary is not None:
         row["canary"] = {"status": str(canary.get("status") or ""), "summary_sha256": str(canary.get("summary_sha256") or "")}
+    # Each worker proves its own images: the same question may run published on
+    # one and built natively on another.
+    if isinstance(protocol.get("env_check"), dict) and protocol["env_check"]:
+        row["env_check"] = protocol["env_check"]
+    images = protocol.get("images") if isinstance(protocol.get("images"), dict) else {}
+    platforms = {
+        str(tid): str(image["platform"])
+        for tid, image in images.items()
+        if isinstance(image, dict) and image.get("platform")
+    }
+    if platforms:
+        row["image_platforms"] = platforms
     return row
 
 
@@ -388,16 +410,23 @@ def merge_protocols(
             [(node, p["resources"]) for node, p in ran if isinstance(p.get("resources"), dict)],
         )
     images = out.get("images") if isinstance(out.get("images"), dict) else {}
+    checks = out.get("env_check") if isinstance(out.get("env_check"), dict) else {}
     bench = out.get("benchmark") if isinstance(out.get("benchmark"), dict) else None
     pins = bench.get("tasks") if bench is not None and isinstance(bench.get("tasks"), dict) else None
     for other in protocols[1:]:
         if isinstance(other.get("images"), dict):
             images.update({k: v for k, v in other["images"].items() if k not in images})
+        for tid, entry in (other.get("env_check") if isinstance(other.get("env_check"), dict) else {}).items():
+            prev = checks.get(tid)
+            if not isinstance(prev, dict) or (prev.get("pass") is not True and isinstance(entry, dict) and entry.get("pass") is True):
+                checks[tid] = entry
         other_bench = other.get("benchmark") if isinstance(other.get("benchmark"), dict) else {}
         if pins is not None and isinstance(other_bench.get("tasks"), dict):
             pins.update({k: v for k, v in other_bench["tasks"].items() if k not in pins})
     if images:
         out["images"] = images
+    if checks:
+        out["env_check"] = checks
     return out
 
 
@@ -769,6 +798,8 @@ def main() -> int:
     if isinstance(protocol.get("images"), dict):
         # A shard on an older pipeline still lists its workspace's earlier tasks.
         protocol["images"] = {tid: image for tid, image in protocol["images"].items() if tid in tasks}
+    if isinstance(protocol.get("env_check"), dict):
+        protocol["env_check"] = {tid: entry for tid, entry in protocol["env_check"].items() if tid in tasks}
     requester = protocol.get("requester") if isinstance(protocol.get("requester"), dict) else {}
     if args.build_url:
         protocol["requester"] = requester = {**requester, "build_url": args.build_url}

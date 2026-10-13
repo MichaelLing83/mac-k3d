@@ -17,6 +17,7 @@ Current pins:
 | `MIN_RAM_GB=8` | RAM every eval host needs |
 | `WORKER_MIN_DISK_GB=40` | Free disk at `storage.base_dir` and at the agent root |
 | `ICODE_LINUX_BUILD_IMAGE=ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm` | Builds and checks iCode's Linux runtime on a host that cannot run it (macOS, or another CPU type than the task containers) |
+| `DEEPSWE_BASE_IMAGE=public.ecr.aws/x8v8d7g8/mars-base@sha256:91db850db926024eed328c4bf519d54986bc10aad75302cbb074f8e9d79b4c46` | Base of a DeepSWE task image built natively on an arm64 worker (replaces the Dockerfiles' `FROM …/mars-base:latest` through `docker build --build-context`); the same base the published images were built on |
 | `DEEPSWE_REF=0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea` | DeepSWE checkout (`_common.sh`, a job parameter overrides it) |
 | `LOLBENCH_REF=1b10d10bb4a10cea54374ac34b8f76b69dc8ce75` | LoLBench checkout (`_common.sh`, a job parameter overrides it) |
 
@@ -84,7 +85,9 @@ Current pins:
 | MTU probe | `ip route get` + `ip link` | `route -n get` + `ifconfig` |
 | Trial network host routes | `ip route` + `ip addr` | `netstat -rn -f inet` + `ifconfig` |
 | Provenance CPU and RAM | `/proc/cpuinfo`, `/proc/meminfo` | `sysctl machdep.cpu.brand_string`, `hw.memsize` |
-| Task containers | DeepSWE and SWE-bench Pro `linux/amd64`; LoLBench the Docker host platform | the same (`linux/arm64` LoLBench on Apple silicon) |
+| Task containers | DeepSWE and SWE-bench Pro `linux/amd64`; LoLBench the Docker host platform | DeepSWE `linux/arm64` when the native build's check passes, else the published `linux/amd64` image under Rosetta; SWE-bench Pro `linux/amd64` under Rosetta; LoLBench `linux/arm64` |
+| DeepSWE task image | `docker pull` of the published image (an arm64 Linux host builds natively, like a Mac) | `docker build --build-context …/mars-base:latest=docker-image://$DEEPSWE_BASE_IMAGE` (BuildKit, not yet run on Docker Desktop); the published image when the Dockerfile downloads an x86-64-only build or the native build fails its check |
+| Environment check | oracle and nop once per question, stored in `~/.local/share/mac-k3d/env-check/deepswe/` | the same |
 | linux/amd64 on an arm64 host | QEMU binfmt (`docker run --privileged --rm tonistiigi/binfmt --install amd64`) | Docker Desktop's Rosetta (Settings > General) |
 | iCode release drop | `icode-linux-<task container arch>-full-v*`, picked by ELF header | the same; upload a `.tar.gz` holding both Linux drops |
 | iCode git-mode runtime | `uv sync` on the host when its CPU type matches the containers, else in `ICODE_LINUX_BUILD_IMAGE` | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform |
@@ -108,7 +111,7 @@ The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The 
 | LoLBench | `LOLBENCH_REF=1b10d10bb4a10cea54374ac34b8f76b69dc8ce75` | pinned | `_common.sh` | `tasks/benchmark.sh` (git) | checkout at the ref |
 | SWE-bench Pro | default branch of `SWEBENCHPRO_GIT_URL` (`--depth 1`) | **not pinned** (known gap) | `_common.sh` | `tasks/benchmark.sh` | — |
 | iCode (system under test) | the git ref or release drop the job selects (default PR 2) | recorded, not pinned | the checkout HEAD, or the release file's sha256 | Jenkins upload or git clone (`tasks/icode`) | the console line `iCode under test:` and `eval_protocol.icode` |
-| Task images | per task (`docker_image` in LoLBench `task.toml`) | per task | the benchmark checkout | `tasks/images.sh` (LoLBench); Harbor pulls the rest | `tasks/images.sh` |
+| Task images | per task (`docker_image` in `task.toml`); on an arm64 worker DeepSWE uses a native build `mac-k3d/deepswe-native:<id>` of `environment/Dockerfile` on `DEEPSWE_BASE_IMAGE` | per task: the benchmark ref, plus the base digest for a native build | the benchmark checkout, `toolchain.env` | `tasks/images.sh` (DeepSWE, LoLBench); Harbor pulls SWE-bench Pro | DeepSWE: Harbor's oracle and nop agents once per question per worker (`tasks/images.sh`, `env_check.py`), stored under `~/.local/share/mac-k3d/env-check/` and recorded in `eval_protocol.env_check`; the image platform must match the task containers (`check_report.py`) |
 
 ## Sandbox config
 

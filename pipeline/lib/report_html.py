@@ -351,72 +351,17 @@ def _empty_patch_html(arm: dict) -> str:
 
 
 def _provenance_html(doc: dict) -> str:
-    from provenance import isolation_lines, provenance_view, shard_worker_lines
+    """The short Provenance list; everything else is in provenance.md next to this page."""
+    from provenance import PROVENANCE_FILE, provenance_brief
 
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
-    view = provenance_view(protocol)
-    if view is None:
+    brief = provenance_brief(protocol)
+    if not brief:
         return ""
-
-    def cell(value: object) -> str:
-        if value is None or value == "":
-            return DASH
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        return str(value)
-
-    items = [
-        f"Harbor {_esc(cell(view['harbor_version']))}",
-        (
-            f"Benchmark {_esc(cell(view['benchmark_url']))} @ {_esc(cell(view['benchmark_sha']))}"
-            f" ({_esc(cell(view['task_count']))} tasks)"
-        ),
-        (
-            f"Grader overlay {_esc(cell(view['overlay_marker']))} {_esc(cell(view['overlay_sha256']))}"
-            f" applied {_esc(cell(view['overlay_applied']))}"
-        ),
-        f"Pipeline {_esc(cell(view['commit']))} dirty {_esc(cell(view['dirty']))}",
-    ]
-    if view["shards"]:
-        items.extend(_esc(line) for line in shard_worker_lines(view))
-    else:
-        worker = (
-            f"Worker node {_esc(cell(view['node']))}, nproc {_esc(cell(view['nproc']))},"
-            f" memory_kb {_esc(cell(view['memory_kb']))}, docker {_esc(cell(view['docker_version']))},"
-            f" kernel {_esc(cell(view['kernel']))}, cpu {_esc(cell(view['cpu_model']))}"
-        )
-        if view["os"]:
-            worker += f", os {_esc(view['os'])}"
-        if view["containers"]:
-            worker += f", containers {_esc(view['containers'])}"
-        items.append(worker)
-    items.append(f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}")
-    if view["transcripts"]:
-        items.append(_esc(view["transcripts"]))
-    items.extend(_esc(line) for line in isolation_lines(view["isolation"]))
-    icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
-    release = icode.get("release") if isinstance(icode.get("release"), dict) else None
-    if release and str(release.get("sha256") or ""):
-        items.append(
-            f"iCode release {_esc(cell(release.get('filename')))} {_esc(cell(release.get('sha256')))}"
-        )
-    bullets = "".join(f"<li>{item}</li>" for item in items)
-    table = ""
-    if view["tasks"]:
-        rows = [
-            [
-                row["task"],
-                row["image_id"] or DASH,
-                row["task_toml_sha256"] or DASH,
-                row["tests_list_sha256"] or DASH,
-            ]
-            for row in view["tasks"]
-        ]
-        table = _scroll(
-            _table(["Task", "Image id", "task.toml sha256", "tests list sha256"], rows, "provenance"),
-            len(rows),
-        )
-    return "<h2>Provenance</h2><ul>" + bullets + "</ul>" + table
+    items = [_esc(line) for line in brief[:-1]]
+    link = f'<a href="{PROVENANCE_FILE}">{PROVENANCE_FILE}</a>'
+    items.append(_esc(brief[-1]).replace(PROVENANCE_FILE, link))
+    return "<h2>Provenance</h2><ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>"
 
 
 def report_html(doc: dict) -> str:

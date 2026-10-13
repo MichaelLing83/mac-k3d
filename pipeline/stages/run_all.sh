@@ -7,7 +7,7 @@
 #   evaluate   canary + one `harbor run`        (the only phase under the CPU lock)
 #   anticheat  post-Harbor receipts and verdicts
 #   score      F2P/P2P per rollout
-#   report     artifact.json, summary.md, report.html
+#   report     artifact.json, summary.md, report.html, provenance.md
 #   archive    cost/token analysis, backup, tar.gz
 #
 # MAC_K3D_PHASE=<phase> runs one phase (Jenkins runs them as separate stages);

@@ -21,6 +21,8 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `canary_harbor_agent.py` | Harbor `CanaryAgent(ICodeAgent)`: same mounts, env and flags as iCode, runs `canary_probe.sh` instead of the model (`evaluate/canary`, `CANARY`; `../tools/canary.sh`) |
 | `canary_probe.sh` | Runs in the task container: `home <tag>`, `probe` (egress, gold-file search, mount write, repo history, env names) and `mount` (as root); writes facts to `/logs/agent/canary*.json`, always exits 0 |
 | `canary_verdict.py` | `spec`: host lists and gold file names for one task (never gold content). `started`: exit 3 with the reason when a task's canary trial never reached the probe. `summarize`: pass/warn/fail per check and task into `summary.json` and `report.md`, with `--fallback-file` listing the questions that did not start; exit 2 on a failed task. Rules in `../config/canary-v1.json` |
+| `env_check.py` | `tasks/images` (DeepSWE): the first-time environment check. `key`: what a stored answer depends on (image id, task files, `HARBOR_VERSION`, Dockerfile and base for a native build). `cached`: the stored answer under `$MAC_K3D_SHARE/env-check/` (exit 0 pass, 2 fail, 1 none). `judge`: the oracle and nop pass rule on `reward.json`. `record`, `finish`: the build's `env_check.json`, the questions kept out in `skipped_tasks.txt`, and the platform. `platform`: the platform `task_container_platform` reads |
+| `env_check_agents.py` | Harbor's `OracleAgent` and `NopAgent`, loaded by import path (`-a env_check_agents:OracleAgent`, the task folder from `--ak task_dir=`) so the check's trials get the same trial subnet and egress probe overrides as the rollouts; no model, no iCode mount |
 | `harness_labels.py` | Loads `../config/harness/icode-pr2-eea9d66.yaml` (`tuned_on`, `hinted`); `generate` rebuilds it from the improve loop and iCode's matchers, read-only |
 | `task_resources.py` | `plan`: declared `cpus`/`memory_mb`/`storage_mb` per task.toml → `EVAL_SLOTS` (Harbor's `-n`), failing when one task does not fit this worker. `sample`: append a `docker stats` snapshot to the build's memory trace ([optimization.md](../../docs/optimization.md)) |
 | `eval_slots.py` | Memory and disk helpers only (`docker stats` parsing, container peak). Harbor owns scheduling, so there is no slot loop here |
@@ -30,13 +32,14 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `swebenchpro_run.py` | Docker Hub tag helper used when writing those Harbor tasks |
 | `baseline_deepseek.py` | Manual baseline only (`../tools/baseline.sh`). A full eval does not run it |
 | `score_results.py` | `score/score`: merge harness/baseline into one report schema (Pass@1, F2P/P2P rates, tokens, `wall_minutes`) for DeepSWE, LoLBench, and SWE-bench Pro |
-| `render_report.py` | `report/render`: `artifact.json`, `summary.md`, `report.html` for one run folder |
+| `render_report.py` | `report/render`: `artifact.json`, `summary.md`, `report.html` and `provenance.md` for one run folder |
+| `provenance.py` | `eval_protocol` inputs (benchmark pin, images and their platform, worker, isolation, `env_check`), the short Provenance block of `summary.md` and `report.html`, and `provenance.md` |
 | `cost_token_report.py` | `archive/analysis`: `cost-token-report.md` in the run folder; also by hand for older runs |
 | `archive_run.py` | `archive/backup`: `compress --jobs-dir` first gzips and masks this build's transcripts in place, then the run folder, verdicts and per-trial files are copied (transcripts gzipped and masked) and packed as `tar.gz`. The `Aggregate` stage runs it over `aggregate/` with `--run-folder <RUN_GROUP>` |
-| `check_report.py` | Validate required report keys (no network) |
+| `check_report.py` | Validate required report keys (no network), including that each image and environment check ran on the task containers' platform and that every scored DeepSWE question passed its check |
 | `question_log.py` | `record`: one row per question of a run into `docs/testing/question-log.md` (from `artifact.json`, or the console when the run stopped early), the Open problems table, and `status`/`builds` in `question-coverage.md`. Called by `mac-k3d eval record` and at the end of `eval --local` |
 | `testdata/report-min.json` | Fixture for `pipeline/tools/check_report.sh` |
 
-Runtime artifacts go to **`eval-runs/`** and **`output/`** (both gitignored). Each run writes `artifact.json`, `summary.md`, and `report.html` under `eval-runs/output/<benchmark>/<run>/` (`render_report.py`), adds `cost-token-report.md` (`cost_token_report.py`), and stores that folder as `output/<benchmark>/<run>.tar.gz` (`archive_run.py`).
+Runtime artifacts go to **`eval-runs/`** and **`output/`** (both gitignored). Each run writes `artifact.json`, `summary.md`, `report.html` and `provenance.md` under `eval-runs/output/<benchmark>/<run>/` (`render_report.py`), adds `cost-token-report.md` (`cost_token_report.py`), and stores that folder as `output/<benchmark>/<run>.tar.gz` (`archive_run.py`).
 
 Users provide iCode via Jenkins upload (`ICODE_RELEASE_FILE`), local persist/discover (`*-full-*` or `icode` under `~/.local/share/mac-k3d/`), or `ICODE_MODE=git`. See [docs/icode-harness-inputs.md](../../docs/icode-harness-inputs.md).

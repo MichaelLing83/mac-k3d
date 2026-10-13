@@ -2,7 +2,9 @@
 """Pinned-benchmark checks and the eval_protocol provenance block.
 
 The tasks and evaluate phases write these objects into eval_protocol_inputs.json.
-render_report copies them onto the artifact. This module does not print secret values.
+render_report copies them onto the artifact and writes them out as provenance.md,
+with a short block in summary.md and report.html. This module does not print
+secret values.
 """
 
 from __future__ import annotations
@@ -26,11 +28,26 @@ PROVENANCE_KEYS = (
     "benchmark",
     "grader_overlay",
     "images",
+    "env_check",
     "worker",
     "requester",
     "pipeline",
     "isolation",
 )
+ENV_CHECK_FIELDS = (
+    "source",
+    "platform",
+    "image",
+    "image_id",
+    "pass",
+    "reason",
+    "checked_in",
+    "checked_at",
+    "reused",
+    "dockerfile_sha256",
+    "base_image",
+)
+ENV_CHECK_COUNTS = ("f2p_passed", "f2p_total", "p2p_passed", "p2p_total", "reward")
 _DOCKER_IMAGE = re.compile(r'^docker_image\s*=\s*"([^"]+)"', re.M)
 
 
@@ -164,7 +181,7 @@ def inspect_image(image: str) -> dict:
                 "image",
                 "inspect",
                 "--format",
-                "{{.Id}}\n{{json .RepoDigests}}",
+                "{{.Id}}\n{{json .RepoDigests}}\n{{.Os}}/{{.Architecture}}",
                 image,
             ],
             capture_output=True,
@@ -187,7 +204,11 @@ def inspect_image(image: str) -> dict:
         digests = []
     if not isinstance(digests, list):
         digests = []
-    return {"image": image, "id": image_id, "repo_digests": [str(item) for item in digests]}
+    plat = lines[2].strip() if len(lines) > 2 else ""
+    record = {"image": image, "id": image_id, "repo_digests": [str(item) for item in digests]}
+    if "/" in plat and not plat.startswith("/") and not plat.endswith("/"):
+        record["platform"] = plat
+    return record
 
 
 def inspect_task(task_dir: Path) -> dict:
@@ -419,6 +440,36 @@ def isolation_record(icode_root: Path | None, mounts: object) -> dict:
     return record
 
 
+def _check_counts(result: object) -> dict | None:
+    if not isinstance(result, dict):
+        return None
+    return {name: result.get(name) for name in ENV_CHECK_COUNTS}
+
+
+def env_check_record(record: Path, selected: list[str]) -> dict:
+    """tasks/images' environment check (env_check.json) for the selected questions."""
+    tasks = _load_json(record).get("tasks")
+    if not isinstance(tasks, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for tid in selected:
+        entry = tasks.get(tid)
+        if not isinstance(entry, dict):
+            continue
+        row = {name: entry[name] for name in ENV_CHECK_FIELDS if name in entry}
+        row["oracle"] = _check_counts(entry.get("oracle"))
+        row["nop"] = _check_counts(entry.get("nop"))
+        attempts = [
+            {name: item.get(name) for name in ("source", "platform", "pass", "reason", "reused")}
+            for item in entry.get("attempts") or []
+            if isinstance(item, dict)
+        ]
+        if attempts:
+            row["attempts"] = attempts
+        out[tid] = row
+    return out
+
+
 def leakscan_record(report: Path) -> dict:
     doc = _load_json(report)
     tasks = doc.get("tasks") if isinstance(doc.get("tasks"), dict) else {}
@@ -587,6 +638,9 @@ def write_protocol_inputs(
             "isolation": isolation_record(icode_root, mounts),
         }
     )
+    env_check = env_check_record(workdir / "env_check.json", selected)
+    if env_check:
+        doc["env_check"] = env_check
     _write_json(out, doc)
     return doc
 
@@ -683,7 +737,7 @@ def isolation_view(isolation: object) -> dict | None:
 
 
 def isolation_lines(view: dict | None) -> list[str]:
-    """Plain-text isolation facts shared by summary.md and report.html."""
+    """Plain-text isolation facts for provenance.md."""
     if not view:
         return []
     lines = [
@@ -744,6 +798,7 @@ def provenance_view(protocol: dict | None) -> dict | None:
             {
                 "task": tid,
                 "image_id": str(image.get("id") or ""),
+                "platform": str(image.get("platform") or ""),
                 "task_toml_sha256": str(task.get("task_toml_sha256") or ""),
                 "tests_list_sha256": str(task.get("tests_list_sha256") or ""),
             }
@@ -778,6 +833,7 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "user": str(requester.get("user") or ""),
         "build_url": str(requester.get("build_url") or ""),
         "tasks": rows,
+        "env_check": env_check_rows(protocol),
         "shards": shard_views(protocol.get("shards")),
         "transcripts": transcripts_line(protocol.get("transcripts")),
         "model_params_status": str(protocol.get("model_params_status") or ""),
@@ -982,18 +1038,201 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
         )
     if view["tasks"]:
         lines.append("")
-        lines.append("| Task | Image id | task.toml sha256 | tests list sha256 |")
-        lines.append("| --- | --- | --- | --- |")
+        lines.append("| Task | Image id | Platform | task.toml sha256 | tests list sha256 |")
+        lines.append("| --- | --- | --- | --- | --- |")
         for row in view["tasks"]:
             lines.append(
-                "| {task} | {image} | {toml} | {tests} |".format(
+                "| {task} | {image} | {platform} | {toml} | {tests} |".format(
                     task=row["task"],
                     image=row["image_id"] or "-",
+                    platform=row["platform"] or "-",
                     toml=row["task_toml_sha256"] or "-",
                     tests=row["tests_list_sha256"] or "-",
                 )
             )
     return lines
+
+
+PROVENANCE_FILE = "provenance.md"
+ENV_CHECK_HEADERS = (
+    "Task",
+    "Worker",
+    "Source",
+    "Platform",
+    "Image",
+    "oracle F2P",
+    "oracle P2P",
+    "nop F2P",
+    "nop P2P",
+    "Result",
+    "Checked in",
+    "Reused",
+)
+
+
+def _ratio(result: object, passed: str, total: str) -> str:
+    if not isinstance(result, dict) or _int_or_none(result.get(total)) is None:
+        return "-"
+    return f"{_cell(result.get(passed))}/{result[total]}"
+
+
+def _env_check_row(tid: str, entry: dict, worker: str) -> dict:
+    oracle, nop = entry.get("oracle"), entry.get("nop")
+    return {
+        "task": tid,
+        "worker": worker,
+        "source": str(entry.get("source") or ""),
+        "platform": str(entry.get("platform") or ""),
+        "image": str(entry.get("image_id") or entry.get("image") or ""),
+        "oracle_f2p": _ratio(oracle, "f2p_passed", "f2p_total"),
+        "oracle_p2p": _ratio(oracle, "p2p_passed", "p2p_total"),
+        "nop_f2p": _ratio(nop, "f2p_passed", "f2p_total"),
+        "nop_p2p": _ratio(nop, "p2p_passed", "p2p_total"),
+        "pass": entry.get("pass") is True,
+        "reason": str(entry.get("reason") or ""),
+        "checked_in": str(entry.get("checked_in") or ""),
+        "reused": entry.get("reused") is True,
+        "attempts": [a for a in entry.get("attempts") or [] if isinstance(a, dict)],
+    }
+
+
+def env_check_rows(protocol: dict) -> list[dict]:
+    """One row per worker and question: a merged run shows each shard's own check."""
+    shards = [s for s in protocol.get("shards") or [] if isinstance(s, dict) and isinstance(s.get("env_check"), dict)]
+    rows = []
+    if shards:
+        for shard in shards:
+            worker = shard.get("worker") if isinstance(shard.get("worker"), dict) else {}
+            node = str(worker.get("node") or f"shard {shard.get('shard')}")
+            for tid, entry in sorted(shard["env_check"].items()):
+                if isinstance(entry, dict):
+                    rows.append(_env_check_row(str(tid), entry, node))
+        return rows
+    worker = protocol.get("worker") if isinstance(protocol.get("worker"), dict) else {}
+    checks = protocol.get("env_check") if isinstance(protocol.get("env_check"), dict) else {}
+    for tid, entry in sorted(checks.items()):
+        if isinstance(entry, dict):
+            rows.append(_env_check_row(str(tid), entry, str(worker.get("node") or "")))
+    return rows
+
+
+def env_check_line(rows: list[dict]) -> str:
+    """`Environment check: N of T passed (M reused, K kept out)`; empty when no question was checked."""
+    if not rows:
+        return ""
+    passed = [row for row in rows if row["pass"]]
+    reused = sum(1 for row in passed if row["reused"])
+    return (
+        f"Environment check: {len(passed)} of {len(rows)} passed "
+        f"({reused} reused, {len(rows) - len(passed)} kept out)"
+    )
+
+
+def _env_check_result(row: dict) -> str:
+    if row["pass"]:
+        return "pass"
+    return "kept out: " + (row["reason"].removeprefix("environment check failed: ") or "failed")
+
+
+def env_check_markdown(rows: list[dict]) -> list[str]:
+    """The Environment check section of provenance.md."""
+    if not rows:
+        return []
+    lines = [
+        "## Environment check",
+        "",
+        "Before any rollout, each worker proves the image it will use for a question: Harbor's oracle agent "
+        "applies the reference solution (every F2P and P2P test must pass), and its nop agent changes nothing "
+        "(some F2P test must fail, every P2P test must pass). The answer is stored on that worker and reused "
+        "while the image and the task files stay the same. A question that fails is kept out of Harbor.",
+        "",
+        f"- {env_check_line(rows)}",
+        "",
+        "| " + " | ".join(ENV_CHECK_HEADERS) + " |",
+        "| " + " | ".join("---" for _ in ENV_CHECK_HEADERS) + " |",
+    ]
+    for row in rows:
+        cells = [
+            row["task"],
+            row["worker"] or "-",
+            row["source"] or "-",
+            row["platform"] or "-",
+            row["image"] or "-",
+            row["oracle_f2p"],
+            row["oracle_p2p"],
+            row["nop_f2p"],
+            row["nop_p2p"],
+            _env_check_result(row),
+            row["checked_in"] or "-",
+            "yes" if row["reused"] else "no",
+        ]
+        lines.append("| " + " | ".join(str(c).replace("|", "/") for c in cells) + " |")
+    earlier = [
+        f"- {row['task']} on {row['worker'] or '-'}: {_cell(a.get('source'))} {_cell(a.get('platform'))} "
+        f"{'passed' if a.get('pass') is True else 'failed'} first"
+        + (f" ({str(a['reason']).removeprefix('environment check failed: ')})" if a.get("reason") else "")
+        for row in rows
+        for a in row["attempts"]
+    ]
+    if earlier:
+        lines.extend(["", "Earlier attempts in the same build:", "", *earlier])
+    return lines
+
+
+def provenance_brief(protocol: dict | None) -> list[str]:
+    """The short Provenance block of summary.md and report.html; the rest is in provenance.md."""
+    view = provenance_view(protocol)
+    if view is None:
+        return []
+    pipeline = f"Pipeline {_cell(view['commit'])}"
+    if view["dirty"] is True:
+        pipeline += " (dirty)"
+    lines = [pipeline]
+    if view["shards"]:
+        for shard in view["shards"]:
+            parts = []
+            if shard.get("has_data", True):
+                parts = [f"os {_cell(shard['os'])}", f"containers {_cell(shard['containers'])}"]
+            parts.extend(shard_status(shard))
+            node = f" {shard['node']}" if shard.get("node") else ""
+            lines.append(f"Worker{node} ({shard['label']}): {' · '.join(parts) or '-'}")
+        lines.extend(line for line in shard_worker_lines(view) if line.startswith("Shards differ"))
+    else:
+        lines.append(f"Worker {_cell(view['node'])}: os {_cell(view['os'])} · containers {_cell(view['containers'])}")
+    check = env_check_line(view["env_check"])
+    if check:
+        lines.append(check)
+    iso = view["isolation"]
+    if iso:
+        hits = ", ".join(iso["leak_hits"])
+        lines.append(
+            f"Isolation: mode {_cell(iso['mode'])} · canary {_cell(iso['canary_status'])} · "
+            f"leak scan {'hits ' + hits if hits else 'no hits' if iso['leak_scanner'] else '-'}"
+        )
+    lines.append(f"Full provenance: {PROVENANCE_FILE}")
+    return lines
+
+
+def provenance_document(doc: dict) -> str:
+    """provenance.md: every provenance fact of the run, the environment check, and the questions kept out."""
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
+    view = provenance_view(protocol)
+    if view is None:
+        return ""
+    suite = str(doc.get("suite") or "-")
+    lines = [f"# Provenance — {suite}", ""]
+    lines.append(f"- Run: `{_cell(doc.get('run_label') or doc.get('run_id'))}`")
+    lines.append("- Machine-readable: `eval_protocol` in `artifact.json`")
+    lines.extend(["", "## Run", ""])
+    lines.extend(provenance_markdown(protocol)[3:])
+    check = env_check_markdown(view["env_check"])
+    if check:
+        lines.extend(["", *check])
+    skipped = [str(item) for item in doc.get("skipped_questions") or []]
+    if skipped:
+        lines.extend(["", "## Kept out of Harbor", ""])
+        lines.extend(f"- {item}" for item in skipped)
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:

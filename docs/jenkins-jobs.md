@@ -21,11 +21,13 @@ The Jenkinsfile extracts the worker binary's pipeline (`mac-k3d pipeline --extra
 
 | Benchmark | Task folders | Notes |
 |-----------|--------------|-------|
-| DeepSWE | `eval-runs/deep-swe/tasks/<id>` | Pinned by `DEEPSWE_REF`. Harbor pulls each task's prebuilt `public.ecr.aws/d3j8x8q7/swe-bench-202605` image (linux/amd64 only) |
+| DeepSWE | `eval-runs/deep-swe/tasks/<id>` | Pinned by `DEEPSWE_REF`. `tasks/images` pulls `public.ecr.aws/d3j8x8q7/swe-bench-202605:<id>-v1.1` on an x86-64 host and builds the task Dockerfile natively on an arm64 host, then proves that image once per worker with Harbor's oracle and nop agents, with no model ([pipeline.md](pipeline.md#deepswe-on-linux-and-macos)) |
 | LoLBench | `eval-runs/lolbench/harbor_tasks/<id>` | Pinned by `LOLBENCH_REF`. `tasks/images` uses the Hub tag when its CPU type matches, else builds it. After iCode exits, `lolbench-submit` writes the patch; `agent/capture.json` records it for the anti-cheat check |
 | SWE-bench Pro | `eval-runs/swebenchpro/tasks/<instance_id>` | Official `jefzda/sweap-images` (linux/amd64 only). Images are large: start with one `TASK` |
 
-On an Apple silicon Mac, DeepSWE and SWE-bench Pro run their amd64 images under Docker Desktop's Rosetta, and LoLBench runs native arm64: [pipeline.md](pipeline.md#linux-and-macos-workers).
+On an Apple silicon Mac, DeepSWE builds each question natively and falls back to the published amd64 image under Rosetta when that build cannot be proven; SWE-bench Pro runs its amd64 images under Rosetta; LoLBench runs native arm64: [pipeline.md](pipeline.md#deepswe-on-linux-and-macos).
+
+The first DeepSWE build of a question on a worker spends minutes in the Tasks stage: the pull or native build, then two test-suite runs. That is before the Evaluate CPU lock, so the check uses up to 2 CPUs next to the builds holding the lock, one question at a time per worker. Later builds of that question on that worker reuse the stored answer (`env check: <id> pass … reused from <build>`). To keep this out of real runs, run `bash pipeline/tools/prewarm_task_images.sh` once on an idle worker ([testing/mac-mini-worker.md](testing/mac-mini-worker.md)). The answer per question is in the run's `provenance.md`.
 
 The iCode under test is the uploaded `ICODE_RELEASE_FILE` (release mode) or a clone of `ICODE_GIT_URL` at `ICODE_GIT_REF` (git mode): [icode-harness-inputs.md](icode-harness-inputs.md). LLM keys and forge tokens are Jenkins credentials on the controller, injected per build: [secrets.md](secrets.md).
 
@@ -39,9 +41,9 @@ Each worker's node has `cpu_cores / cpus_per_executor` executors (default 2 CPUs
 |--------|---------|
 | SUCCESS | The rollout ran and was scored, whatever its reward |
 | UNSTABLE | Out of memory; a dispatcher queues it again at the tail, at most `OOM_RETRIES` times |
-| FAILURE | A stage failed. Before Harbor started, a dispatcher retries it once; after, it counts as not run |
+| FAILURE | A stage failed. Before Harbor started, a dispatcher retries it once; after, it counts as not run. A DeepSWE question with no image that passed the environment check fails in Tasks with `no selected question has a proven environment`; the reason is in `eval-runs/skipped_tasks.txt` |
 
-The build description and `summary.md` give the question, model and reward. The archived `eval-runs/` holds `artifact.json`, `summary.md`, `report.html` and the trials: [evaluation.md](evaluation.md#where-a-run-is-stored).
+The build description and `summary.md` give the question, model and reward. The archived `eval-runs/` holds `artifact.json`, `summary.md`, `report.html`, `provenance.md` and the trials: [evaluation.md](evaluation.md#where-a-run-is-stored).
 
 ## Queue a build without the UI
 

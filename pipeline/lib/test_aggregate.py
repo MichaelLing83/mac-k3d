@@ -383,11 +383,13 @@ class CliTests(unittest.TestCase):
             # Both shards' image pins, not only the first shard's.
             self.assertEqual(sorted(protocol["images"]), ["task101", "task102"])
             md = (out / "summary.md").read_text(encoding="utf-8")
-            self.assertIn("- Worker (shard 1 101): node mac-cloud", md)
-            self.assertIn("- Worker (shard 2 102): node mac-home", md)
+            prov = (out / "provenance.md").read_text(encoding="utf-8")
+            self.assertIn("- Worker (shard 1 101): node mac-cloud", prov)
+            self.assertIn("- Worker (shard 2 102): node mac-home", prov)
+            self.assertIn("- Worker mac-cloud (shard 1 101): os - · containers -", md)
             self.assertIn("max_tokens `65536` · max_iterations `500`", md)
             page = (out / "report.html").read_text(encoding="utf-8")
-            self.assertIn("Worker (shard 2 102): node mac-home", page)
+            self.assertIn("Worker mac-home (shard 2 102): os - · containers -", page)
 
     def test_shards_with_different_max_tokens_are_marked_mixed(self):
         import contextlib
@@ -497,6 +499,10 @@ class DispatcherPlanTests(unittest.TestCase):
             (out / "report.html").read_text(encoding="utf-8"),
         )
 
+    def prov(self, root: Path) -> str:
+        """The merged provenance.md: every shard's Worker, isolation and requester lines."""
+        return (root / "aggregate" / "provenance.md").read_text(encoding="utf-8")
+
     def test_a_shard_that_failed_early_does_not_ship_the_previous_builds_files(self):
         """deepswe_some_task #5: cloud shard #61 stopped before Harbor and still held build #58's files."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -549,16 +555,19 @@ class DispatcherPlanTests(unittest.TestCase):
             )
             self.assertIn(f"- {line}", md)
             self.assertIn(line, page)
-            self.assertIn("- Worker (shard 1 jenkins-60): node mac-Michael-Ubuntu", md)
-            self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", md)
-            self.assertNotIn(SUBSTITUTE_PROBE, md)
-            self.assertIn(f"- Requester: `toby` `{DISPATCHER_URL}`", md)
+            prov = self.prov(root)
+            self.assertIn(f"- {line}", prov)
+            self.assertIn("- Worker mac-Michael-Ubuntu (shard 1 jenkins-60): os - · containers -", md)
+            self.assertIn("- Worker (shard 1 jenkins-60): node mac-Michael-Ubuntu", prov)
+            self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE}", prov)
+            self.assertNotIn(SUBSTITUTE_PROBE, md + prov)
+            self.assertIn(f"- Requester: `toby` `{DISPATCHER_URL}`", prov)
             self.assertIn(
                 "- Coverage: 1 of 3 planned questions have trials; 2 not run (shard 2 jenkins-61 FAILURE)", md
             )
             self.assertEqual(doc["model"], "openai/deepseek-flash")
             self.assertEqual(sorted(protocol["images"]), ["Yb43UkF"])
-            self.assertNotIn("abs-module-cache-flags", md)
+            self.assertNotIn("abs-module-cache-flags", md + prov)
             # Only the shard's own trials were merged; the stale shard archived none.
             runs = sorted(p.name for p in (root / "aggregate" / "harness" / "harbor_runs").iterdir())
             self.assertEqual(runs, ["shard1-jenkins-60"])
@@ -692,8 +701,9 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             doc, md, page = self.report(root)
             self.assertEqual(doc["eval_protocol"]["requester"], {"user": "Toby", "build_url": DISPATCHER_URL})
-            self.assertIn(f"- Requester: `Toby` `{DISPATCHER_URL}`", md)
-            self.assertIn(f"Requester Toby {DISPATCHER_URL}", page)
+            self.assertIn(f"- Requester: `Toby` `{DISPATCHER_URL}`", self.prov(root))
+            self.assertIn('Full provenance: <a href="provenance.md">provenance.md</a>', page)
+            self.assertIn("- Full provenance: [provenance.md](provenance.md)", md)
 
     def test_a_fresh_shard_from_its_own_build_counts_in_full(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -710,8 +720,9 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertNotRegex(md, r"\d+ (questions? )?not run")
             self.assertIn("· not run **0** ·", md)
             self.assertIn("- Coverage: 2 of 2 planned questions have trials", md)
-            self.assertIn("- Worker (shard 2 jenkins-61): node cloud", md)
-            self.assertIn(f"- Egress probe: Harbor default {DEFAULT_PROBE}", md)
+            prov = self.prov(root)
+            self.assertIn("- Worker (shard 2 jenkins-61): node cloud", prov)
+            self.assertIn(f"- Egress probe: Harbor default {DEFAULT_PROBE}", prov)
 
     def test_shards_with_different_egress_probes_each_name_their_own(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -724,7 +735,8 @@ class DispatcherPlanTests(unittest.TestCase):
                 self.collect(root, build, work)
             code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=1)
             self.assertEqual(code, 0, err)
-            doc, md, _ = self.report(root)
+            doc, _, _ = self.report(root)
+            md = self.prov(root)
             self.assertNotIn("egress_probe", doc["eval_protocol"].get("isolation") or {})
             self.assertNotIn("- Egress probe:", md)
             lines = [line for line in md.splitlines() if line.startswith("- Worker (shard")]
@@ -748,7 +760,7 @@ class DispatcherPlanTests(unittest.TestCase):
                     self.collect(root, build, work)
                 code, err = self.run_plan(root, ["1|60|SUCCESS|0|1|alpha", "2|61|SUCCESS|1|1|beta"], rollouts=1)
                 self.assertEqual(code, 0, err)
-                _, md, page = self.report(root)
+                md = self.prov(root)
                 lines = [line for line in md.splitlines() if line.startswith("- Worker (shard")]
                 self.assertIn(f"egress probe Harbor default {DEFAULT_PROBE} · trial networks {pools[0]} /28 (4090 free)", lines[0])
                 self.assertIn(f"trial networks {pools[1]} /28 (4093 free)", lines[1])
@@ -840,7 +852,9 @@ class DispatcherPlanTests(unittest.TestCase):
             self.assertEqual(leak["hit_tasks"], ["etree-xml-diff-patch"])
             self.assertNotIn("report_sha256", leak)
             self.assertEqual([row["leak_scan_sha256"] for row in protocol["shards"]], ["leak67", "leak68"])
-            self.assertIn("- Leak scan: mac-k3d-leakscan-v1 · hit tasks etree-xml-diff-patch · clean 4, hit 1", md)
+            prov = self.prov(root)
+            self.assertIn("- Leak scan: mac-k3d-leakscan-v1 · hit tasks etree-xml-diff-patch · clean 4, hit 1", prov)
+            self.assertIn("· canary pass · leak scan hits etree-xml-diff-patch\n", md)
 
             canary = isolation["canary"]
             self.assertEqual(canary["status"], "pass")
@@ -851,7 +865,7 @@ class DispatcherPlanTests(unittest.TestCase):
 
             network = isolation["trial_network"]
             self.assertEqual((network["need_by_shard"], network["free"]), ([8, 1], 4090))
-            self.assertIn("- Trial networks: own /28 subnets from 10.213.0.0/16 · 4090 of 4096 free at check · need 8 · 1 (by shard)", md)
+            self.assertIn("- Trial networks: own /28 subnets from 10.213.0.0/16 · 4090 of 4096 free at check · need 8 · 1 (by shard)", prov)
 
             self.assertEqual(protocol["resources"]["concurrency"], 9)
             self.assertEqual(protocol["resources"]["cpu_lock_qty"], 32)
@@ -890,7 +904,8 @@ class DispatcherPlanTests(unittest.TestCase):
                 self.assertEqual(code, 0, err)
                 doc, md, _ = self.report(root)
                 self.assertEqual(doc["eval_protocol"]["isolation"]["canary"]["status"], status)
-                self.assertIn(f"· {status} · tasks", md)
+                self.assertIn(f"· {status} · tasks", self.prov(root))
+                self.assertIn(f"· canary {status} ·", md)
 
     def test_a_shard_that_stopped_before_harbor_adds_no_slots_or_leak_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -933,11 +948,14 @@ class DispatcherPlanTests(unittest.TestCase):
             # Shard 3 never ran Harbor, so it has no transcripts to point at.
             self.assertEqual(doc["eval_protocol"]["transcripts"], {"job": "deepswe_one_task", "builds": ["9", "70"]})
             where = "(deepswe_one_task #9, #70), gzipped under eval-runs/harness/harbor_runs/*/*/agent/icode-project"
-            line = next(ln for ln in md.splitlines() if ln.startswith("- Transcripts:"))
+            prov = self.prov(root)
+            line = next(ln for ln in prov.splitlines() if ln.startswith("- Transcripts:"))
             self.assertTrue(line.endswith(where), line)
-            self.assertGreater(md.index(line), md.index("### Provenance"))
-            self.assertIn(where, page)
-            self.assertGreater(page.index(where), page.index("<h2>Provenance</h2>"))
+            self.assertGreater(prov.index(line), prov.index("## Run"))
+            # The summary and the page keep only the short block and point at provenance.md.
+            self.assertNotIn(where, md + page)
+            self.assertGreater(md.index("- Full provenance: [provenance.md](provenance.md)"), md.index("### Provenance"))
+            self.assertGreater(page.index('href="provenance.md"'), page.index("<h2>Provenance</h2>"))
 
         # A single build keeps its own transcripts; the line is for merged reports.
         from provenance import provenance_markdown

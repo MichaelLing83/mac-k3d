@@ -50,6 +50,19 @@ class PhaseLayoutTests(unittest.TestCase):
                 self.assertTrue(step.startswith(f"{phase}/"), f"{phase}.sh runs {step} from another phase")
                 self.assertTrue((STAGES / f"{step}.sh").is_file(), f"{phase}.sh lists missing {step}.sh")
 
+    def test_tasks_images_settles_the_platform_before_icode(self):
+        listed = steps("tasks")
+        # The environment check picks the task containers' platform, which picks the iCode drop or venv.
+        self.assertLess(listed.index("tasks/images"), listed.index("tasks/icode"))
+        # It lists the questions it keeps out first; the leak scan appends to that list.
+        self.assertLess(listed.index("tasks/images"), listed.index("tasks/leakscan"))
+        leakscan = (STAGES / "tasks" / "leakscan.sh").read_text(encoding="utf-8")
+        self.assertNotIn('rm -f "$SKIPPED_TASKS"', leakscan)
+        images = (STAGES / "tasks" / "images.sh").read_text(encoding="utf-8")
+        self.assertIn('rm -f "$WORKDIR/skipped_tasks.txt" "$WORKDIR/env_check.json"', images)
+        env = (STAGES / "env.sh").read_text(encoding="utf-8")
+        self.assertIn('"$WORKDIR/env_check.json"', env)
+
     def test_every_step_file_is_run_by_its_phase(self):
         listed = {step for phase in phases() for step in steps(phase)}
         for path in sorted(STAGES.glob("*/*.sh")):
@@ -59,8 +72,12 @@ class PhaseLayoutTests(unittest.TestCase):
             self.assertIn(rel, listed, f"{rel}.sh is not in any phase's STEPS")
 
     def test_only_evaluate_steps_source_harbor_cmd(self):
+        # tasks/images runs the first-time environment check (oracle + nop) through it.
+        allowed = {STAGES / "tasks" / "images.sh"}
         for path in sorted(STAGES.rglob("*.sh")):
             if "harbor_cmd.sh" not in path.read_text(encoding="utf-8") or path == HARBOR_CMD:
+                continue
+            if path in allowed:
                 continue
             self.assertEqual(path.parent.name, "evaluate", path)
 

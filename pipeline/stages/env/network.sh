@@ -14,7 +14,7 @@ if [ -n "${WORKSPACE:-}" ]; then
 fi
 roots=()
 for runs in "${run_dirs[@]}"; do
-  for dir in "$runs/harness/harbor_runs" "$runs/canary"; do
+  for dir in "$runs/harness/harbor_runs" "$runs/canary" "$runs/env-check"; do
     if [ -d "$dir" ]; then
       roots+=(--root "$dir")
     fi

@@ -98,8 +98,9 @@ have() {
 
 # One lock directory per worker, outside any executor's workspace. mkdir is
 # the lock, so it works on macOS (no flock). A holder whose pid is gone is stale.
+# $2 is how many seconds to wait for it (default 1800).
 node_lock() {
-  local name="$1" root dir i=0 owner=""
+  local name="$1" wait="${2:-1800}" root dir i=0 owner=""
   if [ -n "${WORKSPACE:-}" ]; then
     root="$(cd "$(dirname "$WORKSPACE")/.." && pwd)/.mac-k3d/locks"
   else
@@ -114,7 +115,7 @@ node_lock() {
       continue
     fi
     i=$((i + 1))
-    [ "$i" -le 900 ] || die "timed out waiting for the node lock $name"
+    [ "$i" -le $((wait / 2)) ] || die "timed out waiting for the node lock $name"
     sleep 2
   done
   echo $$ >"$dir/owner"
@@ -166,20 +167,32 @@ dockerfile_needs_amd64() {
     | grep -Eq 'x86_64-unknown-linux|linux-x64[.-]|linux-amd64|_amd64\.deb|arch=amd64\]'
 }
 
-# Platform of this build's task containers. Harbor runs DeepSWE's and SWE-bench
-# Pro's prebuilt images, which are published for linux/amd64 only, so those stay
-# that exact image (Rosetta on Apple silicon) and match a Linux worker's digest.
+# Platform of this build's task containers. SWE-bench Pro runs its prebuilt
+# images, published for linux/amd64 only (Rosetta on Apple silicon).
+# DeepSWE: DEEPSWE_DOCKER_PLATFORM when set; linux/amd64 on an x86-64 host (the
+# published images); on an arm64 host the host platform only when tasks/images
+# built and checked every selected question natively ($WORKDIR/env_check.json),
+# else linux/amd64 (the published images, emulated).
 # LoLBench builds for the Docker host unless a selected Dockerfile downloads an
 # x86-64-only build. An x86-64 host always gets linux/amd64.
 task_container_platform() {
-  local host tasks_dir tid
+  local host tasks_dir tid settled
   case "${BENCHMARK:-deepswe}" in
     swebenchpro)
       printf '%s\n' "${SWEBENCHPRO_DOCKER_PLATFORM:-linux/amd64}"
       return 0
       ;;
     deepswe | "")
-      printf '%s\n' "${DEEPSWE_DOCKER_PLATFORM:-linux/amd64}"
+      if [ -n "${DEEPSWE_DOCKER_PLATFORM:-}" ]; then
+        printf '%s\n' "$DEEPSWE_DOCKER_PLATFORM"
+        return 0
+      fi
+      host="$(docker_host_platform)"
+      settled=""
+      if [ "$host" != linux/amd64 ]; then
+        settled="$(env_check_platform)"
+      fi
+      printf '%s\n' "${settled:-linux/amd64}"
       return 0
       ;;
   esac
@@ -195,6 +208,15 @@ task_container_platform() {
     done <"$WORKDIR/selected_tasks.txt"
   fi
   printf '%s\n' "$host"
+}
+
+# The platform tasks/images settled for the selected DeepSWE questions: the one
+# every question that runs was checked on. Empty before tasks/images ran, or
+# when env_check.json is for another selection.
+env_check_platform() {
+  [ -s "$WORKDIR/env_check.json" ] || return 0
+  python3 "$PIPELINE_LIB/env_check.py" platform \
+    --record "$WORKDIR/env_check.json" --selected "$WORKDIR/selected_tasks.txt" 2>/dev/null || true
 }
 
 # True when this build's task containers run emulated (another CPU type than Docker's).

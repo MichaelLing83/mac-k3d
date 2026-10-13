@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The one place that builds `harbor run` command lines. Sourced after
-# _common.sh by evaluate/canary.sh and evaluate/harbor_run.sh; never run alone.
+# _common.sh by evaluate/canary.sh, evaluate/harbor_run.sh and tasks/images.sh
+# (the environment check); never run alone.
 #
 #   load_eval_state    read what the tasks phase and evaluate/slots left in $WORKDIR
 #   ensure_harbor_egress  re-run env/egress's probe check right before Harbor runs
@@ -12,6 +13,8 @@
 #                      removed when the step's shell exits
 #   build_run_cmd      iCode: every selected task x N_ROLLOUTS trials, one job
 #   build_canary_cmd   canary: one trial with iCode's exact flags, mounts and env
+#   build_env_check_cmd  environment check: one oracle or nop trial of one
+#                      question; no model, no mounts, no key
 #   masked_cmd         the current command with secret values replaced by ***
 #   harbor_dry_run     true when MAC_K3D_HARBOR_DRY_RUN=1: print, run nothing
 #
@@ -191,6 +194,29 @@ build_canary_cmd() {
   fi
 }
 
+# tasks/images proves a question's image once per machine: Harbor's oracle
+# (reference solution) or nop agent, on the task as task.toml declares it.
+# env_check_agents.py loads the same overrides as iCode's agent.
+build_env_check_cmd() {
+  local tid="$1" agent="$2" jobs="$3"
+  unit_location
+  unit_jobs="$jobs"
+  unit_log="$jobs/harbor.log"
+  cmd=(harbor run)
+  cmd+=(-p "$unit_task_path")
+  cmd+=(-i "$tid")
+  cmd+=(-a "env_check_agents:${agent}")
+  if [ "$agent" = OracleAgent ]; then
+    cmd+=(--ak "task_dir=$TASKS_DIR/$tid")
+  fi
+  cmd+=(--job-name "${tid}_${agent}_${BUILD_NUMBER:-local}")
+  cmd+=(--jobs-dir "$jobs")
+  cmd+=(-k 1)
+  cmd+=(-n 1)
+  cmd+=(-r "${HARBOR_MAX_RETRIES:-1}")
+  cmd+=(-y)
+}
+
 # Developer testing: TEST_MEMORY_MB becomes --override-memory-mb while ATTEMPT
 # is at most TEST_MEMORY_ATTEMPTS (default 1). A later try runs as declared.
 apply_test_memory() {
@@ -293,8 +319,12 @@ run_cmd() {
     fi
     # Harbor's docker and compose calls build and run the task images for this
     # platform, so Docker never picks its native one for an amd64-only task.
-    if task_platform_emulated; then
-      export DOCKER_DEFAULT_PLATFORM="$(task_container_platform)"
+    # RUN_PLATFORM is the platform of one environment check (tasks/images).
+    plat="${RUN_PLATFORM:-$(task_container_platform)}"
+    if [ "$plat" != "$(docker_host_platform)" ]; then
+      export DOCKER_DEFAULT_PLATFORM="$plat"
+    else
+      unset DOCKER_DEFAULT_PLATFORM
     fi
     if command -v stdbuf >/dev/null 2>&1; then
       stdbuf -oL -eL "${cmd[@]}"

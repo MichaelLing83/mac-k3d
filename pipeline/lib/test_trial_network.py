@@ -950,10 +950,12 @@ class WiringTests(unittest.TestCase):
         self.assertLess(run.index("teardown_on_exit"), run.index("\nrun_harbor\n"))
 
     def test_agent_imports_both_overrides_before_harbor(self):
-        src = (LIB / "icode_harbor_agent.py").read_text(encoding="utf-8")
-        imports = [ln for ln in src.splitlines() if ln.startswith(("import ", "from ")) and "__future__" not in ln]
-        self.assertTrue(imports[0].startswith("import harbor_probe_override"), imports[:3])
-        self.assertTrue(imports[1].startswith("import harbor_network_override"), imports[:3])
+        for name in ("icode_harbor_agent.py", "env_check_agents.py"):
+            src = (LIB / name).read_text(encoding="utf-8")
+            imports = [ln for ln in src.splitlines() if ln.startswith(("import ", "from ")) and "__future__" not in ln]
+            with self.subTest(agent=name):
+                self.assertTrue(imports[0].startswith("import harbor_probe_override"), imports[:3])
+                self.assertTrue(imports[1].startswith("import harbor_network_override"), imports[:3])
 
 
 class ProvenanceTests(unittest.TestCase):

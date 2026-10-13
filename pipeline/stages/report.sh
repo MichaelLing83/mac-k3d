@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# report phase: this run's artifact.json, summary.md and report.html.
+# report phase: this run's artifact.json, summary.md, report.html and provenance.md.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
