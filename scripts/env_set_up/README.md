@@ -31,7 +31,7 @@ Any `FAIL` / `ERROR` → exit non-zero.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MAC_K3D_RELEASE_TAG` | `v0.4.0-rc.4` | GitHub Release tag to download |
+| `MAC_K3D_RELEASE_TAG` | `v0.5.3` | GitHub Release tag to download |
 | `MAC_K3D_REPO` | `Toby-Yu/mac-k3d` | GitHub `owner/repo` |
 | `JENKINS_URL` | `http://localhost:17070` | Controller UI base URL |
 | `CONTROLLER_CONFIG` | `~/.config/mac-k3d/config.yaml` | Controller YAML |

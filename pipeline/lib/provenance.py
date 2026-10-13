@@ -202,16 +202,28 @@ def merge_image(images: dict, task_id: str, record: dict) -> None:
     images[task_id] = record
 
 
+def _sysctl(name: str) -> str:
+    try:
+        proc = subprocess.run(["sysctl", "-n", name], capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
 def _mem_total_kb() -> int | None:
     try:
         text = Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
+        text = ""
     for line in text.splitlines():
         if line.startswith("MemTotal:"):
             parts = line.split()
             if len(parts) >= 2 and parts[1].isdigit():
                 return int(parts[1])
+    if platform.system() == "Darwin":
+        size = _sysctl("hw.memsize")
+        if size.isdigit():
+            return int(size) // 1024
     return None
 
 
@@ -230,11 +242,24 @@ def _cpu_model() -> str:
     try:
         text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return ""
+        text = ""
     for line in text.splitlines():
         if line.lower().startswith("model name"):
             return line.split(":", 1)[1].strip()
+    if platform.system() == "Darwin":
+        return _sysctl("machdep.cpu.brand_string")
     return ""
+
+
+def container_platform_facts(workdir: Path | None) -> dict:
+    """What `tasks/icode` recorded: the task containers' platform and whether Docker emulates it."""
+    if workdir is None:
+        return {}
+    doc = _load_json(workdir / "container_platform.json")
+    want = str(doc.get("container_platform") or "")
+    if not want:
+        return {}
+    return {"container_platform": want, "emulated": doc.get("emulated") is True}
 
 
 def _docker_version() -> str:
@@ -253,16 +278,19 @@ def _docker_version() -> str:
     return proc.stdout.strip()
 
 
-def worker_facts() -> dict:
+def worker_facts(workdir: Path | None = None) -> dict:
     node = os.environ.get("NODE_NAME") or platform.node() or ""
-    return {
+    facts = {
         "node": node,
+        "os": platform.system(),
         "nproc": _nproc(),
         "memory_kb": _mem_total_kb(),
         "docker_version": _docker_version(),
         "kernel": platform.release(),
         "cpu_model": _cpu_model(),
     }
+    facts.update(container_platform_facts(workdir))
+    return facts
 
 
 def requester_facts() -> dict:
@@ -553,7 +581,7 @@ def write_protocol_inputs(
             "benchmark": benchmark_record(repo_dir, tasks_dir, selected),
             "grader_overlay": overlay_record(overlay, applied),
             "images": images,
-            "worker": worker_facts(),
+            "worker": worker_facts(workdir),
             "requester": requester_facts(),
             "pipeline": pipeline_facts(pipeline_root),
             "isolation": isolation_record(icode_root, mounts),
@@ -745,6 +773,8 @@ def provenance_view(protocol: dict | None) -> dict | None:
         "docker_version": str(worker.get("docker_version") or ""),
         "kernel": str(worker.get("kernel") or ""),
         "cpu_model": str(worker.get("cpu_model") or ""),
+        "os": str(worker.get("os") or ""),
+        "containers": containers_text(worker),
         "user": str(requester.get("user") or ""),
         "build_url": str(requester.get("build_url") or ""),
         "tasks": rows,
@@ -755,6 +785,14 @@ def provenance_view(protocol: dict | None) -> dict | None:
             protocol.get("model_params_mismatch") if isinstance(protocol.get("model_params_mismatch"), dict) else {}
         ),
     }
+
+
+def containers_text(worker: dict) -> str:
+    """`linux/amd64`, or `linux/amd64 emulated` when Docker ran it on a host of another CPU type."""
+    want = str(worker.get("container_platform") or "")
+    if not want:
+        return ""
+    return f"{want} emulated" if worker.get("emulated") is True else want
 
 
 def transcripts_line(record: object) -> str:
@@ -808,6 +846,8 @@ def shard_views(shards: object) -> list[dict]:
                 "docker_version": str(worker.get("docker_version") or ""),
                 "kernel": str(worker.get("kernel") or ""),
                 "cpu_model": str(worker.get("cpu_model") or ""),
+                "os": str(worker.get("os") or ""),
+                "containers": containers_text(worker),
                 "concurrency": res.get("concurrency"),
                 "cpus_each": res.get("cpus_each"),
                 "max_tokens": params.get("max_tokens"),
@@ -858,6 +898,10 @@ def shard_worker_lines(view: dict) -> list[str]:
         parts = []
         if shard.get("has_data", True):
             parts = [f"{name} {_cell(shard[key])}" for key, name in SHARD_WORKER_FIELDS]
+            if shard.get("os"):
+                parts.append(f"os {shard['os']}")
+            if shard.get("containers"):
+                parts.append(f"containers {shard['containers']}")
             if shard.get("egress"):
                 parts.append(f"egress probe {shard['egress']}")
             if shard.get("trial_network"):
@@ -911,7 +955,7 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
     if view["shards"]:
         lines.extend(f"- {line}" for line in shard_worker_lines(view))
     else:
-        lines.append(
+        worker = (
             "- Worker: "
             f"node `{_cell(view['node'])}` · "
             f"nproc `{_cell(view['nproc'])}` · "
@@ -920,6 +964,11 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
             f"kernel `{_cell(view['kernel'])}` · "
             f"cpu `{_cell(view['cpu_model'])}`"
         )
+        if view["os"]:
+            worker += f" · os `{view['os']}`"
+        if view["containers"]:
+            worker += f" · containers `{view['containers']}`"
+        lines.append(worker)
     lines.append(f"- Requester: `{_cell(view['user'])}` `{_cell(view['build_url'])}`")
     if view["transcripts"]:
         lines.append(f"- {view['transcripts']}")

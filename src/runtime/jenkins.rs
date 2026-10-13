@@ -13,11 +13,11 @@ const HELM_CHART: &str = "jenkins/jenkins";
 /// Do **not** list plugins already in chart defaults (e.g. `git`, `workflow-aggregator`) —
 /// Helm fails with `[PLUGIN CONFLICT]`.
 const ADDITIONAL_PLUGINS: &[&str] = &[
-    "lockable-resources",     // CPU_CORES / capacity locks for LoLBench workers
+    "lockable-resources",     // per-worker <agent>-core-N CPU locks
     "plain-credentials",      // Secret text credentials for LLM / forge PATs
     "file-parameters",        // stashedFile: Pipeline-safe upload onto agent workspace
-    "copyartifact",           // dispatcher Aggregate stage pulls each shard's trials
-    "pipeline-utility-steps", // nodesByLabel: at least one shard per online worker
+    "copyartifact",           // dispatcher Aggregate stage pulls each rollout build's trials
+    "pipeline-utility-steps", // nodesByLabel: online workers and executors for MAX_IN_FLIGHT
     "hidden-parameter",       // ui_profile=user hides developer params, keeping defaults
 ];
 

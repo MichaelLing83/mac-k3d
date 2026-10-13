@@ -13,6 +13,14 @@ pub fn run(args: &ConfigArgs, config: &MacK3dConfig, config_path: &Path) -> Resu
     if args.skip_agent {
         return Ok(());
     }
+    if crate::platform::host_os() == crate::platform::HostOs::Macos {
+        let docker_cpus = crate::prepare::resources::docker_vm_limits().map(|(cpus, _)| cpus);
+        if let Some(problem) =
+            crate::prepare::resources::cpu_cores_problem(config.jenkins_agent.cpu_cores, docker_cpus)
+        {
+            return Err(crate::error::Error::Validation(problem));
+        }
+    }
     let mut config = config.clone();
     if let Some(old) = jenkins_agent::legacy_mac_name(&config) {
         let new_name = jenkins_agent::default_agent_name();
@@ -79,6 +87,9 @@ fn check_toolchain(config: &MacK3dConfig, config_path: &Path) {
     }
     if discovery::which("git").is_none() {
         println!("Warning: git not found; the tasks phase clones benchmarks with it; {fix}.");
+    }
+    for warning in crate::platform::worker_host_warnings() {
+        println!("Warning: {warning}.");
     }
     let docker = config
         .dependencies

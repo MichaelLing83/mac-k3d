@@ -8,20 +8,20 @@ mac-k3d is evaluation infrastructure for AI coding harnesses. It turns a **new L
 flowchart TD
   person["You: Jenkins UI or mac-k3d eval"]
   controller["Controller: Jenkins in k3d"]
-  one["one_task build on a free worker"]
-  many["some_task or full_suite_task splits into shards"]
-  worker["Worker runs env, tasks, evaluate, anticheat, score, report, archive"]
+  one["one_task build: one question, one rollout"]
+  many["some_task or full_suite_task: a dispatcher"]
+  worker["Worker (Linux or Mac) runs env, tasks, evaluate, anticheat, score, report, archive"]
   report["artifact.json, summary.md, report.html"]
   person --> controller
   controller -->|"one question"| one
   controller -->|"many questions"| many
-  many -->|"one shard per build, next shard to the next free worker"| one
+  many -->|"one build per question x rollout, each to a free executor"| one
   one --> worker --> report
 ```
 
 - **Controller:** Jenkins inside a k3d cluster (`http://localhost:17070`). It holds the nine eval jobs (three shapes for each benchmark), the DeepSeek key and the queue. It never runs Harbor.
-- **Worker:** Docker, Java, git, the pinned Harbor and a Jenkins inbound agent. Executors are the CPU limit divided by the CPUs one task needs. More workers run more questions at once; nothing in the pipeline changes when you add one.
-- **A build** lands on one worker, holds all of that worker's cores while Harbor runs, and runs the seven phases from the `pipeline/` built into that worker's `mac-k3d`, so the result names the commit that produced it. `some_task` and `full_suite_task` queue one `one_task` build per shard and merge them into one report.
+- **Worker:** Linux or macOS with Docker, Java, git, the pinned Harbor and a Jenkins inbound agent. Executors are the CPU limit divided by 2. More workers run more questions at once; nothing in the pipeline changes when you add one, and a Mac worker gives the same phases, inputs and outputs as a Linux one.
+- **A build** lands on one worker, locks only the CPUs its question declares while Harbor runs, and runs the seven phases from the `pipeline/` built into that worker's `mac-k3d`, so the result names the commit that produced it. `some_task` and `full_suite_task` queue one `one_task` build per question and rollout and merge them into one report.
 - **Harbor** (pinned in `pipeline/config/toolchain.env`) runs the trials: containers, each task's declared limits, retries and grading. The agent can reach only the hosts in `pipeline/config/network-allowlist-v1.json`, the DeepSeek API.
 - **mac-k3d** does everything around Harbor: machine setup, the benchmark checkout and per-task checks, the isolation canary, anti-cheat, scoring, the report and the archive.
 
@@ -48,10 +48,12 @@ The binary installs Docker, k3d, kubectl, helm, and Java when you choose **Insta
 
 Leftovers it cannot hide:
 
-- **Linux:** one logout after the `docker` group is added, then re-run `mac-k3d setup`
-- **macOS:** first Docker Desktop window (and Homebrew if missing)
-- **sudo** / brew for package install (without sudo, setup saves your answers and prints the root commands for an administrator)
-- **Worker:** paste a Jenkins API token from the UI into `worker.yaml` (`api_user` / `api_token` are always there, empty until filled in)
+| Linux | macOS |
+|-------|-------|
+| One logout after the `docker` group is added, then re-run `mac-k3d setup` | The first Docker Desktop window (and Homebrew if missing) |
+| `sudo` for apt (without it, setup saves your answers and prints the root commands for an administrator) | A Mac worker: automatic login, `sudo pmset -a sleep 0`, and Docker Desktop's memory, CPUs and Rosetta ([docs/new-machine.md](docs/new-machine.md#mac-mini-worker)) |
+
+On both, a worker needs a Jenkins API token from the UI in `worker.yaml` (`api_user` / `api_token` are always there, empty until filled in).
 
 If auto-install fails, install Docker yourself and re-run setup ([docs/new-machine.md](docs/new-machine.md)).
 
@@ -63,14 +65,16 @@ If auto-install fails, install Docker yourself and re-run setup ([docs/new-machi
 4. Choose the role; let it **Install** Docker if asked.
 5. Controller: open `http://localhost:17070`. Worker: paste API token, then `mac-k3d config -c worker.yaml` if needed.
 
+| Linux | macOS |
+|-------|-------|
+| `ASSET=mac-k3d-linux-x86_64` | `ASSET=mac-k3d-darwin-aarch64`<br>`xattr -d com.apple.quarantine "./$ASSET"` (unsigned GitHub binary) |
+
 ```bash
-chmod +x mac-k3d-linux-x86_64
-# macOS (unsigned GitHub binary):
-#   xattr -d com.apple.quarantine ./mac-k3d-darwin-aarch64
-./mac-k3d-linux-x86_64          # TTY → setup wizard (controller or worker)
-# optional:
+chmod +x "./$ASSET"
 mkdir -p ~/.local/bin
-cp mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
+cp "./$ASSET" ~/.local/bin/mac-k3d
+export PATH="$HOME/.local/bin:$PATH"
+mac-k3d setup          # TTY → setup wizard (controller or worker)
 ```
 
 Open **Terminal** (do not rely on double-click). **Start here (controller + worker + eval):** [docs/user-guide.md](docs/user-guide.md). Extra walkthrough: [docs/new-machine.md](docs/new-machine.md).

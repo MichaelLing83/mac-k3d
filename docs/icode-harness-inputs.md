@@ -99,6 +99,28 @@ Before any rollout, the `tasks` phase strips task deliverables from the clone's 
 
 The clone lives under the eval workdir (`eval-runs/icode-src`), not a permanent developer tree on the worker. A later git eval wipes that tree first. If Harbor left root/nobody files in `.venv`, `tasks/icode` deletes it with Docker (and `evaluate/harbor_run` hands the tree back to the build user after Harbor) (`removing leftover … via docker`) — do not `sudo rm` by hand. Git-mode Jenkins also deletes a leftover `ICODE_RELEASE_FILE` and does not treat it as an upload.
 
+## Linux and macOS workers
+
+iCode always runs inside the task container, which is Linux on every worker, so the iCode under test must be a Linux build for that container's CPU type. The `tasks/icode` step writes the platform to `container_platform.json` and prints it (`OK task containers linux/arm64 (native)`).
+
+| Benchmark | Linux x86_64 or Intel Mac | Linux arm64 or Apple silicon Mac |
+|-----------|---------------------------|----------------------------------|
+| DeepSWE | `linux/amd64` | `linux/amd64`, emulated: the prebuilt images are published for amd64 only |
+| SWE-bench Pro | `linux/amd64` | `linux/amd64`, emulated: the official images are amd64 only |
+| LoLBench | `linux/amd64` | `linux/arm64`, unless a selected task's `environment/Dockerfile` downloads an x86-64-only build |
+
+Emulated means Rosetta in Docker Desktop on a Mac, QEMU on Linux. It keeps the exact image a Linux x86_64 worker runs, with the same digest, so the scores stay comparable.
+
+**Release mode.** The build picks the `icode` whose ELF header matches the task platform. An upload holding only the other CPU type fails before any trial, naming the drop to use. For a Mac, or a suite that mixes platforms, upload one `.tar.gz` holding both `icode-linux-x86_64-full-vX.Y.Z` and `icode-linux-aarch64-full-vX.Y.Z` of the same version:
+
+```bash
+tar -czf icode-linux-full-v0.1.41.tar.gz icode-linux-x86_64-full-v0.1.41 icode-linux-aarch64-full-v0.1.41
+```
+
+`icode_release.json` records the sha256 of the file you uploaded, so upload the same file to every build you want to compare. Locally, keep both drops in one folder and run `mac-k3d set --icode-release <folder>`; each run takes the one whose name matches.
+
+**Git mode.** On a Linux worker whose CPU type matches the task containers, `uv sync` runs on the host as before. Otherwise (every Mac, or a Linux arm64 worker running an amd64 task) the same `uv sync`, the sandbox CPython, the sanitizer and the probes run inside `ICODE_LINUX_BUILD_IMAGE` (pinned in `pipeline/config/toolchain.env`) on the task platform. The PAT reaches that container by variable name, never on its command line. uv's cache is kept per platform in `~/.local/share/mac-k3d/uv-cache-linux-<arch>`, so the second build of a commit does not download again. The tree, the manifest and the `/opt/icode-host` mount are the same as on Linux.
+
 ## Jenkins Build with Parameters
 
 Same fields on **both** jobs. Unused fields stay on the form: leave those controls as they are (do not clear them).

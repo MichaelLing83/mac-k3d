@@ -34,6 +34,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -164,8 +165,49 @@ def docker_networks() -> list[dict]:
     return networks
 
 
+def _bsd_destination(dest: str) -> ipaddress.IPv4Network | None:
+    """netstat's short form: `192.168.1` is /24, `10.8/16` is 10.8.0.0/16, `127` is /8."""
+    addr, _, bits = dest.partition("/")
+    octets = addr.split(".")
+    if not 1 <= len(octets) <= 4 or not all(o.isdigit() for o in octets):
+        return None
+    prefix = bits if bits else str(8 * len(octets))
+    return _network(".".join(octets + ["0"] * (4 - len(octets))) + "/" + prefix)
+
+
+def bsd_host_ranges() -> list[tuple[ipaddress.IPv4Network, str]]:
+    """macOS: `netstat -rn -f inet` routes and `ifconfig` addresses."""
+    ranges = []
+    rc, out, _ = run(["netstat", "-rn", "-f", "inet"])
+    for line in out.splitlines() if rc == 0 else []:
+        tokens = line.split()
+        if len(tokens) < 4 or tokens[0] in ("default", "Destination"):
+            continue
+        net = _bsd_destination(tokens[0])
+        if net:
+            ranges.append((net, f"route on {tokens[3]}"))
+    rc, out, _ = run(["ifconfig"])
+    dev = "?"
+    for line in out.splitlines() if rc == 0 else []:
+        if line and not line[0].isspace():
+            dev = line.split(":", 1)[0]
+            continue
+        tokens = line.split()
+        if len(tokens) < 4 or tokens[0] != "inet" or tokens[2] != "netmask":
+            continue
+        try:
+            mask = str(ipaddress.IPv4Address(int(tokens[3], 16)))
+            net = ipaddress.ip_interface(f"{tokens[1]}/{mask}").network
+        except ValueError:
+            continue
+        ranges.append((net, f"address on {dev}"))
+    return ranges
+
+
 def host_ranges() -> list[tuple[ipaddress.IPv4Network, str]]:
-    """Routes and interface addresses of this host; none without `ip`."""
+    """Routes and interface addresses of this host; none without `ip` (or macOS `netstat`)."""
+    if platform.system() == "Darwin" and shutil.which("netstat") is not None:
+        return bsd_host_ranges()
     if shutil.which("ip") is None:
         return []
     ranges = []

@@ -1291,7 +1291,9 @@ exit 0
         self.assertIn('ensure_task_image "$tid" "$image"', text)
         common = (ROOT / "pipeline" / "stages" / "_common.sh").read_text(encoding="utf-8")
         image_fn = common[common.index("ensure_task_image() {"):]
-        self.assertIn('docker build --progress=plain -t "$image" "$env_dir"', image_fn[: image_fn.index("\n}\n")])
+        self.assertIn(
+            'docker build --progress=plain "${platform[@]}" -t "$image" "$env_dir"', image_fn[: image_fn.index("\n}\n")]
+        )
         self.assertIn("--mounts", text)
         self.assertIn("eval_progress.py", text)
         self.assertIn("heartbeat", text)
@@ -4260,7 +4262,7 @@ class AgentIsolationTests(unittest.TestCase):
                 if dockerfile:
                     (env_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
                 env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
-                           MAC_K3D_EVAL_WORKDIR=str(tmp_path / "work"))
+                           MAC_K3D_EVAL_WORKDIR=str(tmp_path / "work"), BENCHMARK="lolbench")
                 proc = subprocess.run(
                     ["bash", "-c", 'source "$1"; ensure_task_image cpython_5 img:1 "$2"', "_",
                      str(ROOT / "pipeline" / "stages" / "_common.sh"), str(env_dir)],
@@ -4270,6 +4272,69 @@ class AgentIsolationTests(unittest.TestCase):
                 self.assertIn(message, proc.stdout + proc.stderr)
                 built = any(line.startswith("build ") for line in log.read_text(encoding="utf-8").splitlines())
                 self.assertEqual(built, rc == 0 and "docker build" in message, (image_arch, host_arch))
+
+    def test_task_containers_keep_amd64_only_environments(self):
+        """DeepSWE and SWE-bench Pro run their amd64-only prebuilt images; LoLBench is native
+        unless a Dockerfile downloads an x86-64-only build."""
+        cases = (
+            ("aarch64", "lolbench", "RUN echo hi\n", "linux/arm64", False),
+            ("aarch64", "lolbench", "RUN curl -o d.zip https://x/deno-x86_64-unknown-linux-gnu.zip\n", "linux/amd64", True),
+            ("aarch64", "lolbench", "# deno-x86_64-unknown-linux-gnu\nRUN echo hi\n", "linux/arm64", False),
+            ("aarch64", "lolbench", 'RUN echo "deb [ arch=amd64,arm64 ] https://repo" >x\n', "linux/arm64", False),
+            ("aarch64", "deepswe", "RUN echo hi\n", "linux/amd64", True),
+            ("aarch64", "swebenchpro", "RUN echo hi\n", "linux/amd64", True),
+            ("x86_64", "lolbench", "RUN curl https://x/tool-linux-amd64.tar.gz\n", "linux/amd64", False),
+            ("x86_64", "deepswe", "RUN echo hi\n", "linux/amd64", False),
+            ("x86_64", "swebenchpro", "RUN echo hi\n", "linux/amd64", False),
+        )
+        for host_arch, bench, dockerfile, want, emulated in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                bindir = tmp_path / "bin"
+                bindir.mkdir()
+                (bindir / "docker").write_text(f"#!/bin/sh\necho {host_arch}\n", encoding="utf-8")
+                (bindir / "docker").chmod(0o755)
+                work = tmp_path / "work"
+                tasks = work / {"swebenchpro": "swebenchpro/tasks", "lolbench": "lolbench/harbor_tasks"}.get(
+                    bench, "deep-swe/tasks"
+                )
+                (tasks / "t1" / "environment").mkdir(parents=True)
+                (tasks / "t1" / "environment" / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+                (work / "selected_tasks.txt").write_text("t1\n", encoding="utf-8")
+                env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                           MAC_K3D_EVAL_WORKDIR=str(work), BENCHMARK=bench)
+                for key in ("SWEBENCHPRO_DOCKER_PLATFORM", "DEEPSWE_DOCKER_PLATFORM", "DEEPSWE_DIR",
+                            "SWEBENCHPRO_DIR", "LOLBENCH_DIR"):
+                    env.pop(key, None)
+                proc = subprocess.run(
+                    ["bash", "-c", 'source "$1"; write_container_platform', "_",
+                     str(ROOT / "pipeline" / "stages" / "_common.sh")],
+                    capture_output=True, text=True, check=False, env=env,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                doc = json.loads((work / "container_platform.json").read_text(encoding="utf-8"))
+                case = (host_arch, bench, dockerfile)
+                self.assertEqual(doc["container_platform"], want, case)
+                self.assertEqual(doc["emulated"], emulated, case)
+                self.assertIn("emulated" if emulated else "native", proc.stdout, case)
+
+    def test_worker_line_names_the_container_platform(self):
+        from provenance import container_platform_facts, provenance_markdown
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            self.assertEqual(container_platform_facts(work), {})
+            (work / "container_platform.json").write_text(
+                json.dumps({"container_platform": "linux/amd64", "docker_platform": "linux/arm64", "emulated": True}),
+                encoding="utf-8",
+            )
+            facts = container_platform_facts(work)
+        self.assertEqual(facts, {"container_platform": "linux/amd64", "emulated": True})
+        protocol = {"worker": {"node": "mac-mini", "os": "Darwin", **facts}}
+        line = next(ln for ln in provenance_markdown(protocol) if ln.startswith("- Worker:"))
+        self.assertTrue(line.endswith("· os `Darwin` · containers `linux/amd64 emulated`"), line)
+        old = next(ln for ln in provenance_markdown({"worker": {"node": "lab"}}) if ln.startswith("- Worker:"))
+        self.assertTrue(old.endswith("cpu `-`"), old)
 
     def test_vpn_mtu_below_docker_bridge_warns(self):
         cases = (

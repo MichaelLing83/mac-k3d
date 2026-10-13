@@ -179,6 +179,11 @@ pub fn can_elevate() -> bool {
         .unwrap_or(false)
 }
 
+/// systemd with linger runs the agent without a login session; nothing to warn about.
+pub fn worker_host_warnings() -> Vec<String> {
+    Vec::new()
+}
+
 pub fn worker_host_root_steps() -> Vec<super::RootStep> {
     let user = current_user();
     if user == "unknown" || user == "root" {

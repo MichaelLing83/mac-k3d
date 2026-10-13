@@ -193,6 +193,11 @@ pub fn worker_host_root_steps() -> Vec<RootStep> {
     os::worker_host_root_steps()
 }
 
+/// Host settings that stop a worker taking builds unattended (macOS: auto-login, sleep).
+pub fn worker_host_warnings() -> Vec<String> {
+    os::worker_host_warnings()
+}
+
 /// Run one root command: directly as root, else through sudo.
 pub fn run_as_root(command: &str) -> Result<()> {
     os::run_as_root(command)

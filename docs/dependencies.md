@@ -16,6 +16,7 @@ Current pins:
 | `PYTHON_MIN=3.11` | Oldest python3 the host scripts run on (`tomllib`) |
 | `MIN_RAM_GB=8` | RAM every eval host needs |
 | `WORKER_MIN_DISK_GB=40` | Free disk at `storage.base_dir` and at the agent root |
+| `ICODE_LINUX_BUILD_IMAGE=ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm` | Builds and checks iCode's Linux runtime on a host that cannot run it (macOS, or another CPU type than the task containers) |
 | `DEEPSWE_REF=0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea` | DeepSWE checkout (`_common.sh`, a job parameter overrides it) |
 | `LOLBENCH_REF=1b10d10bb4a10cea54374ac34b8f76b69dc8ce75` | LoLBench checkout (`_common.sh`, a job parameter overrides it) |
 
@@ -32,7 +33,7 @@ Current pins:
 | Component | Version | Pinned? | Source of truth | Installed by | Checked by |
 |-----------|---------|---------|-----------------|--------------|------------|
 | glibc (Linux release) | 2.39 or newer on every host | fixed by the build image (Ubuntu 24.04) | release runner image | the OS | `scripts/redeploy.sh` runs the new binary's `--version` on every host before switching any |
-| macOS release | Apple Silicon and Intel builds | per release | `release-binaries.yml` matrix | download | not lab-tested yet |
+| macOS release | Apple Silicon and Intel builds | per release | `release-binaries.yml` matrix | download | CI on `macos-latest`; lab parity trial in [testing/mac-mini-worker.md](testing/mac-mini-worker.md), not run yet |
 | Embedded pipeline | the `pipeline/` tree of the commit the binary was built from | pinned per build (`mac-k3d --version` prints the commit) | `build.rs`, `src/prepare/eval_assets.rs` | `mac-k3d config` / `pipeline --extract-to` | every Jenkins build passes `--require-clean`; `check_report` refuses a dirty or mixed pipeline |
 
 ## Controller
@@ -76,10 +77,20 @@ Current pins:
 | bash / python3 | system bash and python3 (Ubuntu 24.04: 5.2 / 3.12) | Homebrew bash and python3; `/bin/bash` 3.2 and `/usr/bin/python3` 3.9 are too old |
 | Agent daemon | systemd user unit `mac-k3d-jenkins-agent.service` + `loginctl enable-linger` | LaunchAgent `com.mac-k3d.jenkins-agent` (runs while the user is logged in) |
 | Agent PATH | shell PATH, then `~/.local/bin`, `~/.cargo/bin`, `/usr/local/bin`, `/usr/bin`, `/snap/bin` | `/opt/homebrew/bin`, `/usr/local/bin` first, then the shell PATH, `~/.local/bin`, Docker.app's bin |
-| RAM probe | `/proc/meminfo` | `sysctl -n hw.memsize` |
+| Agent restart | systemd `Restart=always`, `RestartSec=5` | LaunchAgent `KeepAlive`, `ThrottleInterval` 5 |
+| Host warnings in `config` / `status` | none | automatic login off; `pmset` sleep not 0 |
+| RAM probe | `/proc/meminfo` | Docker Desktop's limit (`docker info` `MemTotal`); `sysctl -n hw.memsize` when the daemon is down |
+| CPU limit | logical CPUs | `cpu_cores` capped at Docker Desktop's CPUs (`docker info` `NCPU`); `config` refuses more |
 | MTU probe | `ip route get` + `ip link` | `route -n get` + `ifconfig` |
+| Trial network host routes | `ip route` + `ip addr` | `netstat -rn -f inet` + `ifconfig` |
+| Provenance CPU and RAM | `/proc/cpuinfo`, `/proc/meminfo` | `sysctl machdep.cpu.brand_string`, `hw.memsize` |
+| Task containers | DeepSWE and SWE-bench Pro `linux/amd64`; LoLBench the Docker host platform | the same (`linux/arm64` LoLBench on Apple silicon) |
+| linux/amd64 on an arm64 host | QEMU binfmt (`docker run --privileged --rm tonistiigi/binfmt --install amd64`) | Docker Desktop's Rosetta (Settings > General) |
+| iCode release drop | `icode-linux-<task container arch>-full-v*`, picked by ELF header | the same; upload a `.tar.gz` holding both Linux drops |
+| iCode git-mode runtime | `uv sync` on the host when its CPU type matches the containers, else in `ICODE_LINUX_BUILD_IMAGE` | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform |
+| uv cache for the container build | `~/.local/share/mac-k3d/uv-cache-linux-<arch>` | the same |
 
-macOS is supported by the code and the CI tests, but no Mac worker has run a lab build yet.
+The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The lab trial that runs the same questions on a Linux and a Mac worker and compares them is [testing/mac-mini-worker.md](testing/mac-mini-worker.md); it has not been run yet.
 
 ## Pipeline Python libraries
 

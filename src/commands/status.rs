@@ -20,6 +20,9 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
                 .unwrap_or("(unset)")
         );
         println!("Agent daemon:    {}", crate::platform::agent_daemon_label());
+        for warning in crate::platform::worker_host_warnings() {
+            println!("Warning:         {warning}");
+        }
     }
 
     let tools = match Tools::from_config(config) {

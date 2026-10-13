@@ -153,8 +153,8 @@ Possible later enhancements (not required for the model above):
 
 ## Related docs
 
-- [lolbench-jenkins.md](lolbench-jenkins.md) — job design and LLM env table for `lolbench_one_task`
-- [deployment.md](deployment.md) — controller vs worker topology
+- [jenkins-jobs.md](jenkins-jobs.md) — the nine eval jobs
+- [setup.md](setup.md#how-the-machines-fit-together) — controller vs worker topology
 - [architecture.md](architecture.md) — security baseline
 - [configuration.md](configuration.md) — YAML fields (including transitional plaintext API token)
 - [commands.md](commands.md) — `export` / `import` copy role YAML without secrets

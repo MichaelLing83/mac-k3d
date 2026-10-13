@@ -199,5 +199,5 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [secrets.md](secrets.md) | Controller credentials (`deepseek-api-key`) |
-| [lolbench-jenkins.md](lolbench-jenkins.md) | All three jobs are Harbor + iCode |
+| [jenkins-jobs.md](jenkins-jobs.md) | The nine eval jobs, all Harbor + iCode |
 | [harbor-delegation-multiworker/README.md](harbor-delegation-multiworker/README.md) | Harbor/mac-k3d responsibility split, job topology, multi-worker scaling |

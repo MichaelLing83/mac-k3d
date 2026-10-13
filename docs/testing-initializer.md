@@ -6,7 +6,7 @@ This page is **v0.3.0 only** (`cargo install`, `prepare`). Step numbers **0–7*
 
 If you still need the v0.3 cargo bootstrap (not a current Release install), the matching user copy is [initializer-new-machine.md](initializer-new-machine.md).
 
-Related design: [prepare-wizard.md](prepare-wizard.md), [setup.md](setup.md), [commands.md](commands.md).
+Related design: [setup.md](setup.md#wizard-questions), [commands.md](commands.md).
 
 ---
 
@@ -123,7 +123,7 @@ mac-k3d prepare --non-interactive -c ~/.config/mac-k3d/worker.yaml
 # expect role: worker; platform: linux|macos; exit=0
 ```
 
-1. **When Jenkins is up** — create a token and start the agent. Full clicks and YAML: [Step 7B](#7b--start-the-jenkins-agent-on-this-host) and [initializer-new-machine.md](initializer-new-machine.md) section B.
+1. **When Jenkins is up** — create a token and start the agent. Full clicks and YAML: [Step 7B](#7b--start-the-jenkins-agent-and-create-the-jenkins-node) and [initializer-new-machine.md](initializer-new-machine.md) section B.
 
 ```bash
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
@@ -166,7 +166,7 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --show-jenkins
 
 Open `http://localhost:17070`. **User:** `admin`. **Password:** printed by `--show-jenkins` (cluster secret).
 
-1. Create an API token and run worker `config` as in [7B](#7b--start-the-jenkins-agent-on-this-host).
+1. Create an API token and run worker `config` as in [7B](#7b--start-the-jenkins-agent-and-create-the-jenkins-node).
 
 ---
 

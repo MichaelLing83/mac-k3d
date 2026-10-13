@@ -76,17 +76,32 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE and SWE-bench Pro images are pulled by Harbor at the trial | — |
 | `tasks/isolation` | Builds the one read-only mount and refuses a tree that overlaps a benchmark; checks the model API host is on the network allowlist; records both | `agent_mounts.json`, `eval_protocol_inputs.json` |
 | `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. A hit question is skipped; the build stops only when every selected question is hit | `anticheat_leakscan.json`, `skipped_tasks.txt` |
-| `evaluate/slots` | Clears this build's Harbor job, memory samples, and any OOM list left by the previous build in this workspace, then divides `CPU_LOCK_QTY` by each task's declared `cpus`/`memory_mb` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
+| `evaluate/slots` | Clears this build's Harbor job, memory samples, and any OOM list left by the previous build in this workspace, then divides `CPU_LOCK_QTY` by each task's declared `cpus` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
 | `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user. A Harbor that exits non-zero before any trial finished fails the step with Harbor's last `…Error:` line | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
 | `anticheat/receipts` | First, every trial in this build's Harbor jobs dir must belong to a selected task (`check-trials`; the build fails otherwise, since that trial would drop out of the score and report). Then, for every trial, the patch the grader read must match the capture receipt, at the task's declared base commit | `<trial>/agent/capture_flags.json` |
 | `anticheat/verdict` | `clean`, `flagged` or `rejected` per rollout; `not_run` for a rollout with no patch, transcript or `reward.json` (Harbor stopped it before the agent ran) | `<trial>/agent/anticheat.json`, `harness/anticheat/` |
 | `score/score` | F2P/P2P per rollout | `results/score-temp.json` |
-| `report/render` | The run folder; rejected rollouts score as unresolved. Counts the rollouts with no score; above 0 it prints a WARNING and Jenkins marks the build UNSTABLE | `output/<suite>/<run>/`, `report_dir.txt`, `last_output.txt`, `unscored_rollouts.txt` |
+| `report/render` | The run folder; rejected rollouts score as unresolved. Counts the rollouts with no score; above 0, Jenkins prints a WARNING and the build result stays as it is | `output/<suite>/<run>/`, `report_dir.txt`, `last_output.txt`, `unscored_rollouts.txt` |
 | `archive/analysis` | Tokens, cache hits and estimated cost | `output/<suite>/<run>/cost-token-report.md` |
 | `archive/backup` | Copies the run folder, verdicts and per-trial files, then packs them | `<root>/output/<suite>/<run>.tar.gz`, `last_backup.txt` |
 
 `evaluate/harbor_cmd.sh` is not a step. Both evaluate steps source it, and it is the only file that builds a Harbor command line.
+
+## Linux and macOS workers
+
+A build runs the same seven phases, the same steps and the same Harbor command on a Linux or macOS worker, reads the same inputs and writes the same files under `$WORKDIR`. The task containers are Linux on both, so the grader, the anti-cheat checks and the report do not depend on the worker's OS. Where the host differs, each OS uses its usual tool:
+
+| Step | Linux | macOS |
+|------|-------|-------|
+| `env/host` RAM check | `/proc/meminfo` | Docker Desktop's memory limit (`docker info`) |
+| `env/host` VPN MTU hint | `ip link` | `ifconfig` |
+| `env/host` agent service | systemd user unit | LaunchAgent |
+| `env/network` host routes | `ip route` / `ip addr` | `netstat -rn` / `ifconfig` |
+| `tasks/icode` git build | `uv sync` on the host when its CPU type matches the containers | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
+| Provenance `Worker` line | `/proc/cpuinfo` | `sysctl` |
+
+DeepSWE and SWE-bench Pro always run `linux/amd64`, because Harbor runs their prebuilt images and those are published for amd64 only. LoLBench runs the Docker host's platform (`linux/arm64` on Apple silicon), unless a selected task's Dockerfile downloads an x86-64-only build. On an arm64 host an amd64 task runs emulated (Rosetta in Docker Desktop, QEMU on Linux), with the same image digest as on a Linux x86_64 worker. `env/host` and `tasks/icode` check that Docker can run it before any trial. `container_platform.json` records the platform, and the report's `Worker` line ends with `os Darwin · containers linux/arm64` (or `linux/amd64 emulated`). Per-OS command differences for operators are in [dependencies.md](dependencies.md#linux-and-macos).
 
 ## Where the benchmarks come from
 

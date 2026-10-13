@@ -20,17 +20,15 @@ PRODUCT_MD=(
   commands.md
   configuration.md
   dependencies.md
-  deployment.md
   evaluation.md
   export-import.md
   optimization.md
   icode-harness-inputs.md
   integration-log.md
   initializer-new-machine.md
-  lolbench-jenkins.md
+  jenkins-jobs.md
   new-machine.md
   pipeline.md
-  prepare-wizard.md
   secrets.md
   setup.md
   testing-initializer.md

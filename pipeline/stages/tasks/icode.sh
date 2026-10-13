@@ -14,6 +14,11 @@ echo "icode: resolving iCode ($ICODE_MODE)"
 # A reused workspace must not carry the previous run's iCode identity.
 rm -f "$WORKDIR/icode_git.json" "$WORKDIR/icode_release.json"
 
+write_container_platform
+if task_platform_emulated; then
+  ensure_platform_runs "$(task_container_platform)"
+fi
+
 ICODE_BIN=""
 case "$ICODE_MODE" in
   release)
@@ -36,14 +41,19 @@ if [ -s "$WORKDIR/icode_host_root.txt" ]; then
   HOST_ROOT="$(cat "$WORKDIR/icode_host_root.txt")"
 fi
 
-# Git wrapper execs /opt/icode-host/.venv/bin/icode (sandbox path). Probe the venv on the host.
+# Git wrapper execs /opt/icode-host/.venv/bin/icode (sandbox path). Probe the venv on the host,
+# or in the Linux build image when that is where uv built it.
 if [ -n "$HOST_ROOT" ] && [ -x "$HOST_ROOT/.venv/bin/icode" ]; then
-  "$HOST_ROOT/.venv/bin/icode" --help >/dev/null
+  if icode_tree_built_in_container "$HOST_ROOT"; then
+    icode_linux_run "$HOST_ROOT" "$HOST_ROOT/.venv/bin/icode" --help >/dev/null
+  else
+    "$HOST_ROOT/.venv/bin/icode" --help >/dev/null
+  fi
 elif [[ "$ICODE_BIN" == uv\ run* ]]; then
   # shellcheck disable=SC2086
   eval "$ICODE_BIN --help" >/dev/null
 else
-  "$ICODE_BIN" --help >/dev/null
+  icode_release_help "$ICODE_BIN" >/dev/null
 fi
 echo "OK icode helps ($ICODE_BIN)"
 if [ -s "$WORKDIR/icode_git.json" ]; then

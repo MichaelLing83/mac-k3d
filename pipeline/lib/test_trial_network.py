@@ -446,6 +446,42 @@ class AllocationTests(FakeHost):
         self.set_docker([network("x_default", "10.213.0.0/28", "x")], [])
         self.assertEqual(tn.allocate("a__env"), "10.213.0.16/28")
 
+    def test_macos_routes_and_addresses_are_read_from_netstat_and_ifconfig(self):
+        builtin_cat = "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done <<'EOF'\n"
+        write_script(
+            self.bin / "netstat",
+            builtin_cat + "Routing tables\n\nInternet:\n"
+            "Destination        Gateway            Flags               Netif Expire\n"
+            "default            192.168.1.1        UGScg                 en0\n"
+            "127                127.0.0.1          UCS                   lo0\n"
+            "192.168.1          link#6             UCS                   en0      !\n"
+            "10.8/16            utun4              USc                 utun4\n"
+            "192.168.1.23/32    link#6             UCS                   en0      !\n"
+            "EOF\n",
+        )
+        write_script(
+            self.bin / "ifconfig",
+            builtin_cat + "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n"
+            "\tinet 127.0.0.1 netmask 0xff000000\n"
+            "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n"
+            "\tinet6 fe80::1%en0 prefixlen 64 secured scopeid 0x6\n"
+            "\tinet 192.168.1.23 netmask 0xffffff00 broadcast 192.168.1.255\n"
+            "EOF\n",
+        )
+        with mock.patch.object(tn.platform, "system", return_value="Darwin"):
+            got = {(str(net), source) for net, source in tn.host_ranges()}
+        self.assertEqual(
+            got,
+            {
+                ("127.0.0.0/8", "route on lo0"),
+                ("192.168.1.0/24", "route on en0"),
+                ("10.8.0.0/16", "route on utun4"),
+                ("192.168.1.23/32", "route on en0"),
+                ("127.0.0.0/8", "address on lo0"),
+                ("192.168.1.0/24", "address on en0"),
+            },
+        )
+
     def test_routes_and_addresses_are_read_like_a_real_host(self):
         self.with_ip(
             route=(

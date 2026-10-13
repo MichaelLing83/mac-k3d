@@ -38,9 +38,9 @@ The worker wizard has a default Jenkins URL (press Enter to keep it). Type `http
 ## What you need
 
 - Cloud Linux VM (`CONTROLLER_IP`) with **root**, ~8 GB RAM, **60 GB** free, security group **17070** open to the worker.
-- New Mac or Linux worker, ~8 GB RAM, **40 GB** free, Docker allowed. **sudo** helps; without it, `setup` saves your answers and prints the few commands an administrator must run as root (installing Java/git/Docker, the `docker` group, `loginctl enable-linger`) — see [new-machine.md](new-machine.md#what-root-must-run).
+- New Linux or Mac worker, ~8 GB RAM (on a Mac: Docker Desktop's memory limit, 18 GB recommended), **40 GB** free, Docker allowed. Linux: **sudo** helps; without it, `setup` saves your answers and prints the few commands an administrator must run as root (installing Java/git/Docker, the `docker` group, and the Linux-only `loginctl enable-linger`) — see [new-machine.md](new-machine.md#what-root-must-run). Mac: Homebrew installs as you; set automatic login, no sleep and Docker Desktop's resources first ([new-machine.md](new-machine.md#mac-mini-worker)).
 - **mac-k3d CLI** GitHub asset matching the machine (`mac-k3d-linux-x86_64`, `mac-k3d-linux-aarch64`, `mac-k3d-darwin-aarch64`, `mac-k3d-darwin-x86_64`).
-- **iCode release** `icode-<os>-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to **upload in Jenkins** when you start a release-mode job. For local `--stage` / `--local` only, copy it onto the worker after setup.
+- **iCode release** `icode-linux-<arch>-full-vX.Y.Z` (or a standalone executable named `icode`) to **upload in Jenkins** when you start a release-mode job. iCode runs inside the Linux task container, so it is a Linux drop on every worker; for a Mac, upload one `.tar.gz` holding the x86_64 and aarch64 drops ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)). For local `--stage` / `--local` only, copy it onto the worker after setup.
 
 Developer checkout + `.env` is optional (appendix). Users run eval through Jenkins.
 
@@ -84,15 +84,20 @@ Open `http://CONTROLLER_IP:17070` (or `http://127.0.0.1:17070` on that VM). User
 
 ---
 
-## 2. Create a worker on a new Mac or Linux
+## 2. Create a worker on a new Linux or Mac
+
+Pick the asset for the worker:
+
+| Linux | macOS |
+|-------|-------|
+| `ASSET=mac-k3d-linux-x86_64` (or `mac-k3d-linux-aarch64`) | `ASSET=mac-k3d-darwin-aarch64` (or Intel `mac-k3d-darwin-x86_64`) |
 
 ```bash
 # On the worker: mac-k3d CLI on PATH (not the iCode release)
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p "$HOME/.local/bin"
-# Linux x86_64 example — pick darwin-aarch64 / linux-aarch64 as needed
 curl -fsSL -o /tmp/mac-k3d \
-  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.3/mac-k3d-linux-x86_64"
+  "https://github.com/Toby-Yu/mac-k3d/releases/download/v0.5.3/$ASSET"
 chmod +x /tmp/mac-k3d
 cp /tmp/mac-k3d "$HOME/.local/bin/mac-k3d"
 mac-k3d --help   # must list setup and eval
@@ -115,16 +120,21 @@ mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 
 Copying a YAML onto another machine, changing the model or the default task, or changing a worker's CPU limit: [export-import.md](export-import.md). Import never keeps the agent token or `cpu_cores`. Do not `import --force` onto a worker file that already has a token.
 
-Linux without sudo stops before installing Docker and prints the root commands; after an administrator runs them, re-run `setup` and choose **Use existing config**. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup`. macOS: open **Docker Desktop** until it is idle.
+| Linux | macOS |
+|-------|-------|
+| Without sudo, setup stops before installing Docker and prints the root commands; after an administrator runs them, re-run `setup` and choose **Use existing config**. As **root**, Docker is ready without a logout. As a normal user, log out/in after the `docker` group is added, then re-run `setup` | Open **Docker Desktop** until it is idle. Setup installs Java (`temurin@21`), bash and python with Homebrew as you (no root) |
 
-Worker tools and versions (all in [dependencies.md](dependencies.md)): Docker with compose and buildx, Java 21 or newer (the controller image's Java; Linux `openjdk-21-jre-headless`, macOS `temurin@21`), git, python3 3.11+, bash 4.4+, Harbor 0.22.0. On a Mac, setup installs Java, bash and python with Homebrew as you (no root). macOS is supported by the code and CI, not yet lab-tested; the Mac commands are the same as above with the `mac-k3d-darwin-aarch64` (or `-x86_64`) asset.
+Worker tools and versions (all in [dependencies.md](dependencies.md)): Docker with compose and buildx, Java 21 or newer (the controller image's Java; Linux `openjdk-21-jre-headless`, macOS `temurin@21`), git, python3 3.11+, bash 4.4+, Harbor 0.22.0. A Mac worker's first run: compare it with a Linux worker once, as in [testing/mac-mini-worker.md](testing/mac-mini-worker.md).
 
 ```bash
-# Optional: confirm this PC can reach cloud Jenkins and the agent unit is up
-export PATH="$HOME/.local/bin:$PATH"
+# Optional: confirm this machine can reach cloud Jenkins
 JENKINS_URL=http://CONTROLLER_IP:17070 \
   bash -lc 'echo "check Jenkins login"; curl -sS -o /dev/null -w "%{http_code}\n" "$JENKINS_URL/login"'
 ```
+
+| Linux | macOS |
+|-------|-------|
+| `systemctl --user status mac-k3d-jenkins-agent` (want `active (running)`) | `launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" \| grep state` (want `state = running`) |
 
 In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with label **`lolbench`**.
 
@@ -249,7 +259,7 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --icode-mode binary
 | Symptom | What to do |
 |---------|------------|
 | Waiting for executor | Worker node offline; do not `start -c worker.yaml` |
-| Node offline, agent log `UnsupportedClassVersionError` (class file 65 vs 61) or "Connection was broken" | The worker's Java is older than the controller's Java 21 (`JAVA_MAJOR`). Run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml`, choose **Use existing config**: it switches to an installed Java 21 or installs one (without sudo it prints `apt-get install -y openjdk-21-jre-headless` for an administrator). `mac-k3d config` then shows `java 21: ok` |
+| Node offline, agent log `UnsupportedClassVersionError` (class file 65 vs 61) or "Connection was broken" | The worker's Java is older than the controller's Java 21 (`JAVA_MAJOR`). Run `mac-k3d setup -c ~/.config/mac-k3d/worker.yaml`, choose **Use existing config**: it switches to an installed Java 21 or installs one (Linux: `openjdk-21-jre-headless`, printed for an administrator without sudo; macOS: `brew install --cask temurin@21`). `mac-k3d config` then shows `java 21: ok` |
 | `bash … is older than 4.4` | macOS `/bin/bash` 3.2. `brew install bash` (setup does it); the agent PATH puts `/opt/homebrew/bin` first |
 | `python3 … is older than 3.11` | macOS `/usr/bin/python3` 3.9: `brew install python` (setup does it). Linux: python3 3.11+ ahead of `/usr/bin` on PATH |
 | `pipeline/stages/run_all.sh` missing | Worker: `mac-k3d config -c worker.yaml` (extracts) **or** `mac-k3d eval --stage env` |

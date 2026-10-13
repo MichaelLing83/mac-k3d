@@ -291,4 +291,113 @@ grep -q 'icode_release_is_uploaded' "$COMMON" || fail "missing icode_release_is_
 grep -q 'ICODE_RELEASE_UPLOADED' "$COMMON" || fail "missing ICODE_RELEASE_UPLOADED"
 ok "Jenkins unnamed upload helper"
 
+# Release drops by CPU type: ELF e_machine at byte 18, Mach-O magic, scripts.
+ARCH_TMP="$(mktemp -d)"
+elf() { mkdir -p "$(dirname "$1")"; printf "\177ELF\002\001\001\000\000\000\000\000\000\000\000\000\002\000$2" >"$1"; chmod 755 "$1"; }
+elf "$ARCH_TMP/x86/icode" '\076\000'
+elf "$ARCH_TMP/arm/icode" '\267\000'
+printf '\317\372\355\376rest' >"$ARCH_TMP/mac-icode"
+printf '#!/bin/sh\nexit 0\n' >"$ARCH_TMP/script-icode"
+[ "$(icode_binary_cpu "$ARCH_TMP/x86/icode")" = x86_64 ] || fail "ELF x86-64"
+[ "$(icode_binary_cpu "$ARCH_TMP/arm/icode")" = aarch64 ] || fail "ELF aarch64"
+[ "$(icode_binary_cpu "$ARCH_TMP/mac-icode")" = darwin ] || fail "Mach-O"
+[ -z "$(icode_binary_cpu "$ARCH_TMP/script-icode")" ] || fail "a script has no CPU type"
+[ "$(icode_drop_name_cpu icode-linux-x86_64-full-v0.1.49.tar.gz)" = x86_64 ] || fail "x86_64 drop name"
+[ "$(icode_drop_name_cpu /x/icode-linux-aarch64-full-v0.1.49)" = aarch64 ] || fail "aarch64 drop name"
+[ "$(icode_drop_name_cpu icode-macos-arm64-full-v0.1.49)" = darwin ] || fail "macOS drop name"
+[ -z "$(icode_drop_name_cpu ICODE_RELEASE_FILE)" ] || fail "an upload's name gives no CPU type"
+ok "CPU type of release binaries and drop names"
+
+BUNDLE="$ARCH_TMP/bundle"
+elf "$BUNDLE/icode-linux-aarch64-full-v1/icode" '\267\000'
+elf "$BUNDLE/icode-linux-x86_64-full-v1/icode" '\076\000'
+pick_for() { ( PLAT="$1"; task_container_platform() { printf '%s\n' "$PLAT"; }; icode_pick_release_bin "$2" ); }
+[ "$(pick_for linux/amd64 "$BUNDLE")" = "$BUNDLE/icode-linux-x86_64-full-v1/icode" ] || fail "bundle: amd64 build takes the x86_64 drop"
+[ "$(pick_for linux/arm64 "$BUNDLE")" = "$BUNDLE/icode-linux-aarch64-full-v1/icode" ] || fail "bundle: arm64 build takes the aarch64 drop"
+if pick_for linux/arm64 "$ARCH_TMP/x86" 2>"$ARCH_TMP/pick.err"; then
+  fail "an x86_64-only release must not run in arm64 containers"
+fi
+grep -q 'built for x86_64' "$ARCH_TMP/pick.err" || fail "CPU mismatch message names the drop's CPU"
+grep -q 'icode-linux-aarch64-full-vX.Y.Z' "$ARCH_TMP/pick.err" || fail "CPU mismatch message names the drop to use"
+mkdir -p "$ARCH_TMP/mac"
+cp "$ARCH_TMP/mac-icode" "$ARCH_TMP/mac/icode"
+if pick_for linux/arm64 "$ARCH_TMP/mac" 2>/dev/null; then
+  fail "a macOS build must not run in Linux containers"
+fi
+mkdir -p "$ARCH_TMP/stub"
+cp "$ARCH_TMP/script-icode" "$ARCH_TMP/stub/icode"
+[ "$(pick_for linux/arm64 "$ARCH_TMP/stub")" = "$ARCH_TMP/stub/icode" ] || fail "a script icode is taken as is"
+if ( icode_pick_release_bin "$ARCH_TMP/empty-$$" ) 2>"$ARCH_TMP/pick.err"; then
+  fail "no icode must fail"
+fi
+grep -q 'could not find icode inside release' "$ARCH_TMP/pick.err" || fail "no icode message"
+ok "release pick: per-CPU drop from one bundle; a mismatch or macOS build fails early"
+
+DROPS="$ARCH_TMP/drops"
+mkdir -p "$DROPS"
+: >"$DROPS/icode-linux-aarch64-full-v1.tar.gz"
+: >"$DROPS/icode-linux-x86_64-full-v1.tar.gz"
+resolve_for() { ( PLAT="$1"; task_container_platform() { printf '%s\n' "$PLAT"; }; icode_resolve_release_src "$2" ); }
+[ "$(resolve_for linux/amd64 "$DROPS")" = "$DROPS/icode-linux-x86_64-full-v1.tar.gz" ] || fail "folder: amd64 takes the x86_64 drop"
+[ "$(resolve_for linux/arm64 "$DROPS")" = "$DROPS/icode-linux-aarch64-full-v1.tar.gz" ] || fail "folder: arm64 takes the aarch64 drop"
+rm -f "$DROPS/icode-linux-aarch64-full-v1.tar.gz"
+[ "$(resolve_for linux/arm64 "$DROPS")" = "$DROPS/icode-linux-x86_64-full-v1.tar.gz" ] || fail "folder: one drop is taken whatever its name"
+ok "release folder: the drop named for the containers' CPU type first"
+
+# Container build: a fake docker records its argv and environment.
+FAKE_DOCKER_DIR="$ARCH_TMP/fake-docker"
+mkdir -p "$FAKE_DOCKER_DIR/bin"
+cat >"$FAKE_DOCKER_DIR/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+n=$(( $(cat "$FAKE_DOCKER_DIR/calls" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$FAKE_DOCKER_DIR/calls"
+printf '%s\n' "$@" >"$FAKE_DOCKER_DIR/argv.$n"
+[ -n "${MAC_K3D_GIT_TOKEN:-}" ] && echo token_set=1 >"$FAKE_DOCKER_DIR/env.$n"
+case " ${FAKE_DOCKER_FAIL:-} " in *" $n "*) exit 1 ;; esac
+exit 0
+DOCKER
+chmod 755 "$FAKE_DOCKER_DIR/bin/docker"
+export FAKE_DOCKER_DIR
+run_container_sync() {
+  rm -f "$FAKE_DOCKER_DIR"/calls "$FAKE_DOCKER_DIR"/argv.* "$FAKE_DOCKER_DIR"/env.*
+  ( unset GIT_ASKPASS MAC_K3D_GIT_TOKEN
+    export PATH="$FAKE_DOCKER_DIR/bin:$PATH" FAKE_DOCKER_FAIL="$1" MAC_K3D_ICODE_CONTAINER_BUILD=1 \
+      MAC_K3D_SHARE="$ARCH_TMP/share"
+    task_container_platform() { printf '%s\n' linux/arm64; }
+    icode_uv_sync "$UV_TREE" gitcode.com "$2" ) \
+    >"$FAKE_DOCKER_DIR/out" 2>"$FAKE_DOCKER_DIR/err"
+}
+argv() { printf '%s\n' "$FAKE_DOCKER_DIR/argv.$1"; }
+run_container_sync "" "$SENTINEL" || fail "container uv sync with a PAT should pass"
+[ ! -s "$FAKE_DOCKER_DIR/out" ] || fail "container uv sync stdout must stay empty"
+[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 1 ] || fail "container PAT success: one docker run"
+grep -qxF -- '--platform' "$(argv 1)" && grep -qx 'linux/arm64' "$(argv 1)" || fail "container build runs on the task platform"
+grep -qx "$(sed -n 's/^ICODE_LINUX_BUILD_IMAGE=//p' "$LIB/../config/toolchain.env")" "$(argv 1)" || fail "container build uses the pinned image"
+grep -qx "$UV_TREE:$UV_TREE" "$(argv 1)" || fail "tree mounted at its own path"
+grep -qx "$ARCH_TMP/share/uv-cache-linux-arm64:/mac-k3d-uv" "$(argv 1)" || fail "uv cache per platform"
+grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 1)" || fail "token passed by name"
+grep -qx 'GIT_CONFIG_VALUE_0' "$(argv 1)" || fail "insteadOf rules passed by name"
+grep -qF "$SENTINEL" "$(argv 1)" && fail "token on docker argv"
+grep -qx 'token_set=1' "$FAKE_DOCKER_DIR/env.1" || fail "token reaches docker's environment"
+tail -n 3 "$(argv 1)" | tr '\n' ' ' | grep -q '^uv sync --no-editable $' || fail "container runs uv sync --no-editable"
+grep -q 'building the git-mode runtime in' "$FAKE_DOCKER_DIR/err" || fail "container build is announced"
+grep -qF "$SENTINEL" "$FAKE_DOCKER_DIR/out" "$FAKE_DOCKER_DIR/err" && fail "PAT printed by the container build"
+run_container_sync "1" "$SENTINEL" || fail "container SSH retry should pass"
+[ "$(cat "$FAKE_DOCKER_DIR/calls")" = 2 ] || fail "container PAT failure: SSH retry"
+grep -qx 'GIT_SSH_COMMAND' "$(argv 2)" || fail "container SSH retry passes GIT_SSH_COMMAND"
+grep -qx 'MAC_K3D_GIT_TOKEN' "$(argv 2)" && fail "container SSH retry must not carry the PAT"
+ok "git mode builds in the Linux image of the task platform; the PAT never reaches argv"
+
+VENV_TREE="$ARCH_TMP/venv-tree"
+mkdir -p "$VENV_TREE/.venv/bin"
+ln -s /mac-k3d-uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13 "$VENV_TREE/.venv/bin/python"
+icode_tree_built_in_container "$VENV_TREE" || fail "a venv linked into /mac-k3d-uv is container-built"
+rm "$VENV_TREE/.venv/bin/python"
+ln -s "$HOME/.local/share/uv/python/cpython-3.13/bin/python3.13" "$VENV_TREE/.venv/bin/python"
+if icode_tree_built_in_container "$VENV_TREE"; then
+  fail "a host uv venv is not container-built"
+fi
+ok "container-built venvs are told apart from host ones"
+rm -rf "$ARCH_TMP"
+
 echo "OK test_icode_input.sh"

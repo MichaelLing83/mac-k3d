@@ -87,11 +87,12 @@ rsh() {
 }
 
 # Run CMD on HOST in a login shell with ~/.local/bin first on PATH, so `config`
-# finds the same docker / java / helm an interactive session does.
+# finds the same docker / java / helm an interactive session does. A Mac's
+# bash login shell does not read the zsh profile that puts Homebrew on PATH.
 remote() {
   local host="$1" cmd="$2"
   shift 2
-  ssh "${SSH_OPTS[@]}" "$@" "$host" "bash -lc $(printf '%q' "export PATH=\"\$HOME/.local/bin:\$PATH\"; $cmd")"
+  ssh "${SSH_OPTS[@]}" "$@" "$host" "bash -lc $(printf '%q' "export PATH=\"\$HOME/.local/bin:\$PATH\"; [ \"\$(uname -s)\" != Darwin ] || export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; $cmd")"
 }
 
 # Copy the build to HOST as mac-k3d.new and check that it runs there. YAML is

@@ -193,6 +193,49 @@ pub fn worker_host_root_steps() -> Vec<super::RootStep> {
     Vec::new()
 }
 
+/// The LaunchAgent and Docker Desktop run only in a logged-in session, and a
+/// sleeping Mac drops its Jenkins connection mid-build.
+pub fn worker_host_warnings() -> Vec<String> {
+    let auto_login = Command::new("defaults")
+        .args(["read", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let pmset = Command::new("pmset")
+        .args(["-g"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    host_warnings(&auto_login, &pmset)
+}
+
+fn host_warnings(auto_login: &str, pmset: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if auto_login.is_empty() {
+        out.push(
+            "automatic login is off: after a restart the Jenkins agent and Docker Desktop stay down until someone logs in \
+             (System Settings > Users & Groups > Automatically log in as)"
+                .to_string(),
+        );
+    }
+    let sleep = pmset.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next() == Some("sleep")).then(|| fields.next().unwrap_or("").to_string())
+    });
+    if let Some(minutes) = sleep.filter(|m| m != "0") {
+        out.push(format!(
+            "the Mac sleeps after {minutes} minutes idle and drops its Jenkins connection mid-build \
+             (run `sudo pmset -a sleep 0`, or System Settings > Energy > Prevent automatic sleeping)"
+        ));
+    }
+    out
+}
+
 pub fn run_as_root(command: &str) -> Result<()> {
     run_cmd("sudo", &["bash", "-c", command])
 }
@@ -288,6 +331,8 @@ pub fn install_agent_daemon(
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
   <key>StandardOutPath</key>
   <string>{stdout}</string>
   <key>StandardErrorPath</key>
@@ -491,6 +536,25 @@ mod tests {
         assert!(plist_path()
             .to_string_lossy()
             .contains("com.mac-k3d.jenkins-agent.plist"));
+    }
+
+    #[test]
+    fn host_warnings_name_auto_login_and_sleep() {
+        let pmset = "System-wide power settings:\nCurrently in use:\n Sleep On Power Button 1\n disksleep            10\n sleep                1 (sleep prevented by coreaudiod)\n displaysleep         10\n";
+        let warnings = host_warnings("", pmset);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("automatic login is off"), "{warnings:?}");
+        assert!(warnings[1].contains("sleeps after 1 minutes"), "{warnings:?}");
+        assert!(warnings[1].contains("pmset -a sleep 0"), "{warnings:?}");
+
+        let awake = "Currently in use:\n disksleep            10\n sleep                0\n";
+        assert!(host_warnings("lab", awake).is_empty());
+    }
+
+    #[test]
+    fn plist_restarts_the_agent_after_five_seconds() {
+        let src = include_str!("macos.rs");
+        assert!(src.contains("<key>ThrottleInterval</key>\n  <integer>5</integer>"));
     }
 
     #[test]

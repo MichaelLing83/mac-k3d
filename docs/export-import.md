@@ -1,8 +1,8 @@
-# Export and import lab YAML
+# Export and import config YAML
 
 Copy **one** live config (controller **or** worker) onto another machine or a scratch file. Import is **write only**: it does not start Docker, k3d, or Jenkins, and it does not clone a ready machine. It keeps the lab answers you would otherwise retype (URL, labels, job defaults).
 
-This lab is split. The controller file is `~/.config/mac-k3d/config.yaml` on the cloud. The worker file is `~/.config/mac-k3d/worker.yaml` on this PC. Export on the machine that owns the live file.
+A controller's file is `~/.config/mac-k3d/config.yaml` on the controller; a worker's is `~/.config/mac-k3d/worker.yaml` on that worker. Export on the machine that owns the live file. The commands are the same on Linux and macOS. This lab's machines and the runs checked there: [testing/cloud-eval-runbook.md](testing/cloud-eval-runbook.md#export-import-and-set-in-this-lab).
 
 `mac-k3d set` is part of this flow. It is the editor for job fields. The flag list is below so this page is enough to change a model or a task. The same flags are also in [commands.md](commands.md).
 
@@ -45,7 +45,7 @@ Import sanitizes again. A `cpu_cores` number typed into the exported file is wri
 
 | I want to… | File | Commands |
 |------------|------|----------|
-| Change this PC's CPU limit | Live `worker.yaml` | Edit `cpu_cores`, then `config`. No export |
+| Change a worker's CPU limit | Live `worker.yaml` | Edit `cpu_cores`, then `config`. No export |
 | Change default model or TASK on this Jenkins | Controller `config.yaml` | Export, `set`, import `--force`, `config --skip-secrets` |
 | Add another eval PC | `worker.yaml` | Export on the old worker, import on the new PC |
 | Stand up a new Jenkins server | `config.yaml` | Export on the old controller, import, then `setup` |
@@ -59,7 +59,7 @@ Do not import a controller file onto `worker.yaml`, or the reverse. Omitting `-c
 
 ## Binary
 
-Use the installed binary. On the controller that is `/root/.local/bin/mac-k3d`. On this PC it is `~/.local/bin/mac-k3d`.
+Use the installed binary, `~/.local/bin/mac-k3d` (`/root/.local/bin/mac-k3d` on a controller run as root).
 
 ```bash
 ls -l ~/.local/bin/mac-k3d
@@ -86,7 +86,7 @@ $MAC set --list
 $MAC set -c /tmp/controller-lab.yaml --model deepseek-flash --benchmark deepswe --task vulture-persistent-analysis-cache
 ```
 
-A successful `set` prints the fields it wrote and says `YAML only; secrets unchanged`. Example from this lab:
+A successful `set` prints the fields it wrote and says `YAML only; secrets unchanged`. For example:
 
 ```text
 Updated /tmp/controller-lab.yaml (YAML only; secrets unchanged).
@@ -105,7 +105,7 @@ A TTY with no flags asks for harness, LLM family, model, benchmark, then questio
 | `--harness <ID>` | Catalog harness. v1: `icode` |
 | `--llm <ID>` | Catalog LLM family. v1: `deepseek` |
 | `--model <ID>` | DeepSeek Chat Completions id. `deepseek-flash` or `deepseek-v4-pro`. Not the product name `deepseek-v4.1-flash` |
-| `--check-models` | `GET /models` with `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML or `--model` id is missing. Does not save. Run this on a machine that has `.env` (this PC). The controller often has no key |
+| `--check-models` | `GET /models` with `DEEPSEEK_API_KEY` from the environment or `.env`. Fail if the YAML or `--model` id is missing. Does not save. Run this on a machine that has `.env`; a controller often has no key |
 | `--benchmark <ID>` | `deepswe`, `lolbench`, or `swebenchpro`. Which suite's jobs receive TASK / N_TASKS / TASKS defaults |
 | `--task <ID>` | One question id. Sets `default_task` and clears the list / first-N selection |
 | `--n-tasks N` | First N sorted questions. Clears TASK and TASKS. `N>1` costs more LLM calls |
@@ -126,7 +126,7 @@ $MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
 $MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
 
-`--check-models` on this PC, before you copy a new model id up:
+`--check-models` on a machine with `.env`, before you copy a new model id up:
 
 ```bash
 $MAC set --list
@@ -148,8 +148,8 @@ The working agent's Jenkins token lives in `~/.config/mac-k3d/worker.yaml` (`jen
 | `/tmp/imported-….yaml` | Yes, if that scratch file already exists |
 | New PC, `worker.yaml` does not exist | No |
 | New PC, empty or broken `worker.yaml` (no token) | Yes |
-| This PC's working `~/.config/mac-k3d/worker.yaml` | **Never** |
-| Cloud live `config.yaml` when changing job defaults | Yes. Intended |
+| A working agent's `~/.config/mac-k3d/worker.yaml` | **Never** |
+| The live controller `config.yaml` when changing job defaults | Yes. Intended |
 
 `--force` is safe on the controller file because the DeepSeek key and the git credential live in Jenkins Credentials, not in that YAML.
 
@@ -164,7 +164,7 @@ Export and import still require an OS, the mac-k3d CLI, Docker (worker) or Docke
 | Kept | Meaning |
 |------|---------|
 | `role: worker` | This machine is an agent, not a controller |
-| `jenkins_agent.controller_url` | Jenkins UI, this lab `http://43.107.42.252:17070` |
+| `jenkins_agent.controller_url` | Jenkins UI, for example `http://<controller-ip>:17070` |
 | `jenkins_agent.name` | Node name. Change it on a second PC or the nodes collide |
 | `jenkins_agent.labels` | User labels such as `linux`, `docker`, `lolbench` |
 | `jenkins_agent.api_user` | Usually `admin`. The token value is not kept |
@@ -181,7 +181,7 @@ Not saved: the `api_token` value (the key stays, as `api_token: ''`), disk paths
 | Kept | Meaning |
 |------|---------|
 | `role: controller` | This host runs k3d Jenkins |
-| `jenkins.host_port` | UI port, this lab **17070** |
+| `jenkins.host_port` | UI port (default **17070**) |
 | `cluster.name` / `cluster.ports` | k3d cluster and host port remap |
 | `jenkins_job.default_task` | Jenkins **TASK** default for `default_benchmark` |
 | `jenkins_job.default_n_tasks` / `default_tasks` | First N, or an explicit id list |
@@ -201,13 +201,11 @@ Not saved: DeepSeek and git credentials, the Jenkins admin password, `jenkins.re
 
 This is not an export. The number is `jenkins_agent.cpu_cores` in the **live** worker file. Executors are that number divided by `cpus_per_executor` (default 2). `config` rewrites the node's executor count, the `executors-N` and `fits-*` labels, and the `CPU_CORES` locks in Jenkins. The agent process stays running when the unit file did not change.
 
-On this PC the live value is `4` (2 executors). A checked trial set it to `2`, ran `config`, then put `4` back.
-
 ```bash
 nano ~/.config/mac-k3d/worker.yaml
 ```
 
-In nano, `Ctrl+W`, search `cpu_cores`. Change the line under `jenkins_agent` (this file: line 57). Leave `api_token` and `cpu_cores_label` alone. `Ctrl+O`, Enter, `Ctrl+X`.
+In nano, `Ctrl+W`, search `cpu_cores`. Change the line under `jenkins_agent`. Leave `api_token` and `cpu_cores_label` alone. `Ctrl+O`, Enter, `Ctrl+X`.
 
 ```bash
 grep -n 'cpu_cores:' ~/.config/mac-k3d/worker.yaml
@@ -215,12 +213,12 @@ export PATH="$HOME/.local/bin:$PATH"
 mac-k3d config -c ~/.config/mac-k3d/worker.yaml
 ```
 
-| `cpu_cores` | Executors | What `config` did on this PC |
+| `cpu_cores` | Executors | What `config` does |
 |-------------|-----------|------------------------------|
-| `2` | 1 | Labels `executors-1` and `fits-deepswe`. Pruned `core-3` and `core-4`. LoLBench and SWE-bench Pro need 4 cores, so those `fits-` labels drop |
-| `4` | 2 | Labels `executors-2`, `fits-deepswe`, `fits-lolbench`, `fits-swebenchpro`. Created `core-3` and `core-4` again |
+| `2` | 1 | Labels `executors-1` and `fits-deepswe`. Prunes `core-3` and above. LoLBench and SWE-bench Pro need 4 cores, so those `fits-` labels drop |
+| `4` | 2 | Labels `executors-2`, `fits-deepswe`, `fits-lolbench`, `fits-swebenchpro`. Creates `core-1` to `core-4` |
 
-Both runs ended with `Config complete` and `Jenkins agent unchanged, left running`. Do not set `0`. Leave the cloud worker at 16 until its Docker store is repaired. Never `mac-k3d start -c worker.yaml`.
+`config` ends with `Config complete` and `Jenkins agent unchanged, left running`. Do not set `0`. On macOS, `config` refuses a value above Docker Desktop's CPU limit. Never `mac-k3d start -c worker.yaml`.
 
 ---
 
@@ -230,7 +228,7 @@ Both runs ended with `Config complete` and `Jenkins agent unchanged, left runnin
 
 **File:** `worker.yaml` only. This does not change TASK or the model.
 
-### On the old worker (this PC)
+### On an existing worker
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -255,7 +253,7 @@ If that path exists and has **no** token, add `--force`. If it is a working agen
 
 3. Edit the live file:
 
-- `jenkins_agent.name` — a new unique name. Not `linux-Michael-Ubuntu` while that node is still online.
+- `jenkins_agent.name` — a new unique name, not the old worker's name while that node is still online. The wizard default is `linux-<hostname>` or `macos-<hostname>`.
 - `jenkins_agent.cpu_cores` — this machine's limit. Import left `0`, and `config` refuses `0`.
 - `jenkins_agent.api_user: admin`
 - `jenkins_agent.api_token` — a **new** API token from Jenkins (the secret, not the token name).
@@ -278,11 +276,11 @@ Never `mac-k3d start -c worker.yaml`.
 
 ## Situation 2 — Controller YAML (Jenkins job defaults)
 
-**File:** cloud `config.yaml` only. Pick **2a** or **2b**.
+**File:** the controller's `config.yaml` only. Pick **2a** or **2b**.
 
 ### 2a — This controller, change model and task
 
-Run this on the cloud VM (`ssh root@43.107.42.252`). Confirm the binary first (`ls -l ~/.local/bin/mac-k3d`). The block below is the one that was run on 2026-10-12.
+Run this on the controller. Confirm the binary first (`ls -l ~/.local/bin/mac-k3d`).
 
 ```bash
 MAC=$HOME/.local/bin/mac-k3d
@@ -317,7 +315,7 @@ $MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 What a good apply looks like:
 
 - Import says `write only; Docker/k3d/Jenkins were not started`, then prints `setup` and `start`. Those lines are the generic hint. On a controller that is already running, do **not** run `setup` or `start`. The next command is `config --skip-secrets`, which is what the block above does.
-- `config` prints `Keeping existing Jenkins credential binds (N id(s))`. This lab printed `2`. The DeepSeek key stayed in Jenkins.
+- `config` prints `Keeping existing Jenkins credential binds (N id(s))`. The DeepSeek key stayed in Jenkins.
 - All nine jobs print `Updated job '…'`.
 - The command ends with `Config complete`.
 
@@ -331,7 +329,7 @@ $MAC import /tmp/controller-lab.yaml -c ~/.config/mac-k3d/config.yaml --force
 $MAC config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 ```
 
-Optional model check on this PC, which has `.env`. Cloud `set` often has no key:
+Optional model check on a machine that has `.env` (a controller often has no key):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -372,7 +370,7 @@ Open security group port **17070**. Workers must use `http://<new-ip>:17070` as 
 
 ## Credentials: portable YAML vs live Jenkins
 
-The portable YAML never contains credentials. Eval on this lab still runs because the DeepSeek key was stored earlier in Jenkins.
+The portable YAML never contains credentials. Eval still runs after an import because the DeepSeek key is stored in Jenkins, not in the YAML.
 
 | Store | What it holds | In the portable YAML? |
 |-------|---------------|------------------------|
@@ -380,7 +378,7 @@ The portable YAML never contains credentials. Eval on this lab still runs becaus
 | Live `worker.yaml` | Agent register token | Left as-is unless you `import --force` onto that path, which blanks the token |
 | Jenkins Credentials on the controller | `deepseek-api-key`, `gitcode-pat` / `github-pat` | Not in YAML. Survives controller import. `config --skip-secrets` keeps this store |
 
-`--skip-secrets` rewrites job XML from `jenkins_job.*` and does not create or update Jenkins Credentials. `Keeping existing Jenkins credential binds (N id(s))` means those ids were already in Jenkins. This lab printed `2`.
+`--skip-secrets` rewrites job XML from `jenkins_job.*` and does not create or update Jenkins Credentials. `Keeping existing Jenkins credential binds (N id(s))` means those ids were already in Jenkins.
 
 First-time computer, with no Jenkins credential and no worker token: the import file still has no secrets. Enter them once.
 
@@ -391,7 +389,7 @@ First-time computer, with no Jenkins credential and no worker token: the import 
 flowchart TD
   portable["Portable YAML: no secrets"] --> importCtrl["import onto controller config.yaml"]
   importCtrl --> branch{"Does Jenkins already have deepseek-api-key?"}
-  branch -->|"yes, this lab"| skipSecrets["config --skip-secrets: refresh job XML only"]
+  branch -->|"yes"| skipSecrets["config --skip-secrets: refresh job XML only"]
   branch -->|"no, first-time controller"| withSecrets["config: upload the key into Jenkins"]
   skipSecrets --> evalRun["queue deepswe_one_task; Jenkins injects the stored key"]
   withSecrets --> evalRun
@@ -401,7 +399,7 @@ flowchart TD
 
 ## File-only scratch (no Jenkins)
 
-Checked on this PC. The live agent was not touched.
+This touches no live file and no agent.
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -411,7 +409,7 @@ mac-k3d import /tmp/worker-lab.yaml -c /tmp/imported-worker.yaml --force
 grep -E 'cpu_cores:|api_token:|controller_url:' /tmp/imported-worker.yaml
 ```
 
-Expect `role: worker`, `controller_url` kept, node name `linux-Michael-Ubuntu` kept, `cpu_cores: 0`, and `api_token: ''` in both files. `name: ci-worker` in the grep is the cluster name, not the Jenkins node. A leftover `default_task` on this worker file (this PC: `ruff_1`) is kept and ignored by Jenkins.
+Expect `role: worker`, `controller_url` kept, the node name kept, `cpu_cores: 0`, and `api_token: ''` in both files. `name: ci-worker` in the grep is the cluster name, not the Jenkins node. A leftover `default_task` on a worker file is kept and ignored by Jenkins.
 
 Import prints `Put jenkins_agent.api_user / api_token in /tmp/imported-worker.yaml` and a `config` command. Do not run that. `config` on the scratch file would try to register another agent, and `cpu_cores: 0` is refused.
 
@@ -431,7 +429,7 @@ Automated keep/strip: `cargo test` (`export_then_scratch_import_keeps_worker_tem
 After a `tasks` phase, ids are under `~/jenkins-agent/workspace/deepswe_one_task/eval-runs/deep-swe/tasks`, or `eval-runs/deep-swe/tasks` in the checkout. Pass one of those ids to `set --task`.
 
 ```bash
-cd ~/Documents/Toby/mac-k3d
+cd <your mac-k3d checkout>
 export PATH="$HOME/.local/bin:$PATH"
 ./scripts/list_deepswe_tasks.sh
 ```
@@ -445,7 +443,7 @@ If the script exits 2, fetch the task directories once (no LLM, no iCode): `BENC
 | Symptom | What to do |
 |---------|------------|
 | `/tmp/mac-k3d-export: No such file or directory` | Use `MAC=$HOME/.local/bin/mac-k3d`. That `/tmp` path is not installed by redeploy |
-| `config not found: …/config.yaml` | This PC is a worker. Export `-c ~/.config/mac-k3d/worker.yaml`, or export on the cloud |
+| `config not found: …/config.yaml` | This machine is a worker. Export `-c ~/.config/mac-k3d/worker.yaml`, or export on the controller |
 | Imported a worker file onto `config.yaml`, or the reverse | Dest `-c` must match `role` |
 | `already exists; pass --force` | Scratch dest: add `--force`. Live worker with a token: do not. Live controller job-default change: `--force` is intended |
 | `export -o would overwrite the source` | Pick another `-o` path |
@@ -454,7 +452,7 @@ If the script exits 2, fetch the task directories once (no LLM, no iCode): `BENC
 | Import printed `setup` / `start` and you are on the existing controller | Ignore that hint. Run `config --skip-secrets` |
 | Job TASK / model still the old value | Import was only `/tmp`, or you skipped `config --skip-secrets` on the live controller |
 | `Jenkins API token missing` | Live `worker.yaml` has no token, or you imported `--force` onto it. Paste a new token, then `config` |
-| `DEEPSEEK_API_KEY missing` on Jenkins | First-time controller: `config` without `--skip-secrets`. This lab: the credential should already exist |
-| `DEEPSEEK_API_KEY missing` on `--check-models` | Run `--check-models` on this PC, which has `.env` |
+| `DEEPSEEK_API_KEY missing` on Jenkins | First-time controller: `config` without `--skip-secrets`. An existing controller: add it with `config --update-secrets` |
+| `DEEPSEEK_API_KEY missing` on `--check-models` | Run `--check-models` on a machine that has `.env` |
 | `model '…' is not returned by GET /models` | The id is a product name. Copy `data[].id` from `GET /models` |
 | Two workers, one Offline / same name | The second PC needs its own `jenkins_agent.name` |

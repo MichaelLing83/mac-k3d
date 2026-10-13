@@ -145,21 +145,146 @@ docker_host_arch() {
   esac
 }
 
+# linux/<arch> of the containers Docker runs natively. Docker Desktop on Apple
+# silicon runs linux/arm64 in its VM; without a reachable daemon, the host CPU.
+docker_host_platform() {
+  local arch
+  arch="$(docker_host_arch)"
+  if [ -z "$arch" ]; then
+    case "$(uname -m)" in
+      aarch64 | arm64) arch=arm64 ;;
+      *) arch=amd64 ;;
+    esac
+  fi
+  printf 'linux/%s\n' "$arch"
+}
+
+# A task Dockerfile that downloads an x86-64-only build outside a comment.
+dockerfile_needs_amd64() {
+  [ -f "$1" ] || return 1
+  grep -v '^[[:space:]]*#' "$1" \
+    | grep -Eq 'x86_64-unknown-linux|linux-x64[.-]|linux-amd64|_amd64\.deb|arch=amd64\]'
+}
+
+# Platform of this build's task containers. Harbor runs DeepSWE's and SWE-bench
+# Pro's prebuilt images, which are published for linux/amd64 only, so those stay
+# that exact image (Rosetta on Apple silicon) and match a Linux worker's digest.
+# LoLBench builds for the Docker host unless a selected Dockerfile downloads an
+# x86-64-only build. An x86-64 host always gets linux/amd64.
+task_container_platform() {
+  local host tasks_dir tid
+  case "${BENCHMARK:-deepswe}" in
+    swebenchpro)
+      printf '%s\n' "${SWEBENCHPRO_DOCKER_PLATFORM:-linux/amd64}"
+      return 0
+      ;;
+    deepswe | "")
+      printf '%s\n' "${DEEPSWE_DOCKER_PLATFORM:-linux/amd64}"
+      return 0
+      ;;
+  esac
+  host="$(docker_host_platform)"
+  if [ "$host" != linux/amd64 ] && [ -s "$WORKDIR/selected_tasks.txt" ]; then
+    tasks_dir="$(benchmark_tasks_dir)"
+    while IFS= read -r tid || [ -n "$tid" ]; do
+      case "$tid" in *[![:space:]]*) ;; *) continue ;; esac
+      if dockerfile_needs_amd64 "$tasks_dir/$tid/environment/Dockerfile"; then
+        printf '%s\n' linux/amd64
+        return 0
+      fi
+    done <"$WORKDIR/selected_tasks.txt"
+  fi
+  printf '%s\n' "$host"
+}
+
+# True when this build's task containers run emulated (another CPU type than Docker's).
+task_platform_emulated() {
+  [ "$(task_container_platform)" != "$(docker_host_platform)" ]
+}
+
+# Docker must run containers of the task platform: Rosetta (Docker Desktop on
+# Apple silicon) or QEMU binfmt (Linux) for linux/amd64 on an arm64 host.
+ensure_platform_runs() {
+  local plat="$1" want got
+  case "${plat#linux/}" in
+    arm64 | aarch64) want=aarch64 ;;
+    *) want=x86_64 ;;
+  esac
+  got="$(docker run --rm --platform "$plat" alpine:3.20 uname -m 2>/dev/null || true)"
+  if [ "$got" != "$want" ]; then
+    if [ "$(uname -s)" = Darwin ]; then
+      die "Docker cannot run ${plat} containers (uname -m gave '${got:-nothing}'). In Docker Desktop > Settings > General turn on \"Use Rosetta for x86_64/amd64 emulation on Apple Silicon\", Apply & restart, then rerun."
+    fi
+    die "Docker cannot run ${plat} containers (uname -m gave '${got:-nothing}'). Install the QEMU handlers: docker run --privileged --rm tonistiigi/binfmt --install ${plat#linux/}"
+  fi
+  if [ "$(uname -s)" = Darwin ] && [ "$want" = x86_64 ] && docker_desktop_rosetta_off; then
+    echo "WARNING: Docker Desktop runs ${plat} with QEMU, not Rosetta: slower and less stable. Turn on Docker Desktop > Settings > General > \"Use Rosetta for x86_64/amd64 emulation on Apple Silicon\"." >&2
+  fi
+  echo "OK Docker runs ${plat} containers"
+}
+
+# True when Docker Desktop's settings turn Rosetta off.
+docker_desktop_rosetta_off() {
+  local f
+  for f in "$HOME/Library/Group Containers/group.com.docker/settings-store.json" \
+    "$HOME/Library/Group Containers/group.com.docker/settings.json"; do
+    [ -f "$f" ] || continue
+    python3 - "$f" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+sys.exit(0 if isinstance(doc, dict) and doc.get("UseVirtualizationFrameworkRosetta") is False else 1)
+PY
+    return
+  done
+  return 1
+}
+
+# $WORKDIR/container_platform.json for provenance: the task containers'
+# platform, the one Docker runs natively, and whether they differ.
+write_container_platform() {
+  local want host
+  want="$(task_container_platform)"
+  host="$(docker_host_platform)"
+  python3 - "$WORKDIR/container_platform.json" "$want" "$host" <<'PY'
+import json, sys
+out, want, host = sys.argv[1:4]
+doc = {"container_platform": want, "docker_platform": host, "emulated": want != host}
+with open(out, "w", encoding="utf-8") as fh:
+    fh.write(json.dumps(doc, indent=2) + "\n")
+PY
+  if [ "$want" = "$host" ]; then
+    echo "OK task containers ${want} (native)"
+  else
+    echo "OK task containers ${want} (emulated on ${host})"
+  fi
+}
+
 # LoLBench task image: local tag, else Harbor's leftover build, else docker build.
-# A local tag for another architecture is rebuilt: the x86-64 iCode runtime cannot
-# exec in an emulated arm64 image (no ld-linux-x86-64), and some Hub tags are arm64-only.
+# A local tag for another architecture than the task containers' is rebuilt: the
+# x86-64 iCode runtime cannot exec in an emulated arm64 image (no
+# ld-linux-x86-64), and some Hub tags are arm64-only.
 ensure_task_image() {
-  local tid="$1" image="$2" env_dir="$3" leftover image_arch host_arch
+  local tid="$1" image="$2" env_dir="$3" leftover image_arch host_arch want_arch
+  local -a platform=()
+  host_arch="$(docker_host_arch)"
+  want_arch="$host_arch"
+  if [ -n "$host_arch" ]; then
+    want_arch="$(task_container_platform)"
+    want_arch="${want_arch#linux/}"
+    [ "$want_arch" = "$host_arch" ] || platform=(--platform "linux/$want_arch")
+  fi
   if docker image inspect "$image" >/dev/null 2>&1; then
     image_arch="$(docker image inspect "$image" --format '{{.Architecture}}' 2>/dev/null || true)"
-    host_arch="$(docker_host_arch)"
-    if [ -z "$image_arch" ] || [ -z "$host_arch" ] || [ "$image_arch" = "$host_arch" ]; then
+    if [ -z "$image_arch" ] || [ -z "$want_arch" ] || [ "$image_arch" = "$want_arch" ]; then
       echo "images: using local image $image"
       return 0
     fi
-    [ -f "$env_dir/Dockerfile" ] || die "local $image is $image_arch, this worker is $host_arch, and $env_dir/Dockerfile is missing"
-    echo "images: local $image is $image_arch, this worker is $host_arch; docker build --progress=plain $image"
-    docker build --progress=plain -t "$image" "$env_dir"
+    [ -f "$env_dir/Dockerfile" ] || die "local $image is $image_arch, this worker is $want_arch, and $env_dir/Dockerfile is missing"
+    echo "images: local $image is $image_arch, this worker is $want_arch; docker build --progress=plain $image"
+    docker build --progress=plain "${platform[@]}" -t "$image" "$env_dir"
     return 0
   fi
   leftover="$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^${tid}__.*__env-main" | head -n 1 || true)"
@@ -170,7 +295,7 @@ ensure_task_image() {
   fi
   [ -f "$env_dir/Dockerfile" ] || die "missing $env_dir/Dockerfile and no local $image"
   echo "images: Hub tag is arm64-only; docker build --progress=plain $image"
-  docker build --progress=plain -t "$image" "$env_dir"
+  docker build --progress=plain "${platform[@]}" -t "$image" "$env_dir"
 }
 
 # A VPN tunnel (WireGuard etc.) with a smaller MTU than Docker's bridge black-holes
@@ -196,7 +321,14 @@ warn_docker_mtu() {
   docker_mtu="${docker_mtu:-1500}"
   [ "$host_mtu" -lt "$docker_mtu" ] 2>/dev/null || return 0
   echo "WARNING: egress via $dev has MTU $host_mtu but Docker's bridge uses $docker_mtu; HTTPS from containers (model API, canary) will time out." >&2
-  echo "WARNING: disconnect the VPN, or set \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}} in /etc/docker/daemon.json and restart Docker." >&2
+  case "$(uname -s)" in
+    Darwin)
+      echo "WARNING: disconnect the VPN, or in Docker Desktop > Settings > Docker Engine add \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}}, then Apply & restart." >&2
+      ;;
+    *)
+      echo "WARNING: disconnect the VPN, or set \"mtu\": $host_mtu and \"default-network-opts\": {\"bridge\": {\"com.docker.network.driver.mtu\": \"$host_mtu\"}} in /etc/docker/daemon.json and restart Docker." >&2
+      ;;
+  esac
 }
 
 # Isolation canary. Every scored run probes once before the rollouts.
@@ -359,10 +491,19 @@ report_dir() {
   printf '%s\n' "$dir"
 }
 
-# Total RAM in kB: /proc/meminfo on Linux, sysctl hw.memsize (bytes) on macOS.
+# RAM the task containers can use, in kB. Linux containers share the host's
+# RAM (/proc/meminfo). On macOS they run in Docker Desktop's VM, whose memory
+# limit is below the host's; without a reachable daemon, sysctl hw.memsize.
 host_mem_kb() {
+  local bytes
   case "$(uname -s)" in
-    Darwin) echo $(($(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024)) ;;
+    Darwin)
+      bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)"
+      case "$bytes" in
+        '' | *[!0-9]*) bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)" ;;
+      esac
+      echo $((bytes / 1024))
+      ;;
     *) awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0 ;;
   esac
 }
@@ -378,7 +519,10 @@ ensure_eval_preflight() {
   if [ "${mem_kb:-0}" -gt 0 ]; then
     mem_gb=$((mem_kb / 1024 / 1024))
     if [ "$mem_gb" -lt "$min_ram" ]; then
-      die "only ${mem_gb} GB RAM; need at least ${min_ram} GB for eval (N=1). Free memory or use a larger machine."
+      case "$(uname -s)" in
+        Darwin) die "Docker Desktop has only ${mem_gb} GB memory; need at least ${min_ram} GB for eval (N=1). Raise Docker Desktop > Settings > Resources > Memory." ;;
+        *) die "only ${mem_gb} GB RAM; need at least ${min_ram} GB for eval (N=1). Free memory or use a larger machine." ;;
+      esac
     fi
     echo "OK RAM ${mem_gb} GB (min ${min_ram})"
   fi
@@ -457,21 +601,34 @@ _icode_bin_or_tarball() {
   return 1
 }
 
-# Official user drop: icode-*-full-* first, then a file named icode. Fallback /opt/mac-k3d/.
+# Official user drop: icode-*-full-* first (the one named for this build's
+# container CPU type when there are several), then a file named icode.
+# Fallback /opt/mac-k3d/.
 discover_icode_release() {
-  local c d
+  local c d want="" first
   if [ -n "${ICODE_RELEASE:-}" ]; then
     echo "$ICODE_RELEASE"
     return 0
   fi
+  if declare -F icode_drop_name_cpu >/dev/null 2>&1; then
+    want="$(icode_platform_cpu "$(icode_target_platform)")"
+  fi
   for d in "$MAC_K3D_SHARE" /opt/mac-k3d; do
     [ -d "$d" ] || continue
+    first=""
     for c in "$d"/*-full-*.tar.gz "$d"/*.tgz "$d"/*full*.tar.gz "$d"/*-full-*; do
       [ -e "$c" ] || continue
-      if _icode_bin_or_tarball "$c"; then
+      _icode_release_ok "$c" || continue
+      if [ -n "$want" ] && [ "$(icode_drop_name_cpu "$c")" = "$want" ]; then
+        echo "$c"
         return 0
       fi
+      [ -n "$first" ] || first="$c"
     done
+    if [ -n "$first" ]; then
+      echo "$first"
+      return 0
+    fi
     if _icode_bin_or_tarball "$d/icode"; then
       return 0
     fi

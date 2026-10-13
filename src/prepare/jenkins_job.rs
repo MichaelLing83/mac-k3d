@@ -403,7 +403,7 @@ pub fn ensure_lolbench_one_task(
             Ok(()) => println!("Updated job '{LOLBENCH_ONE_TASK}'."),
             Err(err) => println!(
                 "Warning: failed to update job '{LOLBENCH_ONE_TASK}' ({err}).\n\
-                 Delete the job in the UI and re-run `mac-k3d config`, or see docs/lolbench-jenkins.md."
+                 Delete the job in the UI and re-run `mac-k3d config`, or see docs/jenkins-jobs.md."
             ),
         }
         return Ok(());
@@ -418,7 +418,7 @@ pub fn ensure_lolbench_one_task(
         let snippet: String = reply.body.chars().take(280).collect();
         println!(
             "Warning: failed to create job '{LOLBENCH_ONE_TASK}' (HTTP {}). {snippet}\n\
-             Create it manually — see docs/lolbench-jenkins.md.",
+             Create it manually — see docs/jenkins-jobs.md.",
             reply.code
         );
         return Ok(());

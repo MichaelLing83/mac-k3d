@@ -291,6 +291,11 @@ run_cmd() {
     else
       unset MAC_K3D_EGRESS_PROBE_IMAGE
     fi
+    # Harbor's docker and compose calls build and run the task images for this
+    # platform, so Docker never picks its native one for an amd64-only task.
+    if task_platform_emulated; then
+      export DOCKER_DEFAULT_PLATFORM="$(task_container_platform)"
+    fi
     if command -v stdbuf >/dev/null 2>&1; then
       stdbuf -oL -eL "${cmd[@]}"
     else

@@ -25,19 +25,13 @@ flowchart TD
 ## How many fit
 
 ```text
-EVAL_SLOTS = max(1, min(CPU_LOCK_QTY / declared_cpus, mem_slots, disk_floor))
-mem_slots  = floor((MemAvailable_GB - HOST_RESERVE_GB) / declared_memory_GB)
+EVAL_SLOTS = max(1, min(CPU_LOCK_QTY / declared_cpus, trials, disk_floor))
 disk_floor = 1 when free disk at WORKDIR < MIN_DISK_GB, else unbounded
 ```
 
-`HOST_RESERVE_GB` is 2 and `MIN_DISK_GB` is 40. On a local run, `EVAL_SLOTS` becomes Harbor's `-n`. A Jenkins `one_task` build is one trial, so Harbor runs `-n 1` and the lock quantity is the task's declared CPUs, not this whole formula.
+`MIN_DISK_GB` is 40. On a local run, `EVAL_SLOTS` becomes Harbor's `-n`. A Jenkins `one_task` build is one trial, so Harbor runs `-n 1` and the lock quantity is the task's declared CPUs, not this whole formula.
 
-Admission and throughput use different numbers on purpose:
-
-- **Admission** (can this worker run one task at all?) uses `MemTotal - reserve`. A worker with enough RAM but a full page cache should still be allowed to start.
-- **Throughput** (how many at once?) uses `MemAvailable - reserve`. Packing against total RAM would thrash.
-
-If one declared task does not fit under either test, the build **fails before the first container starts** with the shortfall printed. That is deliberate: a half-resourced run produces numbers nobody can use.
+Memory does not change the slot count. The `env` phase refuses a host below `MIN_RAM_GB` (8 GB), and a trial killed for memory is queued again (see [Retries](#retries)). If the CPUs this build locked are below what a task declares, the build **fails before the first container starts** with the shortfall printed. That is deliberate: a half-resourced run produces numbers nobody can use.
 
 After the question list is chosen, `evaluate/slots` prints the plan and `artifact.json` keeps it:
 
@@ -57,7 +51,7 @@ python3 pipeline/lib/task_resources.py plan \
   --cpu 8 --n-rollouts 4 --workdir eval-runs
 ```
 
-On Jenkins, `CPU_LOCK_QTY` is not a parameter and it is not the whole machine. The `Evaluate` stage locks `cpusEach` resources of this node (DeepSWE 2, LoLBench 4) and Harbor runs `-n 1`. `mac-k3d config -c worker.yaml` creates `<node>-core-1..N` where N is `jenkins_agent.cpu_cores`, and deletes any `<node>-core-M` above N. A core that a running build holds is reported `busy` and kept until the next `config`. A checked change on this PC: `cpu_cores: 2` left 1 executor, `executors-1` and `fits-deepswe`, and pruned core-3 and core-4; putting `4` back restored 2 executors and all three `fits-` labels.
+On Jenkins, `CPU_LOCK_QTY` is not a parameter and it is not the whole machine. The `Evaluate` stage locks `cpusEach` resources of this node (DeepSWE 2, LoLBench 4) and Harbor runs `-n 1`. `mac-k3d config -c worker.yaml` creates `<node>-core-1..N` where N is `jenkins_agent.cpu_cores`, and deletes any `<node>-core-M` above N. A core that a running build holds is reported `busy` and kept until the next `config`. For example, `cpu_cores: 2` gives 1 executor, `executors-1` and `fits-deepswe`, and prunes core-3 and above; `4` gives 2 executors and all three `fits-` labels.
 
 `mac-k3d eval --local` and `mac-k3d eval --stage` plan with the same number, so a local run packs the same `EVAL_SLOTS` as a Jenkins build on that machine. They print one line before the phase starts, for example `CPU_LOCK_QTY=16 (from /home/you/.config/mac-k3d/worker.yaml jenkins_agent.cpu_cores; Jenkins locks the same on this node)`. The number comes from the first of these that is set:
 
@@ -70,9 +64,31 @@ To use fewer cores on a shared host, lower `jenkins_agent.cpu_cores` in `worker.
 
 Later stages do not re-derive any of this: `eval_parallel_degree` reads the `eval_resources.json` that `evaluate/slots` wrote, so the report describes the run that happened rather than a fresh guess about the current machine.
 
+## Scheduling on workers
+
+Jenkins does not watch a worker's CPU or memory. It schedules by three numbers that `mac-k3d config -c worker.yaml` registers:
+
+| Control | Set to | What it does |
+|---------|--------|--------------|
+| Executors | `cpu_cores / cpus_per_executor` (default 2 CPUs each) | Caps how many `one_task` builds run on the worker at once |
+| Labels | `lolbench docker <os>`, `fits-<suite>`, `executors-<n>` | A build goes only to a worker that fits its suite; dispatchers count `executors-<n>` to size `MAX_IN_FLIGHT` |
+| Lockable resources | `<agent>-core-1..cpu_cores`, labelled `CPU_CORES <agent>` | Evaluate locks the question's declared CPUs with `lock(label: env.NODE_NAME, quantity: …)` |
+
+The lock names the node, not the shared `CPU_CORES` label, so a build on one worker never holds another worker's cores. Keep exactly one controller: the lock state lives there, and a second controller would lend the same cores twice. Scale by adding workers; the next dispatcher counts their executors without a pipeline change.
+
+On macOS the task containers run in Docker Desktop's VM, so the limits are the VM's, not the Mac's:
+
+| | Linux worker | macOS worker |
+|-|--------------|--------------|
+| Memory the `MIN_RAM_GB` gate reads | `/proc/meminfo` | Docker Desktop's memory limit (`docker info` `MemTotal`) |
+| Default `cpu_cores` | the host's logical CPUs | the smaller of the Mac's CPUs and Docker Desktop's CPU limit |
+| `cpu_cores` above Docker's CPU limit | allowed | `config` refuses it and names the fix |
+
+Raise the limits under Docker Desktop > Settings > Resources. A DeepSWE task declares 8 GB and two run at once on a 4-CPU limit, so give Docker Desktop at least 18 GB for that, or expect out-of-memory retries.
+
 ## Memory trace
 
-A single `harbor run` has no one "active question", so the memory trace is per build rather than per question. The `evaluate/harbor_run` heartbeat appends a `docker stats` snapshot to `harness/container_mem.jsonl` for containers whose names contain `_icode_` or `__env-main-`, ignoring sidecars. The largest `peak_gb` is kept in `harness/container_mem_peak_gb`, and the next build feeds it back in as `--measured-peak-gb` so a worker learns its real ceiling over time.
+A single `harbor run` has no one "active question", so the memory trace is per build rather than per question. The `evaluate/harbor_run` heartbeat appends a `docker stats` snapshot to `harness/container_mem.jsonl` for containers whose names contain `_icode_` or `__env-main-`, ignoring sidecars. The largest `peak_gb` is kept in `harness/container_mem_peak_gb` and reported as `container_mem_max_gb`. The planner still accepts `--measured-peak-gb` but does not use it: memory does not change the slot count.
 
 ```bash
 python3 pipeline/lib/task_resources.py sample --harness-dir eval-runs/harness --slots 2

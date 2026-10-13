@@ -217,6 +217,171 @@ icode_docker_platform() {
   esac
 }
 
+# Platform the iCode runtime runs on: this build's task containers
+# (task_container_platform in _common.sh), else this host's CPU.
+icode_target_platform() {
+  if declare -F task_container_platform >/dev/null 2>&1; then
+    task_container_platform
+  else
+    icode_docker_platform
+  fi
+}
+
+# x86_64 or aarch64 for a linux/<arch> platform, as iCode drop names spell it.
+icode_platform_cpu() {
+  case "${1#linux/}" in
+    arm64 | aarch64) printf '%s\n' aarch64 ;;
+    *) printf '%s\n' x86_64 ;;
+  esac
+}
+
+# CPU type a drop's name gives (icode-linux-x86_64-full-v…); darwin for a macOS
+# build; empty when the name does not say.
+icode_drop_name_cpu() {
+  case "$(basename "$1")" in
+    *linux-x86_64* | *linux-amd64*) printf '%s\n' x86_64 ;;
+    *linux-aarch64* | *linux-arm64*) printf '%s\n' aarch64 ;;
+    *macos-* | *darwin-*) printf '%s\n' darwin ;;
+  esac
+}
+
+# CPU type of an executable from its header: x86_64 or aarch64 for a Linux
+# ELF, darwin for Mach-O, empty for a script or anything else.
+icode_binary_cpu() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  case "$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')" in
+    7f454c46)
+      case "$(od -An -tx1 -j18 -N2 "$f" 2>/dev/null | tr -d ' \n')" in
+        3e00) printf '%s\n' x86_64 ;;
+        b700) printf '%s\n' aarch64 ;;
+      esac
+      ;;
+    cffaedfe | cefaedfe | cafebabe | bebafeca) printf '%s\n' darwin ;;
+  esac
+}
+
+# True when this host cannot exec a Linux binary of CPU type $1 itself.
+icode_cpu_foreign() {
+  [ -n "$1" ] && [ "$1" != darwin ] || return 1
+  [ "$(uname -s)" = Linux ] || return 0
+  [ "$1" != "$(icode_platform_cpu "$(icode_docker_platform)")" ]
+}
+
+# The icode under an unpacked release for this build's task containers. One
+# upload may hold a drop per CPU type (a .tar.gz of icode-linux-x86_64-full-v…
+# and icode-linux-aarch64-full-v… of one version); each build takes its own.
+# A binary of another CPU type, or a macOS build, is refused; a script is
+# taken as is.
+icode_pick_release_bin() {
+  local unpack="$1" want plat f cpu script="" found=""
+  plat="$(icode_target_platform)"
+  want="$(icode_platform_cpu "$plat")"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    cpu="$(icode_binary_cpu "$f")"
+    if [ "$cpu" = "$want" ]; then
+      printf '%s\n' "$f"
+      return 0
+    fi
+    if [ -z "$cpu" ]; then
+      [ -n "$script" ] || script="$f"
+    else
+      case " $found " in *" $cpu "*) ;; *) found="${found:+$found }$cpu" ;; esac
+    fi
+  done < <(find "$unpack" -type f -name icode 2>/dev/null | LC_ALL=C sort)
+  if [ -n "$script" ]; then
+    printf '%s\n' "$script"
+    return 0
+  fi
+  [ -n "$found" ] || die "could not find icode inside release"
+  die "the iCode release is built for ${found}, but this build's task containers are ${plat} (linux-${want}). Use icode-linux-${want}-full-vX.Y.Z, or upload one .tar.gz holding icode-linux-x86_64-full-vX.Y.Z and icode-linux-aarch64-full-vX.Y.Z of the same version; each build takes the one it needs. A worker can also keep both drops in one folder: mac-k3d set --icode-release <folder>."
+}
+
+ICODE_LINUX_UV=/mac-k3d-uv
+
+# uv sync runs in ICODE_LINUX_BUILD_IMAGE when this host cannot run the task
+# containers' Linux runtime itself: macOS, or a Linux host of another CPU type.
+# MAC_K3D_ICODE_CONTAINER_BUILD=1 forces it (tests).
+icode_container_build_needed() {
+  [ "${MAC_K3D_ICODE_CONTAINER_BUILD:-}" = 1 ] && return 0
+  [ "$(uname -s)" = Linux ] || return 0
+  [ "$(icode_docker_platform)" != "$(icode_target_platform)" ]
+}
+
+# A venv uv built in the container links its python into the container's uv
+# cache; embed, sanitize and the probes then run there too.
+icode_tree_built_in_container() {
+  case "$(readlink "$1/.venv/bin/python" 2>/dev/null || true)" in
+    "$ICODE_LINUX_UV"/*) return 0 ;;
+  esac
+  return 1
+}
+
+icode_linux_image() {
+  local img="${ICODE_LINUX_BUILD_IMAGE:-}" lib
+  if [ -z "$img" ]; then
+    lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    img="$(sed -n 's/^ICODE_LINUX_BUILD_IMAGE=//p' "$lib/../config/toolchain.env" 2>/dev/null | head -n 1)"
+  fi
+  [ -n "$img" ] || die "ICODE_LINUX_BUILD_IMAGE is missing from pipeline/config/toolchain.env"
+  printf '%s\n' "$img"
+}
+
+# Run a command in ICODE_LINUX_BUILD_IMAGE on the task platform, as this user.
+# $1 and pipeline/lib are mounted at their own paths, so venv links, .pth files
+# and the sanitizer manifest name the same paths as a host-built tree. uv's
+# cache and managed CPython live in one cache per platform under MAC_K3D_SHARE,
+# always mounted at ICODE_LINUX_UV. ICODE_LINUX_WORKDIR sets the working
+# directory (default $1). Git credentials pass by name, never on the command line.
+icode_linux_run() {
+  local dest="$1" plat lib cache name passwd
+  local -a args
+  shift
+  have docker || die "docker is required to build the iCode runtime for $(icode_target_platform) on this host"
+  plat="$(icode_target_platform)"
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cache="${MAC_K3D_SHARE:-$HOME/.local/share/mac-k3d}/uv-cache-linux-${plat#linux/}"
+  mkdir -p "$cache"
+  args=(run --rm --platform "$plat" --user "$(id -u):$(id -g)"
+    -e HOME=/tmp
+    -e "UV_CACHE_DIR=$ICODE_LINUX_UV/cache"
+    -e "UV_PYTHON_INSTALL_DIR=$ICODE_LINUX_UV/python"
+    -e UV_PYTHON_PREFERENCE=only-managed
+    -e UV_LINK_MODE=copy
+    -v "$cache:$ICODE_LINUX_UV"
+    -v "$dest:$dest"
+    -v "$lib:$lib:ro"
+    -w "${ICODE_LINUX_WORKDIR:-$dest}")
+  for name in MAC_K3D_GIT_TOKEN MAC_K3D_GIT_USERNAME GIT_TERMINAL_PROMPT GIT_CONFIG_NOSYSTEM \
+    GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_SSH_COMMAND; do
+    if printenv "$name" >/dev/null 2>&1; then
+      args+=(-e "$name")
+    fi
+  done
+  if [ -n "${GIT_ASKPASS:-}" ] && [ -f "$GIT_ASKPASS" ]; then
+    args+=(-e GIT_ASKPASS -v "$GIT_ASKPASS:$GIT_ASKPASS:ro")
+  fi
+  # ssh refuses to run for a uid without a passwd entry.
+  if [ -n "${GIT_SSH_COMMAND:-}" ] && [ -d "$HOME/.ssh" ]; then
+    passwd="${cache}.passwd"
+    printf 'root:x:0:0:root:/root:/bin/sh\nmac-k3d:x:%s:%s:mac-k3d:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
+    args+=(-v "$passwd:/etc/passwd:ro" -v "$HOME/.ssh:/tmp/.ssh:ro")
+  fi
+  docker "${args[@]}" "$(icode_linux_image)" "$@"
+}
+
+# Check a release icode answers --help: on this host, or in the Linux build
+# image when the binary is a Linux build this host cannot exec.
+icode_release_help() {
+  local bin="$1"
+  if icode_cpu_foreign "$(icode_binary_cpu "$bin")"; then
+    icode_linux_run "$(cd "$(dirname "$bin")" && pwd)" "$bin" --help
+  else
+    "$bin" --help
+  fi
+}
+
 # Delete a leftover tree/file even when Docker left root/nobody-owned files.
 # Plain rm first; if that fails, alpine as root on a parent bind-mount (no sudo).
 icode_force_rm() {
@@ -372,11 +537,14 @@ icode_sourceless_enabled() {
 # gone, so the sandbox CPython is copied again from the host and sanitized fresh.
 icode_sanitize_host_tree() {
   local dest="${1:-}" lib rc=0
-  local -a args
+  local -a args runner=()
   [ -n "$dest" ] && [ -d "$dest/.venv/sandbox-cpython" ] || return 0
   lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   args=(--tree "$dest" --sourceless)
-  python3 "$lib/icode_sanitize.py" "${args[@]}" >&2 || rc=$?
+  if icode_tree_built_in_container "$dest"; then
+    runner=(icode_linux_run "$dest")
+  fi
+  "${runner[@]}" python3 "$lib/icode_sanitize.py" "${args[@]}" >&2 || rc=$?
   if [ "$rc" = 3 ]; then
     echo "icode sanitize: re-embedding $dest/.venv/sandbox-cpython for the current sanitizer" >&2
     icode_force_rm "$dest/.venv/sandbox-cpython"
@@ -385,9 +553,23 @@ icode_sanitize_host_tree() {
       || die "cannot re-embed the sandbox CPython under $dest (host uv python missing?); rerun the tasks phase"
     icode_write_sandbox_pth "$dest"
     rc=0
-    python3 "$lib/icode_sanitize.py" "${args[@]}" --refresh >&2 || rc=$?
+    "${runner[@]}" python3 "$lib/icode_sanitize.py" "${args[@]}" --refresh >&2 || rc=$?
   fi
   [ "$rc" = 0 ] || die "iCode sanitizer failed for $dest"
+}
+
+# One probe command with the sandbox's import path, from an empty directory, on
+# this host or, for a container-built tree, in the Linux build image.
+icode_probe_run() {
+  local dest="$1" tmp="$2" site="$3"
+  shift 3
+  if icode_tree_built_in_container "$dest"; then
+    ICODE_LINUX_WORKDIR=/tmp icode_linux_run "$dest" env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 \
+      PYTHONPATH="${dest}${site:+:$site}" "$@" >"$tmp/probe.log" 2>&1
+  else
+    (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
+      "$@") >"$tmp/probe.log" 2>&1
+  fi
 }
 
 # Start the sanitized sandbox interpreter on the host before any rollout.
@@ -404,34 +586,31 @@ icode_probe_sandbox() {
   [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (tasks/icode embed failed)"
   site="$(ls -d "$dest/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1 || true)"
   tmp="$(mktemp -d)"
-  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
-    "$py" "$dest/.venv/bin/icode" --help) >"$tmp/probe.log" 2>&1; then
+  if ! icode_probe_run "$dest" "$tmp" "$site" "$py" "$dest/.venv/bin/icode" --help; then
     tail -n 20 "$tmp/probe.log" >&2 || true
     rm -rf "$tmp"
     die "sanitized iCode runtime does not start: $py $dest/.venv/bin/icode --help failed"
   fi
   # --help builds no model; pydantic imports zoneinfo only when it builds its first schema.
-  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
-    "$py" -c 'import importlib.util
+  if ! icode_probe_run "$dest" "$tmp" "$site" "$py" -c 'import importlib.util
 if importlib.util.find_spec("pydantic"):
     import pydantic
     class Probe(pydantic.BaseModel):
         value: int = 0
-    Probe()') >"$tmp/probe.log" 2>&1; then
+    Probe()'; then
     tail -n 20 "$tmp/probe.log" >&2 || true
     rm -rf "$tmp"
     die "sanitized iCode runtime cannot build a pydantic model (stdlib module missing?)"
   fi
   # icode run imports the agent stack that --help skips (alembic needs tomllib on 3.11+).
   # A layout without these modules is skipped; any other missing module fails.
-  if ! (cd "$tmp" && env -u VIRTUAL_ENV PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${dest}${site:+:$site}" \
-    "$py" -c 'import importlib
+  if ! icode_probe_run "$dest" "$tmp" "$site" "$py" -c 'import importlib
 for name in ("openjiuwen_icode.agent.factory", "openjiuwen_icode.host.bootstrap"):
     try:
         importlib.import_module(name)
     except ModuleNotFoundError as exc:
         if not exc.name or not (name == exc.name or name.startswith(exc.name + ".")):
-            raise') >"$tmp/probe.log" 2>&1; then
+            raise'; then
     tail -n 20 "$tmp/probe.log" >&2 || true
     rm -rf "$tmp"
     die "sanitized iCode runtime cannot import its run path (stdlib module missing?)"
@@ -442,7 +621,22 @@ for name in ("openjiuwen_icode.agent.factory", "openjiuwen_icode.host.bootstrap"
 
 # Host uv venv python is a symlink to ~/.local/share/uv/python/... which Docker
 # does not have. Copy that CPython prefix into the clone for bind-mount eval.
+# A container-built venv's CPython is in the build image's uv cache, so the copy
+# runs there.
 icode_embed_sandbox_cpython() {
+  local dest="$1" lib
+  [ -n "$dest" ] && [ -d "$dest" ] || return 0
+  dest="$(cd "$dest" && pwd)"
+  if icode_tree_built_in_container "$dest"; then
+    lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    icode_linux_run "$dest" bash -c 'source "$1/icode_input.sh" && icode_embed_host_cpython "$2"' _ "$lib" "$dest" >&2 \
+      || die "cannot copy the build image's CPython into $dest/.venv/sandbox-cpython"
+    return 0
+  fi
+  icode_embed_host_cpython "$dest"
+}
+
+icode_embed_host_cpython() {
   local dest="$1" py prefix sandbox
   [ -n "$dest" ] && [ -d "$dest" ] || return 0
   dest="$(cd "$dest" && pwd)"
@@ -572,9 +766,10 @@ PY
   printf '%s\n' "$val"
 }
 
-# Parent folder of a *-full-* drop (e.g. iCode-binary/) → the child drop.
+# Parent folder of a *-full-* drop (e.g. iCode-binary/) → the child drop, the
+# one named for this build's container CPU type when the folder holds several.
 icode_resolve_release_src() {
-  local src="$1" c
+  local src="$1" c want first=""
   [ -n "$src" ] || return 1
   if [ -d "$src" ]; then
     if declare -F _icode_dir_has_icode >/dev/null 2>&1 && _icode_dir_has_icode "$src"; then
@@ -585,14 +780,22 @@ icode_resolve_release_src() {
       printf '%s\n' "$src"
       return 0
     fi
+    want="$(icode_platform_cpu "$(icode_target_platform)")"
     for c in "$src"/*-full-*.tar.gz "$src"/*.tgz "$src"/*-full-*; do
       [ -e "$c" ] || continue
       if declare -F _icode_release_ok >/dev/null 2>&1; then
         _icode_release_ok "$c" || continue
       fi
-      printf '%s\n' "$c"
-      return 0
+      if [ "$(icode_drop_name_cpu "$c")" = "$want" ]; then
+        printf '%s\n' "$c"
+        return 0
+      fi
+      [ -n "$first" ] || first="$c"
     done
+    if [ -n "$first" ]; then
+      printf '%s\n' "$first"
+      return 0
+    fi
     die "ICODE_RELEASE directory has no icode and no *-full-* drop: $src. Point at the *-full-* file or folder, or run: mac-k3d set --icode-release <path>"
   fi
   printf '%s\n' "$src"
@@ -636,8 +839,7 @@ get_release_icode() {
   fi
   icode_record_release "$src" "$rel_name"
   install_icode_release "$src" "$unpack"
-  bin="$(find "$unpack" -type f -name icode -print -quit)"
-  [ -n "$bin" ] || die "could not find icode inside release"
+  bin="$(icode_pick_release_bin "$unpack")" || exit 1
   icode_write_host_root "$(cd "$(dirname "$bin")" && pwd)"
   printf '%s\n' "$bin"
 }
@@ -647,21 +849,28 @@ get_release_icode() {
 # the askpass the clone used, so a worker needs no SSH key. Without one, or when
 # the PAT cannot read it, use this machine's SSH key, never prompting.
 # Everything goes to stderr: the caller captures stdout as ICODE_BIN.
+# On a host that cannot run the task containers' runtime, uv runs in the Linux
+# build image of their platform (icode_linux_run) with the same credentials.
 icode_uv_sync() {
   local dest="$1" host="$2" token="$3" askpass
+  local -a runner=()
+  if icode_container_build_needed; then
+    runner=(icode_linux_run "$dest")
+    echo "icode: building the git-mode runtime in $(icode_linux_image) for $(icode_target_platform)" >&2
+  fi
   if [ -n "$token" ]; then
     askpass="$(icode_write_askpass)"
     if (cd "$dest" && MAC_K3D_GIT_TOKEN="$token" GIT_ASKPASS="$askpass" \
       GIT_CONFIG_COUNT=2 \
       GIT_CONFIG_KEY_0="url.https://${host}/.insteadOf" GIT_CONFIG_VALUE_0="ssh://git@${host}/" \
       GIT_CONFIG_KEY_1="url.https://${host}/.insteadOf" GIT_CONFIG_VALUE_1="git@${host}:" \
-      uv sync --no-editable >&2); then
+      "${runner[@]}" uv sync --no-editable >&2); then
       echo "OK icode dependencies fetched over https with the ${host} PAT" >&2
       return 0
     fi
     echo "WARNING: uv sync over https with the ${host} PAT failed; retrying with this machine's SSH key" >&2
   fi
-  if (cd "$dest" && GIT_SSH_COMMAND="ssh -o BatchMode=yes" uv sync --no-editable >&2); then
+  if (cd "$dest" && GIT_SSH_COMMAND="ssh -o BatchMode=yes" "${runner[@]}" uv sync --no-editable >&2); then
     return 0
   fi
   if grep -qsF -e "ssh://git@${host}/" -e "git@${host}:" "$dest/pyproject.toml" "$dest/uv.lock"; then
@@ -741,7 +950,7 @@ get_bin_icode() {
   fi
   [ -d "$dest" ] || die "icode git checkout missing: $dest"
   if [ ! -x "$dest/.venv/bin/icode" ]; then
-    have uv || die "need uv or $dest/.venv/bin/icode"
+    icode_container_build_needed || have uv || die "need uv or $dest/.venv/bin/icode"
     icode_uv_sync "$dest" "${host:-}" "${token:-}"
   fi
   [ -x "$dest/.venv/bin/icode" ] || die "uv sync did not produce $dest/.venv/bin/icode"

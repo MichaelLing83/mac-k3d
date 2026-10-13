@@ -9,7 +9,7 @@ To wipe an existing lab and keep `.bak` YAML: [testing-binary-initializer.md](te
 Automated checks after bootstrap: [`scripts/env_set_up/README.md`](../../scripts/env_set_up/README.md).  
 Full product story: [workflow.md](../workflow.md). Wizard details: [new-machine.md](../new-machine.md).
 
-Prefer pre-release **v0.4.0-rc.4** (or newer 0.4.x) over GitHub **Latest** if Latest is still v0.3.0.
+Use GitHub **Latest** (v0.5.3 or newer).
 
 ---
 
@@ -28,26 +28,28 @@ Docker: the binary can **Install** it. If Docker is already present, choose **Us
 Option A — script (recommended once the repo is cloned, or copy the scripts folder):
 
 ```bash
-export MAC_K3D_RELEASE_TAG=v0.4.0-rc.4   # or the tag you were given
+export MAC_K3D_RELEASE_TAG=v0.5.3   # or the tag you were given
 ./scripts/env_set_up/01_download_binary.sh
 export PATH="$HOME/.local/bin:$PATH"
 which mac-k3d
-mac-k3d --version    # expect 0.4.x
+mac-k3d --version    # expect 0.5.3 or newer
 mac-k3d --help       # must list setup and eval
 ```
 
-Option B — manual:
+Option B — manual. Pick the asset from the Release page:
+
+| Linux | macOS |
+|-------|-------|
+| `ASSET=mac-k3d-linux-x86_64` (or `mac-k3d-linux-aarch64`) | `ASSET=mac-k3d-darwin-aarch64` (or `mac-k3d-darwin-x86_64`)<br>`xattr -d com.apple.quarantine "./$ASSET"` |
 
 ```bash
-# Pick the asset for your OS/arch from the Release page, e.g.:
-#   mac-k3d-linux-x86_64 | mac-k3d-linux-aarch64
-#   mac-k3d-darwin-aarch64 | mac-k3d-darwin-x86_64
-chmod +x ./mac-k3d-linux-x86_64
-# macOS: xattr -d com.apple.quarantine ./mac-k3d-darwin-aarch64
+chmod +x "./$ASSET"
 mkdir -p ~/.local/bin
-cp ./mac-k3d-linux-x86_64 ~/.local/bin/mac-k3d
+cp "./$ASSET" ~/.local/bin/mac-k3d
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+A Mac worker also needs the one-time settings in [new-machine.md](../new-machine.md#mac-mini-worker) before step 3.
 
 ---
 
@@ -63,7 +65,7 @@ Wizard choices:
 |--------|--------|
 | Role | **CI controller (Jenkins in k3d)** |
 | Docker / k3d / kubectl / helm | Use existing or **Install** |
-| Jenkins UI host port | **17070** (default on v0.4.0-rc.4+) |
+| Jenkins UI host port | **17070** (the default) |
 | CI secrets | Yes if you have `deepseek-api-key`; else skip and add later |
 | Write + apply | **yes** |
 

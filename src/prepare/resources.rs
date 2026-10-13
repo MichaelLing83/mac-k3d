@@ -5,12 +5,54 @@ use crate::error::{Error, Result};
 
 const GB: u64 = 1024 * 1024 * 1024;
 
-/// Logical CPU count for CPU_CORES registration.
+/// Logical CPU count for CPU_CORES registration. On macOS the task containers
+/// run in Docker Desktop's VM, so this is capped at the CPUs it gives them.
 pub fn logical_cpu_cores() -> u32 {
-    std::thread::available_parallelism()
+    let host = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(1)
-        .max(1)
+        .max(1);
+    #[cfg(target_os = "macos")]
+    {
+        if let Some((cpus, _)) = docker_vm_limits() {
+            return host.min(cpus.max(1));
+        }
+    }
+    host
+}
+
+/// Docker Desktop's VM on macOS: (CPUs, memory in kB) its containers get.
+/// None when the daemon does not answer.
+pub fn docker_vm_limits() -> Option<(u32, u64)> {
+    let out = std::process::Command::new("docker")
+        .args(["info", "--format", "{{.NCPU}} {{.MemTotal}}"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_docker_vm_limits(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_docker_vm_limits(text: &str) -> Option<(u32, u64)> {
+    let mut fields = text.split_whitespace();
+    let cpus: u32 = fields.next()?.parse().ok()?;
+    let bytes: u64 = fields.next()?.parse().ok()?;
+    (cpus > 0 && bytes > 0).then_some((cpus, bytes / 1024))
+}
+
+/// macOS: `jenkins_agent.cpu_cores` above Docker Desktop's CPU limit would let
+/// Jenkins start more trials than the VM can run.
+pub fn cpu_cores_problem(cores: u32, docker_cpus: Option<u32>) -> Option<String> {
+    let cpus = docker_cpus?;
+    (cores > cpus).then(|| {
+        format!(
+            "jenkins_agent.cpu_cores is {cores} but Docker Desktop gives containers {cpus} CPUs. \
+             Set cpu_cores to {cpus} or less, or raise Docker Desktop > Settings > Resources > CPU limit, \
+             then run config again"
+        )
+    })
 }
 
 /// Cores a local eval (`eval --local`, `eval --stage`) plans with, and where the
@@ -72,10 +114,18 @@ pub fn ensure_ram_min(min_gb: u64) -> Result<()> {
         return Ok(());
     }
     if !ram_kb_meets(kb, min_gb) {
-        return Err(Error::Validation(format!(
+        #[cfg(target_os = "macos")]
+        let problem = format!(
+            "Docker Desktop has only {} MB memory; need at least {min_gb} GB for eval. \
+             Raise Docker Desktop > Settings > Resources > Memory",
+            kb / 1024
+        );
+        #[cfg(not(target_os = "macos"))]
+        let problem = format!(
             "only {} MB RAM; need at least {min_gb} GB for eval (keep N_TASKS=1)",
             kb / 1024
-        )));
+        );
+        return Err(Error::Validation(problem));
     }
     tracing::info!(min_gb, "RAM check passed");
     Ok(())
@@ -94,6 +144,9 @@ fn mem_total_kb() -> Option<u64> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        if let Some((_, kb)) = docker_vm_limits() {
+            return Some(kb);
+        }
         let out = std::process::Command::new("sysctl")
             .args(["-n", "hw.memsize"])
             .output()
@@ -362,6 +415,26 @@ mod tests {
     fn ram_kb_meets_thresholds() {
         assert!(ram_kb_meets(8 * 1024 * 1024, 8));
         assert!(!ram_kb_meets(7 * 1024 * 1024, 8));
+    }
+
+    #[test]
+    fn docker_vm_limits_parse_cpus_and_memory() {
+        assert_eq!(
+            parse_docker_vm_limits("8 16729407488\n"),
+            Some((8, 16_337_312))
+        );
+        assert_eq!(parse_docker_vm_limits(""), None);
+        assert_eq!(parse_docker_vm_limits("0 1024"), None);
+        assert_eq!(parse_docker_vm_limits("eight 1024"), None);
+    }
+
+    #[test]
+    fn cpu_cores_above_the_docker_vm_are_refused() {
+        assert_eq!(cpu_cores_problem(8, Some(8)), None);
+        assert_eq!(cpu_cores_problem(16, None), None);
+        let problem = cpu_cores_problem(10, Some(8)).unwrap();
+        assert!(problem.contains("cpu_cores is 10"), "{problem}");
+        assert!(problem.contains("Resources > CPU limit"), "{problem}");
     }
 
     #[test]

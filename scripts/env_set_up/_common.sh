@@ -5,7 +5,7 @@ set -euo pipefail
 ENV_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MAC_K3D_ROOT="$(cd "$ENV_SETUP_DIR/../.." && pwd)"
 
-export MAC_K3D_RELEASE_TAG="${MAC_K3D_RELEASE_TAG:-v0.4.0-rc.4}"
+export MAC_K3D_RELEASE_TAG="${MAC_K3D_RELEASE_TAG:-v0.5.3}"
 export MAC_K3D_REPO="${MAC_K3D_REPO:-Toby-Yu/mac-k3d}"
 export JENKINS_URL="${JENKINS_URL:-http://localhost:17070}"
 export CONTROLLER_CONFIG="${CONTROLLER_CONFIG:-$HOME/.config/mac-k3d/config.yaml}"

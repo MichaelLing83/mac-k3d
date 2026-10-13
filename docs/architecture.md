@@ -130,34 +130,33 @@ Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.
 
 ## Intended deployment topologies
 
-### Single Mac (default)
+### One machine (default)
 
-- One Mac hosts one k3d cluster.
-- Docker Desktop and k3d are local to that Mac.
+- One Linux or macOS machine hosts one k3d cluster.
+- Docker (Docker Desktop on macOS) and k3d are local to that machine.
 - Optional Jenkins runs in-cluster and acts as the CI controller for that local environment.
 
-### Multiple Macs with independent local clusters
+### Several machines, coordinated by Jenkins
 
-- Each Mac runs its own independent k3d cluster.
-- A Mac with Jenkins enabled is the "controller" role for CI orchestration.
-- Macs without Jenkins are "worker" role machines (local execution targets), but they are not Kubernetes worker nodes of the controller's k3d cluster.
+- The machine with Jenkins enabled is the "controller" role for CI orchestration; it is the only one with a k3d cluster.
+- Workers (Linux or macOS) run the Jenkins agent, Docker and Harbor, but they are not Kubernetes worker nodes of the controller's k3d cluster.
 - This is the recommended model for v1 because it avoids cross-host k3d networking complexity.
-- When several Mac Minis share one Internet Ethernet drop, put them on a switched LAN (router + switch). See [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
+- When several machines share one Internet Ethernet drop, put them on a switched LAN (router + switch). See [setup.md](setup.md#physical-lan-co-located-machines).
 
-### Multiple Macs as one Kubernetes cluster (not supported in v1)
+### Several machines as one Kubernetes cluster (not supported in v1)
 
 - k3d is optimized for local, single-host Docker networking.
-- Spanning a single k3d cluster across multiple Macs is not a primary design target and is fragile over routed/WAN links.
+- Spanning a single k3d cluster across multiple machines is not a primary design target and is fragile over routed/WAN links.
 - For true multi-host worker nodes, use a different Kubernetes distribution designed for multi-node networking (for example k3s across hosts, kubeadm, or managed Kubernetes).
 
 ## Controller/worker role clarification
 
 In this project, "controller" and "worker" mean CI roles, not Kubernetes node roles:
 
-- **CI controller**: Mac that runs Jenkins (inside its local k3d cluster).
-- **CI workers**: other Macs that run agent processes/tools and execute jobs.
+- **CI controller**: the machine that runs Jenkins (inside its local k3d cluster).
+- **CI workers**: other Linux or macOS machines that run agent processes/tools and execute jobs.
 
-Kubernetes node roles remain internal to each Mac's own local k3d cluster (`server` and optional `agents` configured by `cluster.agents`).
+Kubernetes node roles remain internal to the controller's own local k3d cluster (`server` and optional `agents` configured by `cluster.agents`).
 
 ## Evaluation architecture
 
@@ -167,8 +166,8 @@ mac-k3d is the **environment and scheduling manager**. It does not run container
 |---|---|
 | Bare-machine prep: Docker, k3d, the pinned Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`), re-checked per build by the `env` phase |
 | Per-build prep and checks: benchmark checkout, task selection, iCode checkout and sandbox, read-only mount, network allowlist, leak scan | mac-k3d (pipeline `tasks` phase). The checkout holds each question's image address, not the image ([pipeline.md](pipeline.md#benchmark-checkout-and-question-images)) |
-| Question image pull, container lifecycle, per-task cpus/memory, retries, rollout fan-out, verifier, reward | **Harbor** (one `harbor run`; LoLBench images are built for this CPU by `tasks/images` first) |
-| Job placement across workers and resource admission | Jenkins + lockable-resources |
+| Question image pull, container lifecycle, per-task cpus/memory, trial retry, verifier, reward | **Harbor** (one `harbor run` of one trial on Jenkins; LoLBench images are built for this CPU by `tasks/images` first) |
+| Fan-out of questions and rollouts, job placement across workers, resource admission | Jenkins dispatchers (`some_task`, `full_suite_task`) + lockable-resources |
 | Isolation canary, capture receipts, anti-cheat verdicts, score, report, archive | mac-k3d (pipeline `evaluate/canary`, then the `anticheat`, `score`, `report` and `archive` phases) |
 
 The integrity layer stays here because Harbor has no equivalent: `harbor job summarize` is a removed shim and `harbor analyze` is rubric-only, so neither inspects a transcript for solution leakage or can reject a trial.
@@ -237,7 +236,7 @@ Every Jenkins build extracts with `--require-clean`, which refuses a dirty build
 
 ## Cross-network operation (not necessarily LAN)
 
-- Co-located Mac Minis should use a shared switched LAN; see [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
+- Co-located machines should use a shared switched LAN; see [setup.md](setup.md#physical-lan-co-located-machines).
 - Connectivity over VPN, routed corporate networks, or public internet can work if endpoints are reachable and secured.
 - Remote workers only need network access to Jenkins controller endpoints (HTTPS + agent transport), not direct membership in the controller's k3d Docker network.
 - Latency and intermittent links are expected; Jenkins agents should be configured for reconnect and retry behavior.

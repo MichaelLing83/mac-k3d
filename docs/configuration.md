@@ -142,8 +142,8 @@ controller:
     - lockable-resources      # per-worker <agent>-core-N capacity locks
     - plain-credentials       # Secret text for LLM keys and forge PATs
     - file-parameters         # ICODE_RELEASE_FILE upload
-    - copyartifact            # dispatcher Aggregate stage pulls each shard's trials
-    - pipeline-utility-steps  # nodesByLabel: at least one shard per online worker
+    - copyartifact            # dispatcher Aggregate stage pulls each rollout build's trials
+    - pipeline-utility-steps  # nodesByLabel: online workers and executors for MAX_IN_FLIGHT
     - hidden-parameter        # ui_profile=user hides developer params
 ```
 
@@ -157,7 +157,7 @@ Chart defaults still install kubernetes, workflow-aggregator, git, and configura
 
 ### `storage`
 
-Set by the [prepare wizard](prepare-wizard.md). Paths for large artifacts; config/state stay in `~/.config` and `~/.local/state`.
+Set by the [setup wizard](setup.md#storage). Paths for large artifacts; config/state stay in `~/.config` and `~/.local/state`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -173,7 +173,7 @@ Per-tool resolution. The prepare wizard discovers existing installs first and ne
 
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
-| `source` | string | `existing`, `install`, `skip` | Use found binary, install via Homebrew, or skip |
+| `source` | string | `existing`, `install`, `skip` | Use found binary, install (apt on Linux, Homebrew on macOS; see [Install commands](#install-commands-prepare)), or skip |
 | `binary` | path | — | CLI path when `source: existing` |
 | `app` | path | — | App bundle (Docker Desktop only) |
 
@@ -321,11 +321,15 @@ The following keys may be added later for better controller/worker automation:
 - `controller.tunnel: ssh | inbound | websocket`
 - `worker.labels: ["macos", "docker", "k3d"]`
 
-## Homebrew install hints (prepare)
+## Install commands (prepare)
 
-| Dependency | Install command |
-|------------|-----------------|
-| Docker Desktop | `brew install --cask docker` |
-| k3d | `brew install k3d` |
-| kubectl | `brew install kubectl` |
-| helm | `brew install helm` |
+What `source: install` runs, or prints for an administrator when it needs root and `sudo` is not available:
+
+| Dependency | Linux (`apt-get`, as root) | macOS (Homebrew, as you) |
+|------------|----------------------------|--------------------------|
+| Docker | `apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker` | `brew install --cask docker` (Docker Desktop) |
+| k3d | `curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \| bash` | `brew install k3d` |
+| kubectl | `apt-get install -y kubectl` (else the `dl.k8s.io` stable binary) | `brew install kubectl` |
+| helm | `curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \| bash` | `brew install helm` |
+| java (worker) | `apt-get install -y openjdk-21-jre-headless` | `brew install --cask temurin@21` |
+| git | `apt-get install -y git` | `brew install git` |

@@ -718,6 +718,7 @@ mod tests {
         assert_eq!(executor_count(16, 0), 8, "0 means the default of 2 CPUs");
     }
 
+    #[test]
     fn capacity_labels_follow_the_cpu_limit_and_replace_stale_ones() {
         let cloud = node_labels(&["linux".into(), "lolbench".into()], 16, 2);
         assert_eq!(

@@ -229,7 +229,7 @@ mac-k3d setup -c ~/.config/mac-k3d/worker.yaml
 | Role | **CI worker (Jenkins agent only)** |
 | Docker / Java / git | Use existing or **Install** |
 | Harbor | Not asked: setup installs the pinned 0.22.0 with `uv` (no root) |
-| Jenkins controller URL | type `http://43.107.42.252:17070` (or export `JENKINS_URL` first). Wizard default is localhost. |
+| Jenkins controller URL | Enter keeps the wizard default `http://43.107.42.252:17070`, this lab's controller |
 | API user / token | `admin` + the **token secret** (or Enter to skip; the YAML keeps both keys empty) |
 | Agent name | Distinct default (`linux-<hostname>` or `macos-<hostname>`) is fine |
 | Write + apply | **yes** |
@@ -249,12 +249,15 @@ cd ~/Documents/Toby/mac-k3d
 mac-k3d start -c ~/.config/mac-k3d/worker.yaml ; echo "exit=$?"
 # expect Error about start-is-for-controller and exit=1
 
-systemctl --user status mac-k3d-jenkins-agent.service
-# Active: active (running) — press q to leave
-
 REQUIRE_WORKER=1 JENKINS_URL=http://43.107.42.252:17070 \
   ./scripts/env_set_up/03_check_worker.sh
 ```
+
+The agent service:
+
+| Linux | macOS |
+|-------|-------|
+| `systemctl --user status mac-k3d-jenkins-agent.service`<br>want `Active: active (running)`; press q to leave | `launchctl print "gui/$(id -u)/com.mac-k3d.jenkins-agent" \| grep -E 'state\|last exit'`<br>want `state = running` |
 
 In cloud Jenkins: **Manage Jenkins → Nodes** — this PC’s agent is **online**.
 
@@ -328,9 +331,9 @@ Git (optional): same UI with `ICODE_MODE=git`, or `mac-k3d eval --n-tasks 1 --ic
 
 ### Phase 5b — multi-worker (needs a second worker)
 
-Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_full_suite_task` with `N_TASKS=10` (developer profile). There is no `SHARD_SIZE`. The dispatcher queues one `deepswe_one_task` build per question and rollout.
+Only after Phase 5 passes on one node. Register the second worker (`mac-k3d setup -c worker.yaml` on it; nothing to change on the controller), then run `deepswe_some_task` with `N_TASKS=4` and `N_ROLLOUTS=1`. There is no `SHARD_SIZE`. The dispatcher queues one `deepswe_one_task` build per question and rollout. A Mac worker: do [mac-mini-worker.md](mac-mini-worker.md) instead, which compares it with this PC.
 
-**Expected:** five `deepswe_one_task` shard builds, one running on each worker at a time and the rest queued until a worker frees up; **Lockable Resources** shows each build holding all of `<its own node>-core-*` and nothing else; the five `selected_tasks.txt` files are disjoint; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 5`, `n_tasks: 10`, `pipeline_status: same` and `10 x N_ROLLOUTS` rollout records. `pipeline_status: mixed` means a worker missed the last redeploy. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
+**Expected:** four `deepswe_one_task` builds spread over both workers, each worker running at most its executor count at once (`cpu_cores / 2`) and the rest queued; **Lockable Resources** shows each build holding 2 of `<its own node>-core-*` (the CPUs a DeepSWE task declares) and nothing on another node; each build's `selected_tasks.txt` names a different question; and the dispatcher build's `Aggregate` stage archives one `aggregate/artifact.json` with `shards: 4`, `n_tasks: 4`, `pipeline_status: same` and 4 rollout records. `pipeline_status: mixed` means a worker missed the last redeploy. Checklist: [../harbor-delegation-multiworker/testing.md](../harbor-delegation-multiworker/testing.md).
 
 If the job still uses `deepseek-chat`, on the **cloud root** session after `git pull`:
 
@@ -342,6 +345,29 @@ mac-k3d config -c ~/.config/mac-k3d/config.yaml --skip-secrets
 **Checkpoint — paste:** Jenkins build URL / console tail, artifact name, schema OK.
 
 E8 (N>1) is optional after E7.
+
+---
+
+## Export, import and set in this lab
+
+Product steps: [export-import.md](../export-import.md). This lab's files:
+
+| File | Where |
+|------|-------|
+| Controller `config.yaml` | The cloud VM (`ssh root@43.107.42.252`); binary `/root/.local/bin/mac-k3d` |
+| Worker `worker.yaml` | This PC (`linux-Michael-Ubuntu`); binary `~/.local/bin/mac-k3d` |
+| `.env` with `DEEPSEEK_API_KEY` | This PC only, so run `mac-k3d set --check-models` here, not on the cloud |
+
+Checked here:
+
+- **2026-10-12, controller job defaults** (Situation 2a): export, `set --model deepseek-flash --benchmark deepswe --task vulture-persistent-analysis-cache`, import `--force`, `config --skip-secrets`. It printed `Keeping existing Jenkins credential binds (2 id(s))` and `Updated job` for all nine.
+- **CPU limit on this PC:** the live value is `4` (2 executors). Setting `2` gave `executors-1` and `fits-deepswe` and pruned `core-3` and `core-4`; putting `4` back restored them. Both runs ended `Config complete` and `Jenkins agent unchanged, left running`.
+- **File-only scratch on this PC:** the node name `linux-Michael-Ubuntu` and a leftover `default_task: ruff_1` were kept; the live agent was not touched.
+
+Rules for this lab:
+
+- Never `import --force` onto this PC's live `worker.yaml`: it holds the agent token.
+- Leave the cloud worker at `cpu_cores: 16`, and send it no evals, until its Docker store is repaired.
 
 ---
 

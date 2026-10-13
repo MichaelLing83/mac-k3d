@@ -8,6 +8,7 @@ These pages are **this team’s copy-paste checklists** (cloud IP, this PC, sign
 |------|-----|
 | [testing-eval-pipeline.md](testing-eval-pipeline.md) | E0–E8 / pipeline phases |
 | [cloud-eval-runbook.md](cloud-eval-runbook.md) | This lab’s controller IP + worker |
+| [mac-mini-worker.md](mac-mini-worker.md) | Onboard a Mac mini worker, then compare it with the Linux worker on the same questions |
 | [testing-binary-initializer.md](testing-binary-initializer.md) | Bootstrap Task 0–8 |
 | [clean-machine-binary-test.md](clean-machine-binary-test.md) | Wipe or new PC |
 | [question-coverage.md](question-coverage.md) | Questions run on this worker, and Docker memory per question |

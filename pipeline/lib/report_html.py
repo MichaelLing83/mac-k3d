@@ -380,11 +380,16 @@ def _provenance_html(doc: dict) -> str:
     if view["shards"]:
         items.extend(_esc(line) for line in shard_worker_lines(view))
     else:
-        items.append(
+        worker = (
             f"Worker node {_esc(cell(view['node']))}, nproc {_esc(cell(view['nproc']))},"
             f" memory_kb {_esc(cell(view['memory_kb']))}, docker {_esc(cell(view['docker_version']))},"
             f" kernel {_esc(cell(view['kernel']))}, cpu {_esc(cell(view['cpu_model']))}"
         )
+        if view["os"]:
+            worker += f", os {_esc(view['os'])}"
+        if view["containers"]:
+            worker += f", containers {_esc(view['containers'])}"
+        items.append(worker)
     items.append(f"Requester {_esc(cell(view['user']))} {_esc(cell(view['build_url']))}")
     if view["transcripts"]:
         items.append(_esc(view["transcripts"]))

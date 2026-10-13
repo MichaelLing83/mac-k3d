@@ -10,7 +10,7 @@ Use this document to **verify** a prebuilt `mac-k3d` on macOS and Linux.
 
 If live YAML already exists, `setup` shows **Config already exists** (Validate). To test as a **new user**, wipe first (Task 8a), then follow Task 8b / [clean-machine-binary-test.md](clean-machine-binary-test.md).
 
-Related design: [prepare-wizard.md](../prepare-wizard.md), [setup.md](../setup.md), [commands.md](../commands.md).
+Related design: [setup.md](../setup.md#wizard-questions), [commands.md](../commands.md).
 
 ### Which document
 
@@ -33,7 +33,7 @@ Turn a new Linux or Mac into a Jenkins **controller** or **worker** by downloadi
 | **Worker host** | Jenkins inbound agent | `setup -c worker.yaml` then `config` (not `start`) |
 | **Dual config** | One binary, two YAML files, no clobber | `-c config.yaml` vs `-c worker.yaml` |
 
-Constants used below: tag `v0.4.0-rc.4`, repo `~/Documents/Toby/mac-k3d`, `PATH="$HOME/.local/bin:$PATH"`. Prefer a **pre-release** if GitHub Latest is still v0.3.0.
+Constants used below: tag `v0.5.3`, repo `~/Documents/Toby/mac-k3d`, `PATH="$HOME/.local/bin:$PATH"`.
 
 Do not commit Jenkins passwords or API tokens.
 
@@ -72,7 +72,7 @@ command:
 
 ```bash
 cd ~/Documents/Toby/mac-k3d
-export MAC_K3D_RELEASE_TAG=v0.4.0-rc.4
+export MAC_K3D_RELEASE_TAG=v0.5.3
 ./scripts/env_set_up/01_download_binary.sh
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
@@ -248,17 +248,17 @@ expected results:
 
 ## Task 7 — Intel Mac asset (`mac-k3d-darwin-x86_64`)
 
-Purpose: check tag `v0.4.0-rc.4` publishes all four OS/arch assets and `mac-k3d-darwin-x86_64` is Mach-O **x86_64** (not arm64). Runs on Linux; no Intel Mac required for 7a/7b.
+Purpose: check tag `v0.5.3` publishes all four OS/arch assets and `mac-k3d-darwin-x86_64` is Mach-O **x86_64** (not arm64). Runs on Linux; no Intel Mac required for 7a/7b.
 
 The Intel binary is **cross-compiled** on GitHub `macos-latest` (`x86_64-apple-darwin`). It is **not** built on `macos-13`.
 
 command:
 
 ```bash
-gh release view v0.4.0-rc.4 --repo Toby-Yu/mac-k3d --json assets --jq '.assets[].name'
+gh release view v0.5.3 --repo Toby-Yu/mac-k3d --json assets --jq '.assets[].name'
 
 cd /tmp
-gh release download v0.4.0-rc.4 --repo Toby-Yu/mac-k3d --pattern mac-k3d-darwin-x86_64 --clobber
+gh release download v0.5.3 --repo Toby-Yu/mac-k3d --pattern mac-k3d-darwin-x86_64 --clobber
 file ./mac-k3d-darwin-x86_64
 ```
 
@@ -290,12 +290,27 @@ mac-k3d teardown -c ~/.config/mac-k3d/worker.yaml --deregister-agent 2>/dev/null
 mac-k3d clean -c ~/.config/mac-k3d/worker.yaml --yes 2>/dev/null || true
 mac-k3d teardown -c ~/.config/mac-k3d/config.yaml 2>/dev/null || true
 mac-k3d clean -c ~/.config/mac-k3d/config.yaml --yes 2>/dev/null || true
+```
 
+Remove the agent service. **Linux:**
+
+```bash
 systemctl --user stop mac-k3d-jenkins-agent.service 2>/dev/null || true
 systemctl --user disable mac-k3d-jenkins-agent.service 2>/dev/null || true
 rm -f ~/.config/systemd/user/mac-k3d-jenkins-agent.service
 systemctl --user daemon-reload 2>/dev/null || true
+```
 
+**macOS:**
+
+```bash
+launchctl bootout "gui/$(id -u)/com.mac-k3d.jenkins-agent" 2>/dev/null || true
+rm -f ~/Library/LaunchAgents/com.mac-k3d.jenkins-agent.plist
+```
+
+Then on both:
+
+```bash
 mkdir -p ~/.config/mac-k3d
 [ -f ~/.config/mac-k3d/config.yaml ] && mv -f ~/.config/mac-k3d/config.yaml ~/.config/mac-k3d/config.yaml.bak
 [ -f ~/.config/mac-k3d/worker.yaml ] && mv -f ~/.config/mac-k3d/worker.yaml ~/.config/mac-k3d/worker.yaml.bak
@@ -339,7 +354,7 @@ command:
 ```bash
 cd ~/Documents/Toby/mac-k3d
 export PATH="$HOME/.local/bin:$PATH"
-export MAC_K3D_RELEASE_TAG=v0.4.0-rc.4
+export MAC_K3D_RELEASE_TAG=v0.5.3
 ./scripts/env_set_up/01_download_binary.sh
 which mac-k3d
 mac-k3d --version
@@ -415,7 +430,7 @@ Purpose: check the Apple Silicon Release asset runs in Terminal.app, the same wi
 command:
 
 ```bash
-# download mac-k3d-darwin-aarch64 from tag v0.4.0-rc.4
+# download mac-k3d-darwin-aarch64 from tag v0.5.3
 xattr -d com.apple.quarantine ./mac-k3d-darwin-aarch64
 chmod +x ./mac-k3d-darwin-aarch64
 ./mac-k3d-darwin-aarch64 --help

@@ -33,6 +33,11 @@ have docker || die "docker not on PATH"
 docker info >/dev/null 2>&1 || die "docker info failed (no Server / permission). Log out/in on Linux or open Docker Desktop on macOS."
 warn_docker_mtu
 
+# DeepSWE's and SWE-bench Pro's images are linux/amd64 only.
+if task_platform_emulated; then
+  ensure_platform_runs "$(task_container_platform)"
+fi
+
 MAC_K3D_BIN="${MAC_K3D_BIN:-}"
 if [ -z "$MAC_K3D_BIN" ]; then
   if have mac-k3d; then
