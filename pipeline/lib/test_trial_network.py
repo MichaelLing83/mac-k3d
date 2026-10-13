@@ -971,6 +971,21 @@ class OwnerSweepTests(unittest.TestCase):
             self.assertTrue(tn.owner_alive({"pid": os.getpid(), "started": tn.process_start(os.getpid())}))
             self.assertFalse(tn.owner_alive({"pid": 1 << 30, "started": "gone"}))
 
+    def test_a_live_owner_is_seen_without_proc_or_ps_on_path(self):
+        real_is_file = Path.is_file
+
+        def no_proc(self):
+            if str(self).startswith("/proc/"):
+                return False
+            return real_is_file(self)
+
+        with mock.patch.object(Path, "is_file", no_proc), mock.patch.dict(os.environ, {"PATH": "/no/such/bin"}):
+            token = tn.process_start(os.getpid())
+            self.assertTrue(token)
+            self.assertEqual(tn.process_start(os.getpid()), token)
+            self.assertTrue(tn.owner_alive({"pid": os.getpid(), "started": token}))
+            self.assertFalse(tn.owner_alive({"pid": 1 << 30, "started": "gone"}))
+
     def test_sweep_prints_one_line_when_nothing_is_left(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

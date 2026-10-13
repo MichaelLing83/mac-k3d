@@ -451,11 +451,17 @@ def process_start(pid: int) -> str | None:
         fields = text[end + 2 :].split() if end >= 0 else []
         # Field 22 (starttime) is index 19 of the fields that follow comm.
         return fields[19] if len(fields) > 19 else None
-    rc, out, _ = run(["ps", "-o", "lstart=", "-p", str(pid)])
-    if rc != 0:
-        return None
-    token = out.strip()
-    return token or None
+    # `ps` on PATH, then the usual absolute paths. A caller can put only a
+    # fake docker on PATH (the trial-network tests do); the live owner must
+    # still be recognized on macOS, which has no /proc.
+    for binary in ("ps", "/bin/ps", "/usr/bin/ps"):
+        rc, out, err = run([binary, "-o", "lstart=", "-p", str(pid)])
+        if rc == 0:
+            token = out.strip()
+            return token or None
+        if rc is not None or "timed out" in err:
+            return None
+    return None
 
 
 def write_owner(path: Path) -> None:
