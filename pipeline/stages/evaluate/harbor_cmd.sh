@@ -11,8 +11,9 @@
 #                      container and network under a jobs dir, and the env file
 #   write_harbor_env   the 0600 --env-file with the model key and settings,
 #                      removed when the step's shell exits
-#   build_run_cmd      iCode: every selected task x N_ROLLOUTS trials, one job
-#   build_canary_cmd   canary: one trial with iCode's exact flags, mounts and env
+#   build_run_cmd      the harness (harness.py agent): every selected task x
+#                      N_ROLLOUTS trials, one job
+#   build_canary_cmd   canary: one trial with the harness's exact flags, mounts and env
 #   build_env_check_cmd  environment check: one oracle or nop trial of one
 #                      question; no model, no mounts, no key
 #   masked_cmd         the current command with secret values replaced by ***
@@ -21,7 +22,7 @@
 # The commands set `cmd`, `unit_run_dir` (where harbor runs), `unit_task_path`
 # (its -p), `unit_jobs` and `unit_log`.
 
-# Clone tokens are for tasks/icode on the host. Harbor hands its own
+# Clone tokens are for tasks/harness on the host. Harbor hands its own
 # environment to docker compose, so none of them may reach a trial.
 unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT MAC_K3D_GIT_TOKEN
 
@@ -64,7 +65,9 @@ load_eval_state() {
   [ "${#TASK_IDS[@]}" -gt 0 ] || die "no task under $TASKS_DIR (wanted ${TASK:-<empty>})"
   [ -s "$WORKDIR/agent_mounts.json" ] || die "run tasks/isolation first (missing $WORKDIR/agent_mounts.json)"
   MOUNTS_JSON="$(cat "$WORKDIR/agent_mounts.json")"
-  HOST_ICODE="$(icode_host_root)"
+  HOST_ICODE="$(harness_host_root)"
+  RUN_AGENT="$(python3 "$PIPELINE_LIB/harness.py" get "$HARNESS" agent)" || die "unknown HARNESS=$HARNESS"
+  CANARY_AGENT="$(python3 "$PIPELINE_LIB/harness.py" get "$HARNESS" canary)" || die "unknown HARNESS=$HARNESS"
   AGENT_HOSTS=()
   while IFS= read -r line || [ -n "$line" ]; do
     AGENT_HOSTS+=("$line")
@@ -156,8 +159,8 @@ build_run_cmd() {
   for tid in "${TASK_IDS[@]}"; do
     cmd+=(-i "$tid")
   done
-  cmd+=(-a "icode_harbor_agent:ICodeAgent")
-  cmd+=(--job-name "icode_${BENCHMARK:-deepswe}_${BUILD_NUMBER:-local}")
+  cmd+=(-a "$RUN_AGENT")
+  cmd+=(--job-name "${HARNESS}_${BENCHMARK:-deepswe}_${BUILD_NUMBER:-local}")
   cmd+=(--jobs-dir "$JOBS_DIR")
   cmd+=(--no-delete)
   cmd+=(-k "$N_ROLLOUTS")
@@ -182,7 +185,7 @@ build_canary_cmd() {
   cmd=(harbor run)
   cmd+=(-p "$unit_task_path")
   cmd+=(-i "$tid")
-  cmd+=(-a "canary_harbor_agent:CanaryAgent")
+  cmd+=(-a "$CANARY_AGENT")
   cmd+=(--job-name "${tid}_canary_${BUILD_NUMBER:-local}")
   cmd+=(--jobs-dir "$unit_jobs")
   cmd+=(--no-delete)
@@ -268,6 +271,13 @@ append_agent_flags() {
   cmd+=(--ae "ICODE_MAX_TOKENS=${ICODE_MAX_TOKENS}")
   cmd+=(--ae "ICODE_MAX_ITERATIONS=${ICODE_MAX_ITERATIONS}")
   cmd+=(--ae "PYTHONDONTWRITEBYTECODE=1")
+  if [ "$HARNESS" = jiuwenswarm ]; then
+    cmd+=(--ae "JIUWENSWARM_AGENT_MODE=${JIUWENSWARM_AGENT_MODE}")
+    cmd+=(--ae "JIUWENSWARM_MAX_TURNS=${JIUWENSWARM_MAX_TURNS}")
+    if [ -n "${JIUWENSWARM_TIMEOUT_SECONDS:-}" ]; then
+      cmd+=(--ae "JIUWENSWARM_TIMEOUT_SECONDS=${JIUWENSWARM_TIMEOUT_SECONDS}")
+    fi
+  fi
   cmd+=(--ae "DEEPSEEK_MODEL=${DEEPSEEK_MODEL}")
   cmd+=(--ae "MAC_K3D_BENCHMARK=${BENCHMARK:-deepswe}")
   if [ -n "${REPO_CANDIDATES:-}" ]; then

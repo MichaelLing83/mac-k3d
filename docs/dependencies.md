@@ -90,6 +90,7 @@ Current pins:
 | linux/amd64 on an arm64 host | QEMU binfmt (`docker run --privileged --rm tonistiigi/binfmt --install amd64`) | Docker Desktop's Rosetta (Settings > General) |
 | iCode release drop | `icode-linux-<task container arch>-full-v*`, picked by ELF header | the same; upload a `.tar.gz` holding both Linux drops |
 | iCode git-mode runtime | `uv sync` on the host when its CPU type matches the containers, else in `ICODE_LINUX_BUILD_IMAGE` | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform |
+| JiuwenSwarm runtime | always in `ICODE_LINUX_BUILD_IMAGE` on the task platform | the same |
 | uv cache for the container build | `~/.local/share/mac-k3d/uv-cache-linux-<arch>` | the same |
 
 The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The lab trial that runs the same questions on a Linux and a Mac worker and compares them is [testing/mac-mini-worker.md](testing/mac-mini-worker.md); it has not been run yet.
@@ -100,7 +101,8 @@ The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The 
 |-----------|---------|---------|-----------------|--------------|------------|
 | Host scripts (`pipeline/lib/*.py`) | standard library only; `capture_receipt.py` and `canary_verdict.py` need `tomllib` | `PYTHON_MIN=3.11` | `toolchain.env` | python3 on the worker | `env/host.sh` |
 | PyYAML | any | floating | — | not installed by mac-k3d | `harness_labels.py` imports it only when it reads a harness YAML |
-| Harbor agent modules (`patch_harbor_agent.py`, `canary_harbor_agent.py`) | import `harbor` | follows `HARBOR_VERSION` | `toolchain.env` | Harbor's own uv environment | `harbor run` |
+| Harbor agent modules (`patch_harbor_agent.py`, `canary_harbor_agent.py`, `icode_harbor_agent.py`, `jiuwenswarm_harbor_agent.py`) | import `harbor` | follows `HARBOR_VERSION` | `toolchain.env` | Harbor's own uv environment | `tasks/agent.sh`, `harbor run` |
+| In-trial JiuwenSwarm scripts (`jiuwenswarm_trial.py`, `jiuwenswarm_usage.py`) | the bundle's CPython 3.11 | follows the bundle | the bundle's `runtime.json` | uploaded into each trial by `JiuwenSwarmAgent` | the JiuwenSwarm canary's `seed` probe |
 
 ## Benchmarks and system under test
 
@@ -109,7 +111,10 @@ The code and the CI tests (`ubuntu-latest` and `macos-latest`) cover macOS. The 
 | DeepSWE | `DEEPSWE_REF=0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea` | pinned | `_common.sh` | `tasks/benchmark.sh` (git) | checkout at the ref |
 | LoLBench | `LOLBENCH_REF=1b10d10bb4a10cea54374ac34b8f76b69dc8ce75` | pinned | `_common.sh` | `tasks/benchmark.sh` (git) | checkout at the ref |
 | SWE-bench Pro | default branch of `SWEBENCHPRO_GIT_URL` (`--depth 1`) | **not pinned** (known gap) | `_common.sh` | `tasks/benchmark.sh` | — |
-| iCode (system under test) | the git ref or release drop the job selects (default PR 2) | recorded, not pinned | the checkout HEAD, or the release file's sha256 | Jenkins upload or git clone (`tasks/icode`) | the console line `iCode under test:` and `eval_protocol.icode` |
+| iCode (system under test) | the git ref or release drop the job selects (default PR 2) | recorded, not pinned | the checkout HEAD, or the release file's sha256 | Jenkins upload or git clone (`tasks/harness`) | the console line `iCode under test:` and `eval_protocol.icode` |
+| JiuwenSwarm (system under test, DeepSWE only) | the git ref or release the job selects (default PR 2 of `michaelling/jiuwenswarm`) | recorded, not pinned | the checkout HEAD, or the release file's sha256 | Jenkins upload or git clone (`tasks/harness`, `jiuwenswarm_input.sh`) | the console line `JiuwenSwarm under test:` and `eval_protocol.harness` |
+| JiuwenSwarm's Python and dependencies | CPython 3.11 (`JIUWENSWARM_PYTHON`), wheels for `manylinux_2_28`; `uv sync --frozen` from the commit's `uv.lock`, including `openjiuwen` (`openJiuwen/agent-core`) and `gateway-protocol` (`openJiuwen/agent-protocol`) pinned by commit on gitcode | pinned by the JiuwenSwarm commit's `uv.lock` (git mode); a wheel's dependencies float on PyPI, a wheelhouse brings its own | `uv.lock`; the bundle's `freeze.txt` records what was installed | `jiuwenswarm_build.sh` in `ICODE_LINUX_BUILD_IMAGE`, with uv's cache per platform under `MAC_K3D_SHARE` | the build's probes, the JiuwenSwarm canary, and `bundle.json`'s `freeze` |
+| Harness bundle | the sha256 of the prepared tree's tarball | pinned per run: every shard runs the dispatcher's sha256 | `bundle.json`, `entry.json` in the [harness store](pipeline.md#harness-store) | `Prepare harness` (dispatcher), `tasks/harness` | `harness_store.py get` re-checks the tree digest on every use; `aggregate_runs.py` flags two bundles on one platform |
 | Task images | per task (`docker_image` in `task.toml`); on an arm64 worker DeepSWE uses a native build `mac-k3d/deepswe-native:<id>` of `environment/Dockerfile` on `DEEPSWE_BASE_IMAGE` | per task: the benchmark ref, plus the base digest for a native build | the benchmark checkout, `toolchain.env` | Harbor pulls DeepSWE's published images and SWE-bench Pro's; `mac-k3d eval prepare` builds DeepSWE natively on a Mac; `tasks/images.sh` builds LoLBench | DeepSWE on a Mac: Harbor's oracle and nop agents once per native build (`mac-k3d eval prepare`, `env_check.py`), stored under `~/.local/share/mac-k3d/env-check/`; each eval records native or emulated and why in `eval_protocol.env_check`; a native question needs a stored pass, and the image platform must match the task containers (`check_report.py`) |
 
 ## Sandbox config

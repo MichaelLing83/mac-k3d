@@ -87,7 +87,8 @@ class VerdictFixtureTests(unittest.TestCase):
         got = statuses(result)
         self.assertEqual(result["status"], "pass", result["checks"])
         self.assertEqual(got["tool_list"], "skip")
-        self.assertEqual({k for k, v in got.items() if v != "pass"}, {"tool_list"})
+        # iCode's install runs `icode --help`; it has no runtime probes.
+        self.assertEqual({k for k, v in got.items() if v != "pass"}, {"tool_list", "runtime"})
         self.assertEqual(set(got), set(CHECKS))
 
     def test_each_leak_fixture_fails_only_its_check(self):

@@ -14,11 +14,22 @@ const DESC_ICODE_RELEASE_FILE: &str = "Release: choose the icode / icode-*-full-
 const DESC_ICODE_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, this is required.";
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
-const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or gitcode.com). Every shard clones it; an uploaded release cannot be handed on to the shards.";
+const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or gitcode.com). Prepare harness builds it once; every shard runs that build.";
+const DESC_JIUWENSWARM_MODE: &str = "Choose git (clone URL + ref; built for the task containers' Linux) or release (upload a file). Fill only the fields for that choice; leave the other group as it is.";
+const DESC_JIUWENSWARM_RELEASE_FILE: &str = "Release: a JiuwenSwarm wheel (.whl), a wheelhouse .tar.gz (wheelhouse/*.whl, installed offline), or the harness bundle.tar.gz an earlier run archived. mac-k3d tells them apart by content. Git: do not choose a file.";
+const DESC_JIUWENSWARM_GIT_URL: &str = "Git: JiuwenSwarm https URL on github.com or gitcode.com. A private gitcode repo uses the controller's gitcode-pat credential, never a token in the URL. Release: leave it as it is.";
+const DESC_JIUWENSWARM_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: leave it as it is.";
+const DESC_JIUWENSWARM_GIT_REF_KIND: &str = "Git: branch, tag, commit or pr. For pr, REF is the pull-request number. Release: leave it as it is.";
+const DESC_JIUWENSWARM_AGENT_MODE: &str = "The jiuwenswarm-process mode each rollout runs: agent.code.normal or agent.code.plan. Team mode does not run headless.";
+const DESC_JIUWENSWARM_MAX_TURNS: &str = "Most model calls one rollout may make: 1 to 1000 (JiuwenSwarm's own limit).";
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
-const DESC_ICODE_RELEASE_FROM: &str = "Set by some_task or full_suite_task: job#build that archived the uploaded iCode release. Empty on a direct build.";
-const DESC_ICODE_RELEASE_SHA256: &str = "Set with ICODE_RELEASE_FROM: sha256 of that release. The shard stops if the copied file differs.";
+const DESC_ICODE_RELEASE_SHA256: &str = "Set by some_task or full_suite_task: sha256 of the uploaded iCode release. The shard stops if its harness bundle records another.";
 const DESC_ICODE_GIT_SHA: &str = "Set by some_task or full_suite_task: the commit every shard checks out. Empty on a direct build, which resolves the git form itself.";
+const DESC_HARNESS_BUNDLE_FROM: &str = "Set by the dispatcher: job#build that archived the harness bundle it prepared. A shard copies it only when this worker's harness store does not hold it. Empty on a direct build.";
+const DESC_HARNESS_BUNDLE_SHA256: &str = "Set with HARNESS_BUNDLE_FROM: the bundle's sha256. The shard uses that bundle and no other.";
+const DESC_JIUWENSWARM_GIT_SHA: &str = "Set by the dispatcher: the JiuwenSwarm commit every shard runs. Empty on a direct build, which resolves the git form itself.";
+const DESC_JIUWENSWARM_RELEASE_FROM: &str = "Set by the dispatcher: job#build that archived the uploaded JiuwenSwarm release, for a shard whose task platform needs its own build. Empty on a direct build.";
+const DESC_JIUWENSWARM_RELEASE_SHA256: &str = "Set by the dispatcher: sha256 of the uploaded JiuwenSwarm release. The shard stops if its harness records another.";
 const DESC_MAX_IN_FLIGHT: &str = "Builds of this run in the Jenkins queue at once, running or waiting. 0 counts 2 x the online executors that can run this suite. The rest wait in this build's list.";
 const DESC_OOM_RETRIES: &str = "How many times a rollout that ran out of memory is put back at the end of the queue. 2 means three tries in all.";
 const DESC_ROLLOUT: &str = "Set by some_task or full_suite_task: which attempt number of this question, from 1. 1 on a direct build.";
@@ -54,8 +65,24 @@ const FORWARDED_PARAMS: &[&str] = &[
     "LOLBENCH_REF",
     "ICODE_MODE",
     "DEEPSEEK_MODEL",
+    "JIUWENSWARM_MODE",
+    "JIUWENSWARM_GIT_URL",
+    "JIUWENSWARM_GIT_REF",
+    "JIUWENSWARM_GIT_REF_KIND",
+    "JIUWENSWARM_AGENT_MODE",
+    "JIUWENSWARM_MAX_TURNS",
     "TEST_MEMORY_MB",
     "TEST_MEMORY_ATTEMPTS",
+];
+
+/// Set by the dispatcher's Prepare harness stage on every shard: the identity
+/// its bundle must record. A shard job without the parameter is not sent it.
+const SHARD_PINS: &[&str] = &[
+    "ICODE_RELEASE_SHA256",
+    "ICODE_GIT_SHA",
+    "JIUWENSWARM_GIT_SHA",
+    "JIUWENSWARM_RELEASE_FROM",
+    "JIUWENSWARM_RELEASE_SHA256",
 ];
 
 /// What a job is for. `one_task` is the only shape that evaluates; the other
@@ -69,7 +96,14 @@ pub enum JobShape {
     Some_,
     /// Dispatcher over the whole suite.
     FullSuite,
+    /// `build_jiuwenswarm_headless`: the JiuwenSwarm dispatcher on DeepSWE,
+    /// over a list (TASKS) or the first N (N_TASKS, all by default). Its
+    /// shards are `deepswe_one_task` builds with HARNESS=jiuwenswarm.
+    Headless,
 }
+
+/// The JiuwenSwarm entry job, written by `mac-k3d config` like the suite jobs.
+pub const JIUWENSWARM_HEADLESS: &str = "build_jiuwenswarm_headless";
 
 impl JobShape {
     fn suffix(self) -> &'static str {
@@ -77,6 +111,7 @@ impl JobShape {
             JobShape::One => "one_task",
             JobShape::Some_ => "some_task",
             JobShape::FullSuite => "full_suite_task",
+            JobShape::Headless => "headless",
         }
     }
 
@@ -114,8 +149,12 @@ impl UiProfile {
 }
 
 /// `deepswe_one_task`, `lolbench_some_task`, `swebenchpro_full_suite_task`, …
+/// and `build_jiuwenswarm_headless`.
 pub fn eval_job_name(job_benchmark: &str, shape: JobShape) -> String {
-    format!("{job_benchmark}_{}", shape.suffix())
+    match shape {
+        JobShape::Headless => JIUWENSWARM_HEADLESS.into(),
+        _ => format!("{job_benchmark}_{}", shape.suffix()),
+    }
 }
 
 fn benchmark_label(job_benchmark: &str) -> &'static str {
@@ -127,7 +166,7 @@ fn benchmark_label(job_benchmark: &str) -> &'static str {
     }
 }
 
-/// Jenkins job blurb. Same eval goal on every suite: iCode harness plus an LLM call.
+/// Jenkins job blurb. Same eval goal on every suite: a harness plus an LLM call.
 fn job_description(job_benchmark: &str) -> String {
     let label = benchmark_label(job_benchmark);
     let extra = if job_benchmark == "swebenchpro" {
@@ -135,8 +174,13 @@ fn job_description(job_benchmark: &str) -> String {
     } else {
         ""
     };
+    let harness = if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
+        "a harness (HARNESS: iCode or JiuwenSwarm)"
+    } else {
+        "the iCode harness"
+    };
     format!(
-        "Evaluate the iCode harness with an LLM call on one {label} task. Harbor runs iCode plus the DeepSeek catalog model, then the same model with no harness.{extra} See docs/user-guide.md."
+        "Evaluate {harness} with an LLM call on one {label} task. Harbor runs the harness plus the DeepSeek catalog model, then the same model with no harness.{extra} See docs/user-guide.md."
     )
 }
 
@@ -145,20 +189,29 @@ fn shape_description(job_benchmark: &str, shape: JobShape) -> String {
     let size = full_suite_size(job_benchmark);
     let shard_job = eval_job_name(job_benchmark, JobShape::One);
     match shape {
-        JobShape::One => format!(
-            "{} It also runs each shard of {job_benchmark}_some_task and {job_benchmark}_full_suite_task; those builds say so in their description.",
-            job_description(job_benchmark)
-        ),
+        JobShape::One => {
+            let readers = shard_readers(job_benchmark);
+            let (last, rest) = readers.split_last().expect("every suite has dispatchers");
+            format!(
+                "{} It also runs each shard of {} and {last}; those builds say so in their description.",
+                job_description(job_benchmark),
+                rest.join(", ")
+            )
+        }
         JobShape::Some_ => format!(
             "Evaluate the iCode harness on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/user-guide.md."
         ),
         JobShape::FullSuite => format!(
             "Run the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/harbor-delegation-multiworker/README.md."
         ),
+        JobShape::Headless => format!(
+            "Evaluate the JiuwenSwarm harness on {label}: a list of questions (TASKS), or else the first N_TASKS (all {size} by default), at N_ROLLOUTS attempts each. Prepare harness builds JiuwenSwarm once from JIUWENSWARM_MODE (a git ref, or an uploaded .whl, wheelhouse .tar.gz or mac-k3d bundle); each question and rollout is one {shard_job} build that runs that bundle. This build merges them into one report. See docs/jiuwenswarm-harness-inputs.md."
+        ),
     }
 }
 
-fn full_suite_size(job_benchmark: &str) -> u32 {
+/// Questions in the whole suite, the default N_TASKS of a full-suite run.
+pub fn full_suite_size(job_benchmark: &str) -> u32 {
     match job_benchmark {
         "deepswe" => 113,
         "lolbench" => 20,
@@ -188,6 +241,9 @@ fn n_tasks_param_description(job_benchmark: &str, shape: JobShape) -> String {
         JobShape::FullSuite => format!(
             "How many questions of the suite to run, lowest ids first. The full suite is {size}; lower it for a rehearsal."
         ),
+        JobShape::Headless => format!(
+            "Used only when TASKS is empty: the first N sorted question ids. The default, {size}, is the whole suite."
+        ),
         _ => format!(
             "Used only when TASKS is empty: the first N sorted question ids. Full suite is {size}; use the full_suite_task job for all of them."
         ),
@@ -196,13 +252,40 @@ fn n_tasks_param_description(job_benchmark: &str, shape: JobShape) -> String {
 
 fn benchmark_param_description(job_benchmark: &str) -> String {
     format!(
-        "The benchmark this job evaluates the iCode harness on: {}. Fixed for this job; run another suite job to use a different benchmark.",
+        "The benchmark this job evaluates the harness on: {}. Fixed for this job; run another suite job to use a different benchmark.",
         benchmark_label(job_benchmark)
     )
 }
 
-fn harness_param_description() -> &'static str {
-    "The harness this job evaluates. Fixed so every build names what it tested; to change it run mac-k3d set --harness on the controller, then mac-k3d config --skip-secrets."
+fn harness_param_description(choices: &[&str], shape: JobShape) -> String {
+    if choices.len() > 1 {
+        return format!(
+            "The harness this build evaluates: {}. The first is the controller's default (mac-k3d set --harness). A dispatcher's shards always run its own harness.",
+            choices.join(" or ")
+        );
+    }
+    match shape {
+        JobShape::Headless => "The harness this job evaluates: JiuwenSwarm, on DeepSWE. For iCode use deepswe_some_task.".into(),
+        JobShape::Some_ | JobShape::FullSuite if eval_catalog::HARNESSES.len() > 1 => format!(
+            "The harness this job evaluates: iCode. For JiuwenSwarm on DeepSWE use {JIUWENSWARM_HEADLESS}."
+        ),
+        _ => "The harness this job evaluates. Fixed so every build names what it tested.".into(),
+    }
+}
+
+/// HARNESS on this job's page: a choice on a `one_task` whose benchmark more
+/// than one harness runs on, with the controller's default first when the
+/// benchmark runs it. Fixed on a dispatcher, whose page has that harness's
+/// inputs: the suite dispatchers iCode's, `build_jiuwenswarm_headless` JiuwenSwarm's.
+fn harness_choices<'a>(job_benchmark: &str, shape: JobShape, opts: &'a JobOpts) -> Vec<&'a str> {
+    match shape {
+        JobShape::One => eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness)
+            .into_iter()
+            .filter(|h| eval_catalog::harness_supports(h, job_benchmark))
+            .collect(),
+        JobShape::Headless => vec!["jiuwenswarm"],
+        JobShape::Some_ | JobShape::FullSuite => vec!["icode"],
+    }
 }
 
 fn llm_param_description() -> &'static str {
@@ -218,6 +301,9 @@ pub struct JobOpts {
     pub default_icode_git_url: String,
     pub default_icode_git_ref: String,
     pub default_icode_git_ref_kind: String,
+    pub default_jiuwenswarm_git_url: String,
+    pub default_jiuwenswarm_git_ref: String,
+    pub default_jiuwenswarm_git_ref_kind: String,
     pub default_icode_args: String,
     pub default_harness: String,
     pub default_llm: String,
@@ -294,6 +380,15 @@ impl JobOpts {
                 "tag" | "commit" | "pr" | "branch" => git_ref_kind.to_ascii_lowercase(),
                 _ => "pr".into(),
             },
+            default_jiuwenswarm_git_url: config.jenkins_job.default_jiuwenswarm_git_url.trim().to_string(),
+            default_jiuwenswarm_git_ref: match config.jenkins_job.default_jiuwenswarm_git_ref.trim() {
+                "" => "2".into(),
+                r => r.to_string(),
+            },
+            default_jiuwenswarm_git_ref_kind: {
+                let kind = config.jenkins_job.default_jiuwenswarm_git_ref_kind.trim().to_ascii_lowercase();
+                if eval_catalog::ICODE_GIT_REF_KINDS.contains(&kind.as_str()) { kind } else { "pr".into() }
+            },
             default_icode_args: config.jenkins_job.default_icode_args.clone(),
             default_harness: harness,
             default_llm: llm,
@@ -341,9 +436,10 @@ pub fn ensure_remote_trigger_token(
         Ok(()) => {
             let base = crate::runtime::jenkins::ui_url(config);
             println!(
-                "Remote build trigger enabled on all 9 jobs.\n\
+                "Remote build trigger enabled on all {} jobs.\n\
                  Token saved in {path_label} as jenkins.remote_trigger_token (export omits it).\n\
-                 Example: {base}/job/{DEEPSWE_ONE_TASK}/buildWithParameters?token={token}"
+                 Example: {base}/job/{DEEPSWE_ONE_TASK}/buildWithParameters?token={token}",
+                eval_jobs().len()
             );
         }
         Err(err) => {
@@ -560,6 +656,8 @@ fn eval_mode_choices(default_mode: &str) -> (&'static str, &'static str) {
     }
 }
 
+const GIT_PAT_CREDENTIALS: [&str; 2] = ["gitcode-pat", "github-pat"];
+
 /// Bind listed Jenkins credential IDs into the Pipeline. Empty IDs omit the block
 /// (`--skip-secrets` / `start` must pass IDs from `existing_ids_on_controller`, not `[]`).
 fn with_credentials_block(credential_ids: &[String]) -> (String, String) {
@@ -627,7 +725,7 @@ fn shape_defaults(opts: &JobOpts, job_benchmark: &str, shape: JobShape) -> (Stri
             (task, 1, String::new(), 1)
         }
         JobShape::Some_ => (String::new(), n_tasks.max(2), tasks, rollouts),
-        JobShape::FullSuite => (
+        JobShape::FullSuite | JobShape::Headless => (
             String::new(),
             full_suite_size(job_benchmark),
             String::new(),
@@ -716,6 +814,37 @@ fn text_param(name: &'static str, default: impl ToString, description: &str, sho
     }
 }
 
+/// JiuwenSwarm's inputs (mode, release upload, git URL / ref / kind) and its
+/// run settings (agent mode, max turns), each shown as `show` says.
+fn jiuwenswarm_params(opts: &JobOpts, show: Show) -> (Vec<ParamSpec>, Vec<ParamSpec>) {
+    let kinds = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_jiuwenswarm_git_ref_kind,
+    );
+    let inputs = vec![
+        choice_param("JIUWENSWARM_MODE", eval_catalog::JIUWENSWARM_MODES, DESC_JIUWENSWARM_MODE, show),
+        ParamSpec {
+            name: "JIUWENSWARM_RELEASE_FILE",
+            kind: ParamKind::StashedFile,
+            description: DESC_JIUWENSWARM_RELEASE_FILE.into(),
+            show,
+        },
+        text_param("JIUWENSWARM_GIT_URL", opts.default_jiuwenswarm_git_url.trim(), DESC_JIUWENSWARM_GIT_URL, show),
+        text_param("JIUWENSWARM_GIT_REF", &opts.default_jiuwenswarm_git_ref, DESC_JIUWENSWARM_GIT_REF, show),
+        choice_param("JIUWENSWARM_GIT_REF_KIND", &kinds, DESC_JIUWENSWARM_GIT_REF_KIND, show),
+    ];
+    let settings = vec![
+        choice_param("JIUWENSWARM_AGENT_MODE", eval_catalog::JIUWENSWARM_AGENT_MODES, DESC_JIUWENSWARM_AGENT_MODE, show),
+        text_param(
+            "JIUWENSWARM_MAX_TURNS",
+            eval_catalog::JIUWENSWARM_MAX_TURNS_DEFAULT,
+            DESC_JIUWENSWARM_MAX_TURNS,
+            show,
+        ),
+    ];
+    (inputs, settings)
+}
+
 /// Every parameter of one job, in display order. HARNESS / LLM / BENCHMARK come
 /// first on every shape and profile so a build always says what it evaluates.
 fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<ParamSpec> {
@@ -727,11 +856,14 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
         eval_catalog::ICODE_GIT_REF_KINDS,
         &opts.default_icode_git_ref_kind,
     );
+    let harnesses = harness_choices(job_benchmark, shape, opts);
     let mut p = vec![
-        choice_param("HARNESS", &[opts.default_harness.as_str()], harness_param_description(), Always),
+        choice_param("HARNESS", &harnesses, &harness_param_description(&harnesses, shape), Always),
         choice_param("LLM", &[opts.default_llm.as_str()], llm_param_description(), Always),
         choice_param("BENCHMARK", &[job_benchmark], &benchmark_param_description(job_benchmark), Always),
     ];
+    // The JiuwenSwarm job has its inputs in place of iCode's.
+    let icode_inputs = shape != JobShape::Headless;
     match shape {
         JobShape::One => {
             p.push(text_param("TASK", task, &task_param_description(job_benchmark), Always));
@@ -751,7 +883,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
                 show: Always,
             });
         }
-        JobShape::Some_ => {
+        JobShape::Some_ | JobShape::Headless => {
             p.push(text_param("TASKS", tasks, DESC_TASKS, Always));
             p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Always));
         }
@@ -764,6 +896,8 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             &format!("Attempts per question. Default {n_rollouts}. Every shard uses the same value, and pass@k is reported up to this k."),
             Always,
         ));
+    }
+    if shape.is_dispatcher() && icode_inputs {
         p.push(choice_param(
             "ICODE_MODE",
             &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
@@ -777,11 +911,26 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             show: Always,
         });
     }
-    let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
-    p.push(text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Always));
-    p.push(text_param("ICODE_GIT_REF", &opts.default_icode_git_ref, DESC_ICODE_GIT_REF, Always));
-    p.push(choice_param("ICODE_GIT_REF_KIND", &git_kind_choices, DESC_ICODE_GIT_REF_KIND, Always));
+    if icode_inputs {
+        let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
+        p.push(text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Always));
+        p.push(text_param("ICODE_GIT_REF", &opts.default_icode_git_ref, DESC_ICODE_GIT_REF, Always));
+        p.push(choice_param("ICODE_GIT_REF_KIND", &git_kind_choices, DESC_ICODE_GIT_REF_KIND, Always));
+    }
+    let headless_fields = (shape == JobShape::Headless).then(|| jiuwenswarm_params(opts, Always));
+    if let Some((inputs, _)) = &headless_fields {
+        p.extend(inputs.iter().cloned());
+    }
     p.push(choice_param("DEEPSEEK_MODEL", &model_choices, DESC_DEEPSEEK_MODEL, Always));
+    if let Some((_, settings)) = headless_fields {
+        p.extend(settings);
+    }
+    // For a direct JiuwenSwarm build of deepswe_one_task: developer page only.
+    if shape == JobShape::One && eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
+        let (inputs, settings) = jiuwenswarm_params(opts, Developer);
+        p.extend(inputs);
+        p.extend(settings);
+    }
 
     match shape {
         JobShape::One => {
@@ -791,14 +940,20 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("RUN_GROUP", "", DESC_RUN_GROUP, Never));
             p.push(text_param("SHARD", "", DESC_SHARD, Never));
             p.push(text_param("REQUESTED_BY", "", DESC_REQUESTED_BY, Never));
-            p.push(text_param("ICODE_RELEASE_FROM", "", DESC_ICODE_RELEASE_FROM, Never));
+            p.push(text_param("HARNESS_BUNDLE_FROM", "", DESC_HARNESS_BUNDLE_FROM, Never));
+            p.push(text_param("HARNESS_BUNDLE_SHA256", "", DESC_HARNESS_BUNDLE_SHA256, Never));
             p.push(text_param("ICODE_RELEASE_SHA256", "", DESC_ICODE_RELEASE_SHA256, Never));
             p.push(text_param("ICODE_GIT_SHA", "", DESC_ICODE_GIT_SHA, Never));
+            if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
+                p.push(text_param("JIUWENSWARM_GIT_SHA", "", DESC_JIUWENSWARM_GIT_SHA, Never));
+                p.push(text_param("JIUWENSWARM_RELEASE_FROM", "", DESC_JIUWENSWARM_RELEASE_FROM, Never));
+                p.push(text_param("JIUWENSWARM_RELEASE_SHA256", "", DESC_JIUWENSWARM_RELEASE_SHA256, Never));
+            }
             p.push(text_param("ROLLOUT", 1, DESC_ROLLOUT, Never));
             p.push(text_param("ATTEMPT", 1, DESC_ATTEMPT, Never));
             p.push(text_param("OOM_RETRIES", opts.oom_retries, DESC_OOM_RETRIES, Never));
         }
-        JobShape::Some_ => {}
+        JobShape::Some_ | JobShape::Headless => {}
         JobShape::FullSuite => {
             p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Developer));
         }
@@ -821,8 +976,10 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             Developer,
         ),
         text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
-        text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer),
     ]);
+    if shape != JobShape::Headless {
+        p.push(text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer));
+    }
     for spec in &mut p {
         if spec.show == Developer {
             spec.description = format!("{DEVELOPER_PREFIX}{}", spec.description);
@@ -937,13 +1094,22 @@ fn xml_params(params: &[ParamSpec], profile: UiProfile) -> String {
         .join("\n")
 }
 
-/// Jobs allowed to copy a one_task build's artifacts: the two dispatchers that
-/// run their shards as one_task builds.
+/// Jobs allowed to copy a one_task build's artifacts: the dispatchers that run
+/// their shards as one_task builds.
 fn shard_readers(job_benchmark: &str) -> Vec<String> {
-    [JobShape::Some_, JobShape::FullSuite]
+    dispatchers(job_benchmark)
         .into_iter()
         .map(|s| eval_job_name(job_benchmark, s))
         .collect()
+}
+
+/// The dispatchers that queue this suite's one_task builds.
+fn dispatchers(job_benchmark: &str) -> Vec<JobShape> {
+    let mut shapes = vec![JobShape::Some_, JobShape::FullSuite];
+    if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
+        shapes.push(JobShape::Headless);
+    }
+    shapes
 }
 
 const DISPLAY_NAME_GROOVY: &str =
@@ -981,17 +1147,53 @@ struct EvalStage {
     /// An out-of-memory rollout is re-queued whole. Scoring a partial trial
     /// would record the failure twice, once here and once on the retry.
     skips_on_oom: bool,
+    /// Copies the dispatcher's harness bundle first, unless this worker's store holds it.
+    fetches_bundle: bool,
 }
 
 const EVAL_STAGES: [EvalStage; 7] = [
-    EvalStage { title: "Environment", phase: "env", holds_cpu_lock: false, skips_on_oom: false },
-    EvalStage { title: "Tasks", phase: "tasks", holds_cpu_lock: false, skips_on_oom: false },
-    EvalStage { title: "Evaluate", phase: "evaluate", holds_cpu_lock: true, skips_on_oom: false },
-    EvalStage { title: "Anti-cheat", phase: "anticheat", holds_cpu_lock: false, skips_on_oom: true },
-    EvalStage { title: "Score", phase: "score", holds_cpu_lock: false, skips_on_oom: true },
-    EvalStage { title: "Report", phase: "report", holds_cpu_lock: false, skips_on_oom: true },
-    EvalStage { title: "Archive", phase: "archive", holds_cpu_lock: false, skips_on_oom: true },
+    EvalStage { title: "Environment", phase: "env", holds_cpu_lock: false, skips_on_oom: false, fetches_bundle: false },
+    EvalStage { title: "Tasks", phase: "tasks", holds_cpu_lock: false, skips_on_oom: false, fetches_bundle: true },
+    EvalStage { title: "Evaluate", phase: "evaluate", holds_cpu_lock: true, skips_on_oom: false, fetches_bundle: false },
+    EvalStage { title: "Anti-cheat", phase: "anticheat", holds_cpu_lock: false, skips_on_oom: true, fetches_bundle: false },
+    EvalStage { title: "Score", phase: "score", holds_cpu_lock: false, skips_on_oom: true, fetches_bundle: false },
+    EvalStage { title: "Report", phase: "report", holds_cpu_lock: false, skips_on_oom: true, fetches_bundle: false },
+    EvalStage { title: "Archive", phase: "archive", holds_cpu_lock: false, skips_on_oom: true, fetches_bundle: false },
 ];
+
+/// The Tasks stage's first step on a shard: the dispatcher's harness bundle,
+/// copied only when this worker's harness store does not hold it. The store
+/// check recomputes the tree's digest, so a damaged tree is removed here and
+/// copied again rather than used. Runs after Environment extracted the pipeline.
+const FETCH_BUNDLE_GROOVY: &str = r#"          script {
+            sh 'rm -rf "${WORKSPACE}/harness-bundle"'
+            if (params.HARNESS_BUNDLE_FROM?.trim()) {
+              String want = (params.HARNESS_BUNDLE_SHA256 ?: '').trim().toLowerCase()
+              if (!(want ==~ /[0-9a-f]{64}/)) {
+                error "HARNESS_BUNDLE_FROM needs HARNESS_BUNDLE_SHA256, a sha256 (got '${want}')"
+              }
+              int stored = sh(returnStatus: true, script: '''#!/bin/bash
+export PATH="${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH}"
+python3 "${WORKSPACE}/mac-k3d-pipeline/pipeline/lib/harness_store.py" get \
+  --harness "$HARNESS" --sha "$HARNESS_BUNDLE_SHA256" >/dev/null
+''')
+              if (stored == 0) {
+                echo "harness store: bundle ${want.take(16)} is already on ${env.NODE_NAME}; not copying it"
+              } else {
+                def from = params.HARNESS_BUNDLE_FROM.split('#', 2)
+                if (from.size() != 2 || !from[1].trim()) {
+                  error "HARNESS_BUNDLE_FROM must be job#build (got ${params.HARNESS_BUNDLE_FROM})"
+                }
+                copyArtifacts projectName: from[0],
+                  selector: specific(from[1].trim()),
+                  filter: 'eval-runs/harness/bundle.tar.gz',
+                  target: 'harness-bundle',
+                  flatten: true
+                echo "harness store: copied bundle ${want.take(16)} from ${params.HARNESS_BUNDLE_FROM}"
+              }
+            }
+          }
+"#;
 
 fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
     if shape.is_dispatcher() {
@@ -1063,9 +1265,11 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
           }}
         }}
         // A killed shell never runs its EXIT trap. Remove this build's trial
-        // containers here, including an abort or a timeout.
+        // containers here, including an abort or a timeout. The copied harness
+        // bundle is in the store by now, or of no use to a later build.
         sh '''#!/bin/bash
 set -euo pipefail
+rm -rf "${{WORKSPACE}}/harness-bundle"
 export PATH="${{HOME}}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${{PATH}}"
 export MAC_K3D_ROOT="${{WORKSPACE}}/mac-k3d-pipeline"
 if [ ! -f "$MAC_K3D_ROOT/pipeline/lib/trial_network.py" ]; then
@@ -1089,7 +1293,7 @@ done
             List again = []
             params.each {{ key, value ->
               String name = key.toString()
-              if (name == 'ATTEMPT' || name == 'ICODE_RELEASE_FILE') {{ return }}
+              if (name in ['ATTEMPT', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) {{ return }}
               again << string(name: name, value: value == null ? '' : value.toString())
             }}
             again << string(name: 'ATTEMPT', value: "${{attempt + 1}}")
@@ -1182,21 +1386,24 @@ set -euo pipefail
               currentBuild.description = "shard ${{params.SHARD}}"
             }}
             {requester}
-            if (params.ICODE_RELEASE_FROM?.trim()) {{
-              def from = params.ICODE_RELEASE_FROM.split('#', 2)
+            // A shard gets its dispatcher's harness bundle in Tasks; only a
+            // JiuwenSwarm release is handed on, for a shard that builds its own.
+            String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
+            if (params.JIUWENSWARM_RELEASE_FROM?.trim()) {{
+              def from = params.JIUWENSWARM_RELEASE_FROM.split('#', 2)
               if (from.size() != 2 || !from[1].trim()) {{
-                error "ICODE_RELEASE_FROM must be job#build (got ${{params.ICODE_RELEASE_FROM}})"
+                error "JIUWENSWARM_RELEASE_FROM must be job#build (got ${{params.JIUWENSWARM_RELEASE_FROM}})"
               }}
               copyArtifacts projectName: from[0],
                 selector: specific(from[1].trim()),
-                filter: 'icode-release/ICODE_RELEASE_FILE',
+                filter: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE',
                 target: '.',
                 flatten: true
-            }} else {{
+            }} else if (!params.HARNESS_BUNDLE_FROM?.trim()) {{
               try {{
-                unstash 'ICODE_RELEASE_FILE'
+                unstash upload
               }} catch (Throwable t) {{
-                echo "No ICODE_RELEASE_FILE stash (${{t}})"
+                echo "No ${{upload}} stash (${{t}})"
               }}
             }}
           }}
@@ -1208,7 +1415,7 @@ set -euo pipefail
         (String::new(), "")
     };
     let announce = if first {
-        "\n            echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE\""
+        "\n            echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}\""
     } else {
         ""
     };
@@ -1217,10 +1424,11 @@ set -euo pipefail
     } else {
         ""
     };
+    let fetch = if stage.fetches_bundle { FETCH_BUNDLE_GROOVY } else { "" };
     format!(
         r#"    stage('{title}') {{
 {when}      steps {{
-{cred_open}{setup}          sh '''#!/bin/bash
+{cred_open}{setup}{fetch}          sh '''#!/bin/bash
 set -euo pipefail
 {clear}{bootstrap}{announce}
             {run}
@@ -1238,90 +1446,106 @@ set -euo pipefail
 fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
     let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
     let shard_job = groovy_escape(&eval_job_name(job_benchmark, JobShape::One));
-    let ids_from_tasks = if shape == JobShape::Some_ {
+    let ids_from_tasks = if matches!(shape, JobShape::Some_ | JobShape::Headless) {
         "          if (params.TASKS?.trim()) {\n            ids = params.TASKS.split(',').collect { it.trim() }.findAll { it }\n          }\n"
     } else {
         ""
     };
+    // Only what both this job and its shard job have.
+    let own: Vec<&str> = eval_params(job_benchmark, shape, opts).iter().map(|p| p.name).collect();
+    let shard: Vec<&str> = eval_params(job_benchmark, JobShape::One, opts).iter().map(|p| p.name).collect();
     let forwarded = FORWARDED_PARAMS
         .iter()
+        .filter(|n| own.contains(n) && shard.contains(n))
         .map(|n| format!("                  string(name: '{n}', value: params.{n}),"))
         .collect::<Vec<_>>()
         .join("\n");
-    let release_stage = r#"    stage('iCode release') {
-      when { expression { params.ICODE_MODE == 'release' } }
+    // The identity Prepare harness pinned, for each shard to find in its bundle.
+    let pins = SHARD_PINS
+        .iter()
+        .filter(|n| shard.contains(n))
+        .map(|n| format!("                  string(name: '{n}', value: env.{n} ?: ''),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Preparing clones and builds; it never calls an LLM, so it gets the git PATs only.
+    let git_pats: Vec<String> = opts
+        .credential_ids
+        .iter()
+        .filter(|id| GIT_PAT_CREDENTIALS.contains(&id.as_str()))
+        .cloned()
+        .collect();
+    let (prep_cred_open, prep_cred_close) = with_credentials_block(&git_pats);
+    // One build of the harness for every shard: prepared on a worker (or found
+    // in its harness store), archived, and named by sha256. A shard uses that
+    // bundle and no other; one of another task platform builds its own from the
+    // same pinned commit or release.
+    let prepare_stage = r#"    stage('Prepare harness') {
       agent { label "${params.AGENT_LABEL}" }
       steps {
         script {
           deleteDir()
-          try {
-            unstash 'ICODE_RELEASE_FILE'
-          } catch (Throwable t) {
-            error "ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE (${t})"
+          String mode = (params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE) ?: 'git'
+          String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
+          if (mode == 'release') {
+            try {
+              unstash upload
+            } catch (Throwable t) {
+              error "release mode needs an uploaded ${upload} (${t})"
+            }
           }
         }
-        script {
-          def hash = sh(returnStdout: true, script: '''#!/bin/bash
-set -euo pipefail
-file="${WORKSPACE}/ICODE_RELEASE_FILE"
-[ -s "$file" ] || { echo "ICODE_RELEASE_FILE is empty" >&2; exit 1; }
-python3 - "$file" <<'PY'
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-PY
-''').trim()
-          if (!hash) {
-            error "could not hash ICODE_RELEASE_FILE"
-          }
-          env.ICODE_RELEASE_SHA256 = hash
-          sh '''#!/bin/bash
-set -euo pipefail
-mkdir -p "${WORKSPACE}/icode-release"
-cp "${WORKSPACE}/ICODE_RELEASE_FILE" "${WORKSPACE}/icode-release/ICODE_RELEASE_FILE"
-'''
-          echo "iCode under test: release ICODE_RELEASE_FILE sha256 ${hash}"
-        }
-        archiveArtifacts artifacts: 'icode-release/ICODE_RELEASE_FILE'
-      }
-    }
-
-"#;
-    let (pin_cred_open, pin_cred_close) = with_credentials_block(&opts.credential_ids);
-    let pin_stage = r#"    stage('Pin iCode') {
-      when { expression { params.ICODE_MODE == 'git' } }
-      agent { label "${params.AGENT_LABEL}" }
-      steps {
-__CRED_OPEN__        script {
-          def sha = sh(returnStdout: true, script: '''#!/bin/bash
+__CRED_OPEN__        sh '''#!/bin/bash
 set -euo pipefail
 export PATH="${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH}"
 command -v mac-k3d >/dev/null || { echo "mac-k3d is not on PATH on ${NODE_NAME:-this worker}. Run scripts/redeploy.sh." >&2; exit 1; }
-export MAC_K3D_ROOT="${WORKSPACE}/mac-k3d-pin"
+export MAC_K3D_ROOT="${WORKSPACE}/mac-k3d-pipeline"
 rm -rf "$MAC_K3D_ROOT"
-mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean >&2
-export ICODE_GIT_URL="${ICODE_GIT_URL:-}"
-export ICODE_GIT_REF="${ICODE_GIT_REF:-}"
-export ICODE_GIT_REF_KIND="${ICODE_GIT_REF_KIND:-}"
+mac-k3d pipeline --extract-to "$MAC_K3D_ROOT" --require-clean
+export MAC_K3D_EVAL_WORKDIR="${WORKSPACE}/eval-runs"
+mkdir -p "$MAC_K3D_EVAL_WORKDIR"
 export GIT_TERMINAL_PROMPT=0
-sha="$(bash "$MAC_K3D_ROOT/pipeline/lib/icode_input.sh" --resolve-sha)"
-printf '%s\n' "$sha"
-''').trim()
-          if (!sha) {
-            error "could not resolve the iCode git ref"
+for upload in ICODE_RELEASE JIUWENSWARM_RELEASE; do
+  if [ -s "${WORKSPACE}/${upload}_FILE" ]; then
+    export "${upload}=${WORKSPACE}/${upload}_FILE" "${upload}_UPLOADED=1"
+  fi
+done
+bash "$MAC_K3D_ROOT/pipeline/tools/prepare_harness.sh"
+'''
+__CRED_CLOSE__        script {
+          String sha = readFile('eval-runs/harness/bundle.sha256').trim()
+          if (!(sha ==~ /[0-9a-f]{64}/)) {
+            error "Prepare harness left no bundle sha256 (got '${sha}')"
           }
-          env.ICODE_GIT_SHA = sha
-          echo "iCode under test: git ${params.ICODE_GIT_REF_KIND} ${params.ICODE_GIT_REF} -> ${sha} (pinned for every shard)"
+          List<String> pin = readFile('eval-runs/harness/pin.txt').trim().split(' ') as List<String>
+          if (pin.size() != 2 || !(pin[0] in ['git', 'release'])) {
+            error "Prepare harness left no identity pin (got '${pin.join(' ')}')"
+          }
+          env.HARNESS_BUNDLE_SHA256 = sha
+          if (params.HARNESS == 'jiuwenswarm') {
+            if (pin[0] == 'git') { env.JIUWENSWARM_GIT_SHA = pin[1] } else { env.JIUWENSWARM_RELEASE_SHA256 = pin[1] }
+          } else {
+            if (pin[0] == 'git') { env.ICODE_GIT_SHA = pin[1] } else { env.ICODE_RELEASE_SHA256 = pin[1] }
+          }
+          // A JiuwenSwarm wheel or wheelhouse goes to the shards too, for one whose
+          // task platform needs its own build. An uploaded bundle is the bundle itself.
+          if (params.HARNESS == 'jiuwenswarm' && pin[0] == 'release' && pin[1] != sha) {
+            sh 'mkdir -p jiuwenswarm-release && cp JIUWENSWARM_RELEASE_FILE jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
+            env.JIUWENSWARM_RELEASE_FROM = "${env.JOB_NAME}#${env.BUILD_NUMBER}"
+          }
+          echo "Every shard runs harness bundle ${sha} (${pin[0]} ${pin[1]})"
         }
-__CRED_CLOSE__      }
+        archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'
+        script {
+          if (env.JIUWENSWARM_RELEASE_FROM) {
+            archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
+          }
+        }
+      }
     }
 
 "#
-    .replace("__CRED_OPEN__", &pin_cred_open)
-    .replace("__CRED_CLOSE__", &pin_cred_close);
+    .replace("__CRED_OPEN__", &prep_cred_open)
+    .replace("__CRED_CLOSE__", &prep_cred_close);
     format!(
         r#"pipeline {{
   agent none
@@ -1336,7 +1560,7 @@ __CRED_CLOSE__      }
   }}
 
   stages {{
-{release_stage}{pin_stage}    stage('Shards') {{
+{prepare_stage}    stage('Shards') {{
       steps {{
         script {{
           {display_name}
@@ -1457,9 +1681,9 @@ __CRED_CLOSE__      }
                   string(name: 'RUN_GROUP', value: env.RUN_GROUP),
                   string(name: 'SHARD', value: note),
                   string(name: 'REQUESTED_BY', value: env.BUILD_USER ?: ''),
-                  string(name: 'ICODE_RELEASE_FROM', value: params.ICODE_MODE == 'release' ? "${{env.JOB_NAME}}#${{env.BUILD_NUMBER}}" : ''),
-                  string(name: 'ICODE_RELEASE_SHA256', value: env.ICODE_RELEASE_SHA256 ?: ''),
-                  string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: ''),
+                  string(name: 'HARNESS_BUNDLE_FROM', value: "${{env.JOB_NAME}}#${{env.BUILD_NUMBER}}"),
+                  string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256),
+{pins}
                 ]
                 def run = build job: '{shard_job}', wait: true, propagate: false, quietPeriod: 0, parameters: shardParams
                 String started = ''
@@ -1510,19 +1734,6 @@ __CRED_CLOSE__      }
             }}
           }}
           env.SHARD_PLAN = planLines.join(';')
-          // The shards have copied the drop. The sha256 in summary.md and
-          // report.html is the record, so the build page does not keep the file.
-          // A sandbox refusal only warns; the eval result does not change.
-          if (params.ICODE_MODE == 'release') {{
-            try {{
-              def dropped = new File(currentBuild.rawBuild.getRootDir(), "archive/icode-release")
-              if (dropped.isDirectory() && !dropped.deleteDir()) {{
-                echo "WARNING: could not remove the iCode release from this build's artifacts. The sha256 is in summary.md and report.html."
-              }}
-            }} catch (Throwable t) {{
-              echo "WARNING: could not remove the iCode release from this build's artifacts (${{t}}). The sha256 is in summary.md and report.html."
-            }}
-          }}
           if (retried) {{
             echo "Retried once after failing before Harbor started: ${{retried.join(', ')}}"
           }}
@@ -1588,6 +1799,27 @@ set -euo pipefail
           // aggregate/harness is a second copy of the shards' trials.
           archiveArtifacts artifacts: 'aggregate/**', excludes: 'aggregate/harness/**', allowEmptyArchive: true
           archiveArtifacts artifacts: 'backup/**', allowEmptyArchive: true
+        }}
+      }}
+    }}
+  }}
+
+  post {{
+    always {{
+      script {{
+        // No shard reads the bundle any more, even after an abort. Its sha256
+        // in summary.md and report.html is the record, so the build page keeps
+        // bundle.json but not the bundle or a JiuwenSwarm release.
+        // A sandbox refusal only warns; the eval result does not change.
+        try {{
+          File root = currentBuild.rawBuild.getRootDir()
+          File bundle = new File(root, "archive/eval-runs/harness/bundle.tar.gz")
+          File release = new File(root, "archive/jiuwenswarm-release")
+          if ((bundle.exists() && !bundle.delete()) || (release.isDirectory() && !release.deleteDir())) {{
+            echo "WARNING: could not remove the harness bundle from this build's artifacts. Its sha256 is in summary.md and report.html."
+          }}
+        }} catch (Throwable t) {{
+          echo "WARNING: could not remove the harness bundle from this build's artifacts (${{t}}). Its sha256 is in summary.md and report.html."
         }}
       }}
     }}
@@ -1659,11 +1891,24 @@ export HARNESS="${{HARNESS:-{harness_fb}}}"
 export LLM="${{LLM:-{llm_fb}}}"
 export BENCHMARK="${{BENCHMARK:-{bench}}}"
 export DEEPSEEK_MODEL="${{DEEPSEEK_MODEL:-{model_fb}}}"
+export JIUWENSWARM_RELEASE=""
+export JIUWENSWARM_RELEASE_UPLOADED=""
+if [ -s "${{WORKSPACE}}/JIUWENSWARM_RELEASE_FILE" ]; then
+  export JIUWENSWARM_RELEASE="${{WORKSPACE}}/JIUWENSWARM_RELEASE_FILE"
+  export JIUWENSWARM_RELEASE_UPLOADED=1
+fi
+# The dispatcher's harness bundle: only that sha256 is used, from this worker's
+# harness store or from the copy the Tasks stage made.
+export HARNESS_BUNDLE_SHA256="${{HARNESS_BUNDLE_SHA256:-}}"
+unset HARNESS_BUNDLE_FILE
+if [ -n "$HARNESS_BUNDLE_SHA256" ] && [ -s "${{WORKSPACE}}/harness-bundle/bundle.tar.gz" ]; then
+  export HARNESS_BUNDLE_FILE="${{WORKSPACE}}/harness-bundle/bundle.tar.gz"
+fi
 if [ -z "${{DEEPSEEK_API_KEY:-}}" ]; then
   echo "DEEPSEEK_API_KEY missing. Store credential deepseek-api-key on the Jenkins controller." >&2
   exit 1
 fi
-if [ "${{ICODE_MODE}}" = "release" ] || [ "${{ICODE_MODE}}" = "binary" ]; then
+if [ "$HARNESS" = icode ] && [ -z "$HARNESS_BUNDLE_SHA256" ] && {{ [ "${{ICODE_MODE}}" = "release" ] || [ "${{ICODE_MODE}}" = "binary" ]; }}; then
   if [ -z "${{ICODE_RELEASE}}" ]; then
     echo "ICODE_MODE=release: upload ICODE_RELEASE_FILE on Jenkins Build with Parameters (not a worker path)." >&2
     exit 1
@@ -1770,21 +2015,31 @@ pub const EVAL_SHAPES: &[JobShape] = &[JobShape::One, JobShape::Some_, JobShape:
 /// Jobs an older mac-k3d created that the current shapes replace.
 const RETIRED_JOBS: &[&str] = &["eval_aggregate"];
 
-/// Create or update every eval job: one / some / full-suite per suite, and
-/// delete retired ones. Jobs that already exist are rewritten, so running it
-/// again after an upgrade is how a controller picks up a new shape.
+/// Every eval job `mac-k3d config` writes: one / some / full-suite per suite,
+/// then `build_jiuwenswarm_headless` on DeepSWE.
+pub fn eval_jobs() -> Vec<(&'static str, JobShape)> {
+    let mut jobs: Vec<(&'static str, JobShape)> = EVAL_BENCHMARKS
+        .iter()
+        .flat_map(|b| EVAL_SHAPES.iter().map(move |s| (*b, *s)))
+        .collect();
+    jobs.push(("deepswe", JobShape::Headless));
+    jobs
+}
+
+/// Create or update every eval job, and delete retired ones. Jobs that already
+/// exist are rewritten, so running it again after an upgrade is how a
+/// controller picks up a new shape. A `build_jiuwenswarm_headless` made by
+/// hand is replaced the same way.
 pub fn ensure_eval_jobs(
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
     opts: &JobOpts,
 ) -> Result<()> {
-    for bench in EVAL_BENCHMARKS {
-        for shape in EVAL_SHAPES {
-            let name = eval_job_name(bench, *shape);
-            let xml = eval_job_xml(bench, *shape, &shape_description(bench, *shape), opts);
-            ensure_named_one_task_xml(&name, &xml, jenkins_url, api_user, api_token_or_password)?;
-        }
+    for (bench, shape) in eval_jobs() {
+        let name = eval_job_name(bench, shape);
+        let xml = eval_job_xml(bench, shape, &shape_description(bench, shape), opts);
+        ensure_named_one_task_xml(&name, &xml, jenkins_url, api_user, api_token_or_password)?;
     }
     for name in RETIRED_JOBS {
         delete_job_if_present(name, jenkins_url, api_user, api_token_or_password)?;
@@ -1972,6 +2227,9 @@ mod tests {
             default_icode_git_url: "https://gitcode.com/example/icode.git".into(),
             default_icode_git_ref: "main".into(),
             default_icode_git_ref_kind: "branch".into(),
+            default_jiuwenswarm_git_url: "https://gitcode.com/michaelling/jiuwenswarm".into(),
+            default_jiuwenswarm_git_ref: "2".into(),
+            default_jiuwenswarm_git_ref_kind: "pr".into(),
             default_icode_args: "--help".into(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
@@ -1997,6 +2255,9 @@ mod tests {
             default_icode_git_url: String::new(),
             default_icode_git_ref: "main".into(),
             default_icode_git_ref_kind: "branch".into(),
+            default_jiuwenswarm_git_url: "https://gitcode.com/michaelling/jiuwenswarm".into(),
+            default_jiuwenswarm_git_ref: "2".into(),
+            default_jiuwenswarm_git_ref_kind: "pr".into(),
             default_icode_args: String::new(),
             default_harness: "icode".into(),
             default_llm: "deepseek".into(),
@@ -2114,7 +2375,8 @@ mod tests {
         assert!(!jf.contains(".local/share"));
         assert!(!jf.contains("LLM_NAME"));
         assert!(jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
-        assert!(jf.contains("unstash 'ICODE_RELEASE_FILE'"));
+        assert!(jf.contains("String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'"));
+        assert!(jf.contains("unstash upload"));
         assert!(jf.contains("--force-rm"));
         assert!(jf.contains(r#"if [ "${ICODE_MODE}" = "git" ]"#));
         assert!(jf.contains("leave this control as it is"));
@@ -2329,7 +2591,15 @@ mod tests {
                 for shape in EVAL_SHAPES {
                     let jf = eval_jenkinsfile(bench, *shape, &opts);
                     let first: Vec<&str> = params_block(&jf).lines().take(3).collect();
-                    assert!(first[0].starts_with("    choice(name: 'HARNESS', choices: ['icode']"), "{first:?}");
+                    let harnesses = if *bench == "deepswe" && *shape == JobShape::One {
+                        "['icode', 'jiuwenswarm']"
+                    } else {
+                        "['icode']"
+                    };
+                    assert!(
+                        first[0].starts_with(&format!("    choice(name: 'HARNESS', choices: {harnesses}")),
+                        "{first:?}"
+                    );
                     assert!(first[1].starts_with("    choice(name: 'LLM', choices: ['deepseek']"));
                     assert!(first[2].starts_with(&format!("    choice(name: 'BENCHMARK', choices: ['{bench}']")));
                     assert!(jf.contains(DISPLAY_NAME_GROOVY), "{bench} {shape:?}");
@@ -2413,9 +2683,9 @@ mod tests {
         // Jenkins does not trace a script that starts with a shebang, so the
         // prelude is not printed on every stage. The one-line summary is the
         // Environment stage only.
-        assert_eq!(jf.matches("#!/bin/bash").count(), 9);
+        assert_eq!(jf.matches("#!/bin/bash").count(), 10);
         assert_eq!(
-            jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK ICODE_MODE=$ICODE_MODE\"").count(),
+            jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}\"").count(),
             1
         );
 
@@ -2462,18 +2732,24 @@ mod tests {
         assert!(jf.contains("quietPeriod: 0"));
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
         assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
-        assert!(jf.contains("stage('iCode release')"));
-        assert!(jf.contains("stage('Pin iCode')"));
-        assert!(jf.contains("params.ICODE_MODE == 'git'"));
-        assert!(jf.contains("--resolve-sha"));
-        assert!(jf.contains("pinned for every shard"));
+        // One Prepare harness stage pins the harness and its bundle for every shard.
+        assert!(!jf.contains("stage('iCode release')"));
+        assert!(!jf.contains("stage('Pin iCode')"));
+        assert!(!jf.contains("ICODE_RELEASE_FROM"));
+        assert!(jf.contains("stage('Prepare harness')"));
+        assert!(jf.contains("bash \"$MAC_K3D_ROOT/pipeline/tools/prepare_harness.sh\""));
         assert!(jf.contains("string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: '')"));
-        assert!(jf.contains("archiveArtifacts artifacts: 'icode-release/ICODE_RELEASE_FILE'"));
+        assert!(jf.contains("string(name: 'ICODE_RELEASE_SHA256', value: env.ICODE_RELEASE_SHA256 ?: '')"));
+        assert!(jf.contains("string(name: 'JIUWENSWARM_GIT_SHA', value: env.JIUWENSWARM_GIT_SHA ?: '')"));
+        assert!(jf.contains(
+            "string(name: 'HARNESS_BUNDLE_FROM', value: \"${env.JOB_NAME}#${env.BUILD_NUMBER}\")"
+        ));
+        assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
+        assert!(jf.contains("archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'"));
         assert!(!jf.contains("sha256.txt"));
-        assert!(jf.contains("archive/icode-release"));
+        assert!(jf.contains("archive/eval-runs/harness/bundle.tar.gz"));
         assert!(jf.contains("#!/bin/bash"));
         assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
-        assert!(jf.contains("ICODE_RELEASE_FROM"));
         assert!(jf.contains("unstable \"Shards that did not succeed"));
         // The merge runs in this build, on a worker, from the shard build numbers.
         assert!(jf.contains(
@@ -2484,14 +2760,97 @@ mod tests {
         assert!(jf.contains("env.SHARD_BUILDS = shardBuilds.values().join(',')"));
         assert!(jf.contains("aggregate_runs.py"));
         assert!(jf.contains("archiveArtifacts artifacts: 'aggregate/**'"));
+        let own: Vec<&str> = eval_params("deepswe", JobShape::Some_, &deepswe_opts(Vec::new())).iter().map(|p| p.name).collect();
         for name in FORWARDED_PARAMS {
-            assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
+            let line = format!("string(name: '{name}', value: params.{name})");
+            assert_eq!(jf.contains(&line), own.contains(name), "{name}");
         }
     }
 
     #[test]
+    fn every_dispatcher_prepares_the_harness_once_for_its_shards() {
+        let opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
+        for bench in EVAL_BENCHMARKS {
+            for shape in dispatchers(bench) {
+                let jf = eval_jenkinsfile(bench, shape, &opts);
+                let prep = jf.find("stage('Prepare harness')").unwrap_or_else(|| panic!("{bench} {shape:?}"));
+                let shards = jf.find("stage('Shards')").unwrap();
+                assert!(prep < shards, "{bench} {shape:?}");
+                let stage = &jf[prep..shards];
+                assert!(stage.contains("agent { label \"${params.AGENT_LABEL}\" }"));
+                // Git mode prepares too: there is no release-only condition.
+                assert!(!stage.contains("when {"), "{bench} {shape:?}");
+                // The PAT reaches a private clone; no LLM key reaches the build.
+                assert!(stage.contains(
+                    "withCredentials([string(credentialsId: 'gitcode-pat', variable: 'GITCODE_TOKEN')])"
+                ));
+                assert!(!stage.contains("DEEPSEEK_API_KEY"), "{bench} {shape:?}");
+                assert!(stage.contains("bash \"$MAC_K3D_ROOT/pipeline/tools/prepare_harness.sh\""));
+                assert!(stage.contains("env.HARNESS_BUNDLE_SHA256 = sha"));
+                assert!(stage.contains("readFile('eval-runs/harness/pin.txt')"));
+                assert!(stage.contains(
+                    "archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'"
+                ));
+                assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
+                // After the run, aborted or not, the bundle leaves the build page; bundle.json stays.
+                let cleanup = jf.find("new File(root, \"archive/eval-runs/harness/bundle.tar.gz\")").unwrap();
+                let post = jf.rfind("\n  post {\n    always {").unwrap();
+                assert!(jf.find("stage('Aggregate')").unwrap() < post && post < cleanup, "{bench} {shape:?}");
+                assert_eq!(jf.matches("archive/eval-runs/harness/bundle.tar.gz").count(), 1);
+                // JiuwenSwarm pins reach only a shard job that takes them.
+                assert_eq!(jf.contains("name: 'JIUWENSWARM_GIT_SHA'"), *bench == "deepswe", "{bench}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_shard_copies_the_bundle_only_when_its_store_lacks_it() {
+        for bench in EVAL_BENCHMARKS {
+            let jf = eval_jenkinsfile(bench, JobShape::One, &deepswe_opts(Vec::new()));
+            let stage = &jf[jf.find("stage('Tasks')").unwrap()..jf.find("stage('Evaluate')").unwrap()];
+            let check = stage.find("harness_store.py\" get").expect("store check");
+            let copy = stage.find("filter: 'eval-runs/harness/bundle.tar.gz'").expect("copy");
+            let run = stage.find("MAC_K3D_PHASE=tasks").unwrap();
+            assert!(check < copy && copy < run, "{bench}");
+            assert!(stage.contains("if (stored == 0) {"));
+            assert!(stage.contains("not copying it"));
+            // The pipeline names the store; the job bakes in no worker path.
+            assert!(!stage.contains("--store"));
+            assert_eq!(jf.matches("harness_store.py\" get").count(), 1, "{bench}");
+            assert!(jf.contains("export HARNESS_BUNDLE_FILE=\"${WORKSPACE}/harness-bundle/bundle.tar.gz\""));
+            let post = &jf[jf.find("  post {").unwrap()..];
+            assert!(post.contains("rm -rf \"${WORKSPACE}/harness-bundle\""));
+            // A shard with a bundle needs no iCode release upload.
+            assert!(jf.contains("[ \"$HARNESS\" = icode ] && [ -z \"$HARNESS_BUNDLE_SHA256\" ]"));
+        }
+    }
+
+    #[test]
+    fn deepswe_one_task_offers_both_harnesses_and_the_rest_stay_fixed() {
+        fn choices(bench: &str, shape: JobShape, opts: &JobOpts) -> Vec<String> {
+            match &eval_params(bench, shape, opts)[0] {
+                ParamSpec { name: "HARNESS", kind: ParamKind::Choice(c), .. } => c.clone(),
+                other => panic!("first param is {}", other.name),
+            }
+        }
+        let mut opts = deepswe_opts(Vec::new());
+        assert_eq!(choices("deepswe", JobShape::One, &opts), ["icode", "jiuwenswarm"]);
+        assert_eq!(choices("deepswe", JobShape::Some_, &opts), ["icode"]);
+        assert_eq!(choices("lolbench", JobShape::One, &opts), ["icode"]);
+        assert_eq!(choices("deepswe", JobShape::Headless, &opts), ["jiuwenswarm"]);
+        opts.default_harness = "jiuwenswarm".into();
+        assert_eq!(choices("deepswe", JobShape::One, &opts), ["jiuwenswarm", "icode"]);
+        // A suite dispatcher's page has iCode's inputs; JiuwenSwarm's dispatcher is build_jiuwenswarm_headless.
+        assert_eq!(choices("deepswe", JobShape::FullSuite, &opts), ["icode"]);
+        // A benchmark JiuwenSwarm does not run keeps iCode.
+        assert_eq!(choices("lolbench", JobShape::One, &opts), ["icode"]);
+        let jf = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        assert!(params_block(&jf).contains("choice(name: 'HARNESS', choices: ['icode', 'jiuwenswarm']"));
+    }
+
+    #[test]
     fn the_aggregate_leaves_transcripts_and_trial_copies_in_the_shard_builds() {
-        for shape in [JobShape::Some_, JobShape::FullSuite] {
+        for shape in dispatchers("deepswe") {
             let jf = eval_jenkinsfile("deepswe", shape, &deepswe_opts(Vec::new()));
             let stage = &jf[jf.find("stage('Aggregate')").unwrap()..];
             assert!(stage.contains(
@@ -2561,6 +2920,14 @@ mod tests {
     }
 
     #[test]
+    fn a_direct_build_requeued_after_oom_sends_no_upload_as_a_string() {
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        assert!(one.contains(
+            "if (name in ['ATTEMPT', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) { return }"
+        ));
+    }
+
+    #[test]
     fn full_suite_dispatches_shards_then_aggregates() {
         let opts = deepswe_opts(vec!["deepseek-api-key".into()]);
         let jf = eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts);
@@ -2576,8 +2943,7 @@ mod tests {
         assert!(jf.contains("MAX_IN_FLIGHT falls back to 20"));
         assert!(jf.contains("hidden(name: 'N_TASKS', defaultValue: '113'"));
         assert!(jf.contains("stage('Aggregate')"));
-        assert!(jf.contains("stage('Pin iCode')"));
-        assert!(jf.contains("--resolve-sha"));
+        assert!(jf.contains("stage('Prepare harness')"));
         assert!(jf.contains("string(name: 'ICODE_GIT_SHA', value: env.ICODE_GIT_SHA ?: '')"));
         assert!(!jf.contains("eval_aggregate"));
         assert!(!jf.contains("SHARDS"));
@@ -2604,32 +2970,30 @@ mod tests {
         let user = deepswe_opts(Vec::new());
         let mut dev = user.clone();
         dev.ui_profile = UiProfile::Developer;
-        for bench in EVAL_BENCHMARKS {
-            for shape in EVAL_SHAPES {
-                let specs = eval_params(bench, *shape, &user);
-                let page = |profile: UiProfile| -> Vec<(&str, String)> {
-                    specs
-                        .iter()
-                        .filter(|p| p.visible(profile))
-                        .map(|p| (p.name, p.default_value()))
-                        .collect()
-                };
-                let (user_page, dev_page) = (page(UiProfile::User), page(UiProfile::Developer));
-                // Every user field, in the same order with the same default, comes first.
-                assert_eq!(&dev_page[..user_page.len()], &user_page[..], "{bench} {shape:?}");
-                for p in specs.iter().filter(|p| p.visible(UiProfile::Developer) && !p.visible(UiProfile::User)) {
-                    assert_eq!(p.show, Show::Developer, "{bench} {shape:?} {}", p.name);
-                    assert!(p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
-                }
-                for p in specs.iter().filter(|p| p.show != Show::Developer) {
-                    assert!(!p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
-                }
-                // Same on the rendered pages.
-                let user_names = page_names(&eval_jenkinsfile(bench, *shape, &user));
-                let dev_names = page_names(&eval_jenkinsfile(bench, *shape, &dev));
-                assert_eq!(&dev_names[..user_names.len()], &user_names[..], "{bench} {shape:?}");
-                assert!(dev_names.len() > user_names.len(), "{bench} {shape:?}");
+        for (bench, shape) in eval_jobs() {
+            let specs = eval_params(bench, shape, &user);
+            let page = |profile: UiProfile| -> Vec<(&str, String)> {
+                specs
+                    .iter()
+                    .filter(|p| p.visible(profile))
+                    .map(|p| (p.name, p.default_value()))
+                    .collect()
+            };
+            let (user_page, dev_page) = (page(UiProfile::User), page(UiProfile::Developer));
+            // Every user field, in the same order with the same default, comes first.
+            assert_eq!(&dev_page[..user_page.len()], &user_page[..], "{bench} {shape:?}");
+            for p in specs.iter().filter(|p| p.visible(UiProfile::Developer) && !p.visible(UiProfile::User)) {
+                assert_eq!(p.show, Show::Developer, "{bench} {shape:?} {}", p.name);
+                assert!(p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
             }
+            for p in specs.iter().filter(|p| p.show != Show::Developer) {
+                assert!(!p.description.starts_with(DEVELOPER_PREFIX), "{bench} {shape:?} {}", p.name);
+            }
+            // Same on the rendered pages.
+            let user_names = page_names(&eval_jenkinsfile(bench, shape, &user));
+            let dev_names = page_names(&eval_jenkinsfile(bench, shape, &dev));
+            assert_eq!(&dev_names[..user_names.len()], &user_names[..], "{bench} {shape:?}");
+            assert!(dev_names.len() > user_names.len(), "{bench} {shape:?}");
         }
     }
 
@@ -2637,9 +3001,17 @@ mod tests {
     fn job_params_mark_shard_plumbing_and_developer_fields() {
         let one = job_params("deepswe", JobShape::One);
         let get = |ps: &[JobParam], n: &str| ps.iter().find(|p| p.name == n).cloned().expect(n);
-        for n in ["TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY", "ICODE_RELEASE_FROM", "ICODE_RELEASE_SHA256", "ICODE_GIT_SHA"] {
+        for n in [
+            "TASKS", "N_TASKS", "TASK_OFFSET", "RUN_GROUP", "SHARD", "REQUESTED_BY",
+            "HARNESS_BUNDLE_FROM", "HARNESS_BUNDLE_SHA256", "ICODE_RELEASE_SHA256", "ICODE_GIT_SHA",
+            "JIUWENSWARM_GIT_SHA", "JIUWENSWARM_RELEASE_FROM", "JIUWENSWARM_RELEASE_SHA256",
+        ] {
             assert!(!get(&one, n).settable, "{n}");
         }
+        // Only DeepSWE runs JiuwenSwarm, so only its shard job takes JiuwenSwarm pins.
+        let lol = job_params("lolbench", JobShape::One);
+        assert!(lol.iter().any(|p| p.name == "HARNESS_BUNDLE_SHA256"));
+        assert!(!lol.iter().any(|p| p.name.starts_with("JIUWENSWARM_")));
         assert!(get(&one, "TASK").settable && !get(&one, "TASK").developer);
         assert!(get(&one, "HARBOR_VERSION").settable && get(&one, "HARBOR_VERSION").developer);
         let some = job_params("deepswe", JobShape::Some_);
@@ -2673,7 +3045,7 @@ mod tests {
     fn dispatchers_count_workers_with_nodes_by_label_and_fail_fast() {
         let opts = deepswe_opts(Vec::new());
         for bench in EVAL_BENCHMARKS {
-            for shape in [JobShape::Some_, JobShape::FullSuite] {
+            for shape in dispatchers(bench) {
                 let jf = eval_jenkinsfile(bench, shape, &opts);
                 // nodesWithLabel is not a Jenkins step: a build calling it counts 0 workers.
                 assert!(!jf.contains("nodesWithLabel"), "{bench} {shape:?}");
@@ -2704,19 +3076,140 @@ mod tests {
         for profile in [UiProfile::User, UiProfile::Developer] {
             let mut opts = deepswe_opts(vec!["deepseek-api-key".into()]);
             opts.ui_profile = profile;
-            for bench in EVAL_BENCHMARKS {
-                for shape in EVAL_SHAPES {
-                    let jf = eval_jenkinsfile(bench, *shape, &opts);
-                    let xml = eval_job_xml(bench, *shape, "d", &opts);
-                    assert_eq!(groovy_param_names(&jf), xml_param_names(&xml), "{bench} {shape:?}");
-                    assert_eq!(
-                        params_block(&jf).matches("    hidden(").count(),
-                        xml.matches("<com.wangyin.parameter.WHideParameterDefinition").count(),
-                        "{bench} {shape:?} {profile:?}"
-                    );
-                }
+            for (bench, shape) in eval_jobs() {
+                let jf = eval_jenkinsfile(bench, shape, &opts);
+                let xml = eval_job_xml(bench, shape, "d", &opts);
+                assert_eq!(groovy_param_names(&jf), xml_param_names(&xml), "{bench} {shape:?}");
+                assert_eq!(
+                    params_block(&jf).matches("    hidden(").count(),
+                    xml.matches("<com.wangyin.parameter.WHideParameterDefinition").count(),
+                    "{bench} {shape:?} {profile:?}"
+                );
             }
         }
+    }
+
+    #[test]
+    fn config_writes_build_jiuwenswarm_headless_after_the_suite_jobs() {
+        let jobs = eval_jobs();
+        assert_eq!(jobs.len(), EVAL_BENCHMARKS.len() * EVAL_SHAPES.len() + 1);
+        assert_eq!(jobs.last(), Some(&("deepswe", JobShape::Headless)));
+        assert_eq!(eval_job_name("deepswe", JobShape::Headless), "build_jiuwenswarm_headless");
+        let names: Vec<String> = jobs.iter().map(|(b, s)| eval_job_name(b, *s)).collect();
+        assert_eq!(names.iter().filter(|n| *n == JIUWENSWARM_HEADLESS).count(), 1);
+    }
+
+    #[test]
+    fn build_jiuwenswarm_headless_page_has_jiuwenswarm_inputs_only() {
+        let mut opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
+        assert_eq!(
+            visible_names("deepswe", JobShape::Headless, &opts),
+            [
+                "HARNESS", "LLM", "BENCHMARK", "TASKS", "N_TASKS", "N_ROLLOUTS",
+                "JIUWENSWARM_MODE", "JIUWENSWARM_RELEASE_FILE", "JIUWENSWARM_GIT_URL",
+                "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND", "DEEPSEEK_MODEL",
+                "JIUWENSWARM_AGENT_MODE", "JIUWENSWARM_MAX_TURNS",
+            ]
+        );
+        opts.ui_profile = UiProfile::Developer;
+        let developer: Vec<&str> = eval_params("deepswe", JobShape::Headless, &opts)
+            .into_iter()
+            .filter(|p| p.show == Show::Developer)
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(
+            developer,
+            [
+                "MAX_IN_FLIGHT", "OOM_RETRIES", "TEST_MEMORY_MB", "TEST_MEMORY_ATTEMPTS",
+                "AGENT_LABEL", "AGGREGATE_LABEL", "HARBOR_VERSION", "DEEPSWE_REF",
+            ]
+        );
+        let all: Vec<&str> = eval_params("deepswe", JobShape::Headless, &opts).iter().map(|p| p.name).collect();
+        assert!(!all.iter().any(|n| n.starts_with("ICODE_") || *n == "LOLBENCH_REF"), "{all:?}");
+
+        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &opts);
+        let block = params_block(&jf);
+        assert!(block.contains("choice(name: 'HARNESS', choices: ['jiuwenswarm']"));
+        assert!(block.contains("choice(name: 'BENCHMARK', choices: ['deepswe']"));
+        // Empty TASKS runs every question.
+        assert!(block.contains("string(name: 'TASKS', defaultValue: ''"));
+        assert!(block.contains("string(name: 'N_TASKS', defaultValue: '113'"));
+        assert!(block.contains("choice(name: 'JIUWENSWARM_MODE', choices: ['git', 'release']"));
+        assert!(block.contains("stashedFile(name: 'JIUWENSWARM_RELEASE_FILE'"));
+        assert!(block.contains(
+            "string(name: 'JIUWENSWARM_GIT_URL', defaultValue: 'https://gitcode.com/michaelling/jiuwenswarm'"
+        ));
+        assert!(block.contains("string(name: 'JIUWENSWARM_GIT_REF', defaultValue: '2'"));
+        assert!(block.contains("choice(name: 'JIUWENSWARM_GIT_REF_KIND', choices: ['pr', 'branch', 'tag', 'commit']"));
+        assert!(block.contains("choice(name: 'JIUWENSWARM_AGENT_MODE', choices: ['agent.code.normal', 'agent.code.plan']"));
+        assert!(block.contains("string(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500'"));
+        let desc = shape_description("deepswe", JobShape::Headless);
+        assert!(desc.starts_with("Evaluate the JiuwenSwarm harness on DeepSWE"), "{desc}");
+        assert!(desc.contains("all 113 by default") && desc.contains("deepswe_one_task"), "{desc}");
+    }
+
+    #[test]
+    fn build_jiuwenswarm_headless_queues_deepswe_one_task_with_its_inputs() {
+        let opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
+        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &opts);
+        assert!(jf.contains("build job: 'deepswe_one_task'"), "the shard job");
+        assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
+        assert!(jf.contains("stage('Prepare harness')"));
+        assert!(jf.contains("params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE"));
+        // A list of ids, as some_task reads it.
+        assert!(jf.contains("ids = params.TASKS.split(',')"));
+        for name in [
+            "HARNESS", "BENCHMARK", "DEEPSEEK_MODEL", "JIUWENSWARM_MODE", "JIUWENSWARM_GIT_URL",
+            "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND", "JIUWENSWARM_AGENT_MODE",
+            "JIUWENSWARM_MAX_TURNS", "AGENT_LABEL", "HARBOR_VERSION", "DEEPSWE_REF",
+        ] {
+            assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
+        }
+        for name in ["ICODE_MODE", "ICODE_GIT_URL", "ICODE_GIT_REF", "LOLBENCH_REF"] {
+            assert!(!jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
+        }
+        for pin in ["JIUWENSWARM_GIT_SHA", "JIUWENSWARM_RELEASE_FROM", "JIUWENSWARM_RELEASE_SHA256"] {
+            assert!(jf.contains(&format!("string(name: '{pin}', value: env.{pin} ?: '')")), "{pin}");
+        }
+        assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
+        assert!(jf.contains("archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'"));
+        assert!(jf.contains("copyArtifacts projectName: 'deepswe_one_task'"), "the Aggregate");
+
+        // deepswe_one_task lets it copy the shards' artifacts, and runs its harness.
+        let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
+        assert!(xml.contains("<string>build_jiuwenswarm_headless</string>"));
+        assert!(eval_jenkinsfile("deepswe", JobShape::One, &opts)
+            .contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task,build_jiuwenswarm_headless')"));
+        assert!(shape_description("deepswe", JobShape::One)
+            .contains("each shard of deepswe_some_task, deepswe_full_suite_task and build_jiuwenswarm_headless"));
+        assert!(shape_description("lolbench", JobShape::One)
+            .contains("each shard of lolbench_some_task and lolbench_full_suite_task;"));
+        let lol = eval_job_xml("lolbench", JobShape::One, "d", &opts);
+        assert!(!lol.contains("build_jiuwenswarm_headless"));
+    }
+
+    #[test]
+    fn deepswe_one_task_takes_jiuwenswarm_inputs_on_the_developer_page() {
+        let mut opts = deepswe_opts(Vec::new());
+        let user = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        assert!(params_block(&user).contains("hidden(name: 'JIUWENSWARM_MODE', defaultValue: 'git'"));
+        assert!(params_block(&user).contains("hidden(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500'"));
+        opts.ui_profile = UiProfile::Developer;
+        let names = visible_names("deepswe", JobShape::One, &opts);
+        for name in [
+            "JIUWENSWARM_MODE", "JIUWENSWARM_RELEASE_FILE", "JIUWENSWARM_GIT_URL", "JIUWENSWARM_GIT_REF",
+            "JIUWENSWARM_GIT_REF_KIND", "JIUWENSWARM_AGENT_MODE", "JIUWENSWARM_MAX_TURNS",
+        ] {
+            assert!(names.contains(&name), "{name}");
+        }
+        let dev = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+        assert!(params_block(&dev).contains(&format!("description: '{DEVELOPER_PREFIX}Choose git (clone URL + ref")));
+        for bench in ["lolbench", "swebenchpro"] {
+            let names = visible_names(bench, JobShape::One, &opts);
+            assert!(!names.iter().any(|n| n.starts_with("JIUWENSWARM_")), "{bench}");
+        }
+        // The shard announces which harness and input it runs.
+        assert!(dev.contains("HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}"));
     }
 
     #[test]
@@ -2742,7 +3235,7 @@ mod tests {
         assert!(cause < set && set < jf.find("sh '''").unwrap());
         assert!(jf.contains("} catch (Throwable t) {\n              echo \"WARNING: could not read who started this build (${t})\""));
         // Copy Artifact refuses cross-job copies unless the source job allows them.
-        assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task')"));
+        assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task,build_jiuwenswarm_headless')"));
         let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
         assert!(xml.contains("CopyArtifactPermissionProperty"));
         assert!(xml.contains("<string>deepswe_full_suite_task</string>"));
@@ -2754,7 +3247,7 @@ mod tests {
     #[test]
     fn the_dispatcher_tells_the_merge_which_shards_ran() {
         let opts = deepswe_opts(Vec::new());
-        for shape in [JobShape::Some_, JobShape::FullSuite] {
+        for shape in dispatchers("deepswe") {
             let jf = eval_jenkinsfile("deepswe", shape, &opts);
             // One line per question x rollout, the unit's final build, in plan order.
             assert!(jf.contains(
@@ -2791,7 +3284,7 @@ mod tests {
         assert!(one.contains("def backup = readFile('eval-runs/last_backup.txt').trim()"));
         assert!(one.contains("archiveArtifacts artifacts: backup, allowEmptyArchive: true"));
         // A dispatcher packs the merged shards once and archives that.
-        for shape in [JobShape::Some_, JobShape::FullSuite] {
+        for shape in dispatchers("deepswe") {
             let jf = eval_jenkinsfile("deepswe", shape, &opts);
             let merge = jf.find("aggregate_runs.py").expect("aggregate step");
             let cost = jf.find("cost_token_report.py").expect("cost step");
@@ -2899,7 +3392,7 @@ mod tests {
         assert_eq!(opts.max_in_flight, 0);
         assert_eq!(opts.oom_retries, 2);
         for bench in EVAL_BENCHMARKS {
-            for shape in [JobShape::Some_, JobShape::FullSuite] {
+            for shape in dispatchers(bench) {
                 let jf = eval_jenkinsfile(bench, shape, &opts);
                 let block = params_block(&jf);
                 assert!(
@@ -3004,7 +3497,9 @@ mod tests {
         assert!(lolbench.contains("run_all.sh"));
         assert!(swebenchpro.contains("run_all.sh"));
         assert!(lolbench.contains("Evaluate the iCode harness with an LLM call on one LoLBench task"));
-        assert!(deepswe.contains("Evaluate the iCode harness with an LLM call on one DeepSWE task"));
+        assert!(deepswe.contains(
+            "Evaluate a harness (HARNESS: iCode or JiuwenSwarm) with an LLM call on one DeepSWE task"
+        ));
         assert!(swebenchpro.contains(
             "Evaluate the iCode harness with an LLM call on one SWE-bench Pro task"
         ));
@@ -3089,7 +3584,8 @@ mod tests {
         assert!(!xml.contains("/tmp/lab-icode-full-drop"));
         assert!(!xml.contains("file(name:"));
         assert!(xml.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
-        assert!(xml.contains("unstash 'ICODE_RELEASE_FILE'"));
+        assert!(xml.contains("'ICODE_RELEASE_FILE'"));
+        assert!(xml.contains("unstash upload"));
     }
 
     #[test]

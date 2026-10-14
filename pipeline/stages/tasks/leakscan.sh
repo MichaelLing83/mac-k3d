@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tasks/leakscan: the mounted iCode tree must not contain any selected task's
+# tasks/leakscan: the mounted harness tree must not contain any selected task's
 # gold patch. A hit question is listed in skipped_tasks.txt and left out of
 # the evaluate phase; the build stops here only when every selected question
 # is hit.
@@ -9,7 +9,7 @@ source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 
 TASKS_DIR="$(benchmark_tasks_dir)"
 ensure_selected_tasks
-HOST_ICODE="$(icode_host_root)"
+HOST_ICODE="$(harness_host_root)"
 PROTOCOL_INPUTS="$WORKDIR/eval_protocol_inputs.json"
 [ -f "$PROTOCOL_INPUTS" ] || die "run tasks/isolation first (missing $PROTOCOL_INPUTS)"
 

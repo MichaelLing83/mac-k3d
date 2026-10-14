@@ -10,6 +10,7 @@ host decides pass or fail.
 from __future__ import annotations
 
 import json
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 from canary_verdict import render_spec
-from icode_harbor_agent import MODEL_KEY_LOADER, ICodeAgent
+from icode_harbor_agent import ICODE_HOST, MODEL_KEY_LOADER, ICodeAgent
 
 PROBE_SRC = Path(__file__).with_name("canary_probe.sh")
 PROBE = "/installed-agent/canary_probe.sh"
@@ -36,7 +37,15 @@ TOOL_LIST_REASON = (
 
 
 class CanaryAgent(ICodeAgent):
-    """Record what the agent user can reach, read and write; then exit."""
+    """Record what the agent user can reach, read and write; then exit.
+
+    A harness's canary subclasses this and its agent (MRO: canary, agent,
+    ICodeAgent), so install() and run_env() are the agent's own.
+    """
+
+    HARNESS = "icode"
+    MOUNT = ICODE_HOST
+    TOOL_LIST_REASON = TOOL_LIST_REASON
 
     def __init__(self, *args, spec: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -51,6 +60,17 @@ class CanaryAgent(ICodeAgent):
         if self._spec_path is None or not self._spec_path.is_file():
             raise RuntimeError("CanaryAgent needs --ak spec=<file from canary_verdict.py spec>")
         return json.loads(self._spec_path.read_text(encoding="utf-8"))
+
+    def key_loader(self) -> str:
+        """The run shell's key prologue, so the probe sees the agent's exact env."""
+        return MODEL_KEY_LOADER
+
+    def runtime_probes(self) -> list[tuple[str, str]]:
+        """(name, command) pairs `canary_probe.sh runtime` records before the probe."""
+        return []
+
+    def probe_env(self) -> dict[str, str]:
+        return {**self.run_env(), "CANARY_MOUNT": self.MOUNT}
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
@@ -73,26 +93,31 @@ class CanaryAgent(ICodeAgent):
         context: AgentContext,
     ) -> None:
         spec = self._spec()
-        # iCode's loader, so the probe sees iCode's exact env and the key file is gone.
+        # The agent's loader, so the probe sees its exact env and the key file is gone.
         await self.upload_model_key(environment)
+        runtime = "".join(f"bash {PROBE} runtime {name} {command}; " for name, command in self.runtime_probes())
         await self.exec_as_agent(
             environment,
-            env=self.run_env(),
-            command=MODEL_KEY_LOADER + (
+            env=self.probe_env(),
+            command=self.key_loader() + (
                 'export PATH="$HOME/.local/bin:$PATH"; '
+                f"{runtime}"
                 f"bash {PROBE} probe; "
                 f"bash {PROBE} home post"
             ),
         )
-        await self.exec_as_root(environment, command=f"bash {PROBE} mount")
+        await self.exec_as_root(environment, command=f"CANARY_MOUNT={shlex.quote(self.MOUNT)} bash {PROBE} mount")
         host = {
             "schema": HOST_SCHEMA,
             "agent": self.name(),
+            "harness": self.HARNESS,
+            "mount": self.MOUNT,
+            "runtime_probes": [name for name, _ in self.runtime_probes()],
             "spec_version": spec.get("version", ""),
             "task": spec.get("task", ""),
             "allow_host": spec.get("allow_host"),
             "task_mcp_servers": len(self.mcp_servers),
-            "tool_list": {"status": "unavailable", "reason": TOOL_LIST_REASON},
+            "tool_list": {"status": "unavailable", "reason": self.TOOL_LIST_REASON},
         }
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         (self.logs_dir / "canary_host.json").write_text(json.dumps(host, indent=2) + "\n", encoding="utf-8")

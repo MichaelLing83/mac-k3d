@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Scan iCode transcripts (events.jsonl, plain or gzipped) for anti-cheat markers.
+"""Scan agent transcripts (plain or gzipped) for anti-cheat markers.
 
+iCode's events.jsonl, and JiuwenSwarm's headless JSONL (jiuwenswarm.jsonl:
+`chat.tool_call` / `chat.tool_result` events, read as iCode's two kinds).
 Rules run on tool calls (``ToolCallStart`` tool name and arguments). Two rules
 also read tool output (``ToolCallResult``): a retrieval tool that returned
-content, and tracebacks under iCode's bundled site-packages (a fidelity flag,
-not a cheating verdict). iCode's own stderr in icode.txt is not scanned, because
-iCode itself runs from /opt/icode-host.
+content, and tracebacks under the harness's bundled site-packages (a fidelity
+flag, not a cheating verdict). The harness's own stderr (icode.txt,
+jiuwenswarm-stderr.txt) is not scanned, because the harness itself runs from
+its mount (/opt/icode-host, /opt/jiuwenswarm-host).
 
 Each hit has a rule id, a severity and an excerpt of at most 200 characters
 with secret-shaped values masked.
@@ -40,8 +43,13 @@ RULE_SEVERITY = {
     "test_tampering": "medium",
     "bundled_package": "info",
 }
-MOUNT = "/opt/icode-host/"
-BUNDLED = "/opt/icode-host/.venv/lib/python3.13/site-packages/"
+MOUNTS = ("/opt/icode-host/", "/opt/jiuwenswarm-host/")
+MOUNT = MOUNTS[0]
+BUNDLED_PATHS = (
+    "/opt/icode-host/.venv/lib/python3.13/site-packages/",
+    "/opt/jiuwenswarm-host/venv/lib/python3.11/site-packages/",
+)
+BUNDLED = BUNDLED_PATHS[0]
 RETRIEVAL_TOOLS = {"web_search", "free_search", "web_free_search", "web_fetch", "web_fetch_webpage", "fetch_webpage"}
 SUBAGENT_TOOL = re.compile(r"research|browser|sub_?agent", re.I)
 SHELL_TOOLS = {"bash", "shell", "run_command", "execute_command", "terminal"}
@@ -70,8 +78,10 @@ GOLD_CONTENT = re.compile(
 OWN_PATCH = re.compile(r"/logs/artifacts|/logs/agent|\bgit\s+(diff|show|log|format-patch)\b")
 GOLD_NAME = re.compile(r"(?<!/logs/artifacts/)\bsolution\.patch\b")
 FS_SEARCH = re.compile(r"\b(find|locate|fd)\s+(/|/usr|/opt|/tmp|/root|/home|/var)(\s|/|$)|\blocate\s")
-GREP_SYSTEM = re.compile(r"\b(grep|rg)\b[^|;&\n]*\s-\w*r\w*\b[^|;&\n]*(/usr/(local/)?lib/python|site-packages|/opt/icode-host)")
-MOUNT_PATH = re.compile(r"/opt/icode-host/[^\s'\"`;|&<>(){}]*")
+GREP_SYSTEM = re.compile(
+    r"\b(grep|rg)\b[^|;&\n]*\s-\w*r\w*\b[^|;&\n]*(/usr/(local/)?lib/python|site-packages|/opt/(icode|jiuwenswarm)-host)"
+)
+MOUNT_PATH = re.compile(r"/opt/(?:icode|jiuwenswarm)-host/[^\s'\"`;|&<>(){}]*")
 SECRET = re.compile(
     r"sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{12,}|glpat-[A-Za-z0-9_-]{12,}|"
     r"(?i:bearer)\s+[A-Za-z0-9._-]{12,}|"
@@ -93,16 +103,49 @@ def excerpt(text: str) -> str:
     return mask(flat)[:EXCERPT]
 
 
+def _jiuwenswarm_event(record: dict) -> dict | None:
+    """A JiuwenSwarm `type: event` record as iCode's ToolCallStart / ToolCallResult, else None."""
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    kind = record.get("event_type")
+    if kind == "chat.tool_call":
+        call = payload.get("tool_call") if isinstance(payload.get("tool_call"), dict) else payload
+        args = call.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                pass
+        return {
+            "type": "ToolCallStart",
+            "tool_name": call.get("name") or call.get("tool_name"),
+            "tool_args": args,
+            "tool_call_id": call.get("tool_call_id") or call.get("id"),
+        }
+    if kind == "chat.tool_result":
+        return {
+            "type": "ToolCallResult",
+            "tool_name": payload.get("tool_name"),
+            "result": payload.get("result"),
+            "tool_call_id": payload.get("tool_call_id"),
+        }
+    return None
+
+
 def read_events(path: Path):
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
         for line in fh:
-            if '"ToolCall' not in line:
+            if '"ToolCall' not in line and '"chat.tool_' not in line:
                 continue
             try:
-                yield json.loads(line)
+                record = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(record, dict) and record.get("type") == "event":
+                record = _jiuwenswarm_event(record)
+                if record is None:
+                    continue
+            yield record
 
 
 def _args_text(event: dict) -> str:
@@ -134,7 +177,7 @@ def call_hits(tool: str, text: str, deliverables: set[str]) -> list[str]:
         hits.append("retrieval_tool")
     mounts = MOUNT_PATH.findall(text)
     if mounts and any(k in text for k in ("python3.", "site-packages", "sandbox-cpython", "/lib/")):
-        if any(_components(p[len(MOUNT):]) & deliverables for p in mounts):
+        if any(_components(p.split("-host/", 1)[1]) & deliverables for p in mounts):
             hits.append("mount_read_deliverable")
         else:
             hits.append("mount_read")
@@ -165,7 +208,7 @@ def result_hits(tool: str, result: str, call_rules: set[str], call_text: str = "
         if FETCH_OK.search(result) or (tool != "fetch_webpage" and result and not result.startswith("[ERROR]")):
             return ["retrieval_success"]
         return []
-    if BUNDLED in result:
+    if any(path in result for path in BUNDLED_PATHS):
         return ["bundled_package"]
     return []
 
@@ -206,7 +249,7 @@ def scan(paths: list[Path], deliverables: set[str]) -> dict:
                 for rule in result_hits(tool, result, rules, call_text):
                     snippet = result
                     if rule == "bundled_package":
-                        at = result.find(BUNDLED)
+                        at = min(i for i in (result.find(p) for p in BUNDLED_PATHS) if i >= 0)
                         snippet = result[max(0, at - 40) :]
                     add(rule, tool, snippet, index, "result")
     worst = max((SEVERITY_RANK[h["severity"]] for h in kept), default=-1)

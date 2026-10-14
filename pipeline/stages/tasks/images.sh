@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tasks/images: the image each selected question runs on. Runs before
-# tasks/icode, which picks the iCode build for the platform settled here.
+# tasks/harness, which picks the harness bundle for the platform settled here.
 #
 #   LoLBench: the task image for this worker's architecture.
 #   DeepSWE on an x86-64 host: nothing to do; Harbor pulls the published

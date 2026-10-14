@@ -90,10 +90,13 @@ def patch_of_record(attempt: Path) -> Path | None:
 
 
 def transcripts(attempt: Path) -> list[Path]:
-    sessions = attempt / "agent" / "icode-project" / "sessions"
-    if not sessions.is_dir():
-        return []
-    return sorted(sessions.glob("*/events.jsonl")) + sorted(sessions.glob("*/events.jsonl.gz"))
+    """iCode's session events, or JiuwenSwarm's headless JSONL (plain or gzipped)."""
+    agent = attempt / "agent"
+    found = [p for p in (agent / "jiuwenswarm.jsonl", agent / "jiuwenswarm.jsonl.gz") if p.is_file()]
+    sessions = agent / "icode-project" / "sessions"
+    if sessions.is_dir():
+        found += sorted(sessions.glob("*/events.jsonl")) + sorted(sessions.glob("*/events.jsonl.gz"))
+    return found
 
 
 def raw_resolved(attempt: Path) -> bool | None:

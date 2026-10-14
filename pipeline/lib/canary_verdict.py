@@ -34,6 +34,7 @@ from pathlib import Path
 from anticheat_leakscan import is_test_path
 from anticheat_similarity import generated_globs, is_generated, parse_patch
 from anticheat_similarity import load_config as load_anticheat_config
+import harness as harness_table
 
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "canary-v1.json"
 SCHEMA = "mac-k3d-canary-v1"
@@ -46,6 +47,7 @@ CHECKS = (
     "history",
     "env_names",
     "python_env",
+    "runtime",
     "icode_home",
     "tool_list",
 )
@@ -163,7 +165,7 @@ def build_spec(task_dir: Path, benchmark: str, config: dict | None = None, allow
         "paths": sorted(set(config.get("gold_paths") or []) | set(gold_paths)),
         "hashes": gold_content_hashes(gold, globs),
         "prune": list(config.get("prune") or []),
-        "mount": config.get("mount", "/opt/icode-host"),
+        "mount": harness_table.current().mount,
         "timeouts": dict(config.get("timeouts") or {}),
         "model_attempts": int(config.get("model_attempts") or 1),
         "allow_host": allow_host or None,
@@ -208,8 +210,24 @@ def trial_error(trial: Path) -> str:
 
 def load_facts(agent_dir: Path) -> dict:
     facts = {key: _load_json(agent_dir / name) for key, name in FACT_FILES.items()}
+    facts["runtime"] = {
+        path.stem.removeprefix("canary_runtime_"): _load_json(path)
+        for path in sorted(agent_dir.glob("canary_runtime_*.json"))
+    }
     facts["trial_error"] = trial_error(agent_dir.parent)
     return facts
+
+
+def _harness(host: dict | None) -> harness_table.Harness:
+    """The harness the canary ran as; iCode for host records older than the field."""
+    return harness_table.from_record({"name": host.get("harness")} if isinstance(host, dict) else None)
+
+
+def _mount(host: dict | None, config: dict) -> str:
+    mount = host.get("mount") if isinstance(host, dict) else None
+    if isinstance(mount, str) and mount:
+        return mount
+    return str(config.get("mount") or harness_table.get("icode").mount)
 
 
 def _check(status: str, detail: str = "") -> dict:
@@ -350,12 +368,12 @@ def secret_like(name: str, rules: dict) -> bool:
     return any(upper.endswith(suffix) for suffix in rules.get("suffix") or [])
 
 
-def check_env(probe: dict, config: dict) -> dict:
+def check_env(probe: dict, config: dict, host: dict | None = None) -> dict:
     names = probe.get("env_names")
     if not isinstance(names, list):
         return _check("fail", "no environment names recorded")
     rules = config.get("secret_names") or {}
-    allowed = set(rules.get("allowed") or [])
+    allowed = set(rules.get("allowed") or []) | set(_harness(host).key_names)
     forbidden = set(rules.get("forbidden") or [])
     bad = sorted({str(n) for n in names if str(n) in forbidden or (secret_like(str(n), rules) and str(n) not in allowed)})
     if bad:
@@ -373,7 +391,30 @@ def check_python_env(probe: dict, mount: str) -> dict:
     return _check("pass", f"neither PYTHONPATH nor VIRTUAL_ENV points into {mount}")
 
 
+def check_runtime(runtime: dict | None, host: dict | None) -> dict:
+    """The harness's own commands, run once in the task image (canary_probe.sh runtime)."""
+    expected = host.get("runtime_probes") if isinstance(host, dict) else None
+    if not isinstance(expected, list) or not expected:
+        return _check("skip", f"{_harness(host).display}'s install starts it before the probe")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    problems = []
+    for name in expected:
+        fact = runtime.get(str(name))
+        if not isinstance(fact, dict):
+            problems.append(f"{name}: not recorded")
+        elif fact.get("exit") != 0:
+            problems.append(f"{name}: exit {fact.get('exit')} ({fact.get('error') or '-'})")
+    if problems:
+        return _check("fail", "; ".join(problems))
+    return _check("pass", ", ".join(str(n) for n in expected) + " ran in the task image")
+
+
 def check_icode_home(pre: dict | None, post: dict | None, host: dict | None) -> dict:
+    if _harness(host).name != "icode":
+        servers = host.get("task_mcp_servers") if isinstance(host, dict) else None
+        if isinstance(servers, int) and servers > 0:
+            return _check("fail", f"the task declares {servers} MCP servers")
+        return _check("skip", f"iCode-only (~/.icode, research subagent); {_harness(host).display} declares no task MCP servers")
     if pre is None or post is None:
         return _check("fail", "iCode home state not recorded before and after install")
     problems = []
@@ -423,8 +464,9 @@ def verdict(facts: dict, config: dict | None = None) -> dict:
         "filesystem": check_filesystem(probe, config),
         "mount": check_mount(probe, facts.get("root")),
         "history": check_history(probe),
-        "env_names": check_env(probe, config),
-        "python_env": check_python_env(probe, str(config.get("mount") or "/opt/icode-host")),
+        "env_names": check_env(probe, config, host),
+        "python_env": check_python_env(probe, _mount(host, config)),
+        "runtime": check_runtime(facts.get("runtime"), host),
         "icode_home": check_icode_home(facts.get("home_pre"), facts.get("home_post"), facts.get("host")),
         "tool_list": check_tool_list(facts.get("host")),
     }

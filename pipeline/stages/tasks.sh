@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # tasks phase: everything the selected tasks need before Harbor starts, and
 # every check that can refuse them. No CPU lock. tasks/images comes before
-# tasks/icode: it settles the task containers' platform, which picks the iCode
-# drop or venv.
+# tasks/harness: it settles the task containers' platform, which picks the
+# harness bundle (and, for an iCode release, the drop).
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 
@@ -10,8 +10,7 @@ STEPS=(
   tasks/benchmark
   tasks/select
   tasks/images
-  tasks/icode
-  tasks/icode_sandbox
+  tasks/harness
   tasks/agent
   tasks/isolation
   tasks/leakscan

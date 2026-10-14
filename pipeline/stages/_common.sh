@@ -72,6 +72,14 @@ export ICODE_GIT_REF_KIND="${ICODE_GIT_REF_KIND:-branch}"
 export N_TASKS="${N_TASKS:-1}"
 export TASK="${TASK:-}"
 export HARNESS="${HARNESS:-icode}"
+# JiuwenSwarm inputs (pipeline/lib/jiuwenswarm_input.sh), used when HARNESS=jiuwenswarm.
+export JIUWENSWARM_MODE="${JIUWENSWARM_MODE:-git}"
+export JIUWENSWARM_GIT_URL="${JIUWENSWARM_GIT_URL:-https://gitcode.com/michaelling/jiuwenswarm}"
+export JIUWENSWARM_GIT_REF="${JIUWENSWARM_GIT_REF:-2}"
+export JIUWENSWARM_GIT_REF_KIND="${JIUWENSWARM_GIT_REF_KIND:-pr}"
+export JIUWENSWARM_RELEASE="${JIUWENSWARM_RELEASE:-}"
+export JIUWENSWARM_AGENT_MODE="${JIUWENSWARM_AGENT_MODE:-agent.code.normal}"
+export JIUWENSWARM_MAX_TURNS="${JIUWENSWARM_MAX_TURNS:-500}"
 export LLM="${LLM:-deepseek}"
 export BENCHMARK="${BENCHMARK:-deepswe}"
 export BASELINE_DIR="$WORKDIR/baseline"
@@ -493,16 +501,57 @@ export ICODE_REASONING_EFFORT="${ICODE_REASONING_EFFORT:-high}"
 export ICODE_MAX_TOKENS="${ICODE_MAX_TOKENS:-65536}"
 export ICODE_MAX_ITERATIONS="${ICODE_MAX_ITERATIONS:-500}"
 
-# The iCode tree Harbor mounts read-only at /opt/icode-host (tasks/icode.sh).
-icode_host_root() {
+# The harness under test (HARNESS). pipeline/lib/harness.py is the same table
+# for the Python steps.
+harness_check_name() {
+  case "$HARNESS" in
+    icode | jiuwenswarm) ;;
+    *) die "unknown HARNESS=$HARNESS (use icode or jiuwenswarm)" ;;
+  esac
+}
+
+harness_display() {
+  case "$HARNESS" in
+    jiuwenswarm) printf '%s\n' JiuwenSwarm ;;
+    *) printf '%s\n' iCode ;;
+  esac
+}
+
+# Where a trial sees the harness tree, read-only.
+harness_mount_target() {
+  case "$HARNESS" in
+    jiuwenswarm) printf '%s\n' /opt/jiuwenswarm-host ;;
+    *) printf '%s\n' /opt/icode-host ;;
+  esac
+}
+
+# The harness tree Harbor mounts read-only (tasks/harness.sh).
+harness_host_root() {
   local bin
+  if [ -s "$WORKDIR/harness_host_root.txt" ]; then
+    cat "$WORKDIR/harness_host_root.txt"
+    return 0
+  fi
   if [ -s "$WORKDIR/icode_host_root.txt" ]; then
     cat "$WORKDIR/icode_host_root.txt"
     return 0
   fi
-  [ -s "$WORKDIR/icode_bin_path.txt" ] || die "no iCode in $WORKDIR; run the tasks phase first"
+  [ -s "$WORKDIR/icode_bin_path.txt" ] || die "no harness in $WORKDIR; run the tasks phase first"
   bin="$(cat "$WORKDIR/icode_bin_path.txt")"
   (cd "$(dirname "$bin")" && pwd)
+}
+
+icode_host_root() {
+  harness_host_root
+}
+
+# A tree in the harness store is read-only and shared by every build on this worker.
+harness_tree_stored() {
+  local store="${MAC_K3D_HARNESS_STORE:-$MAC_K3D_SHARE/harness-store}"
+  case "$1" in
+    "$store"/*) return 0 ;;
+  esac
+  return 1
 }
 
 # The run folder report/render.sh wrote; the archive steps read it.

@@ -15,11 +15,11 @@ Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (d
 - **LoLBench** via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, the `tasks` phase builds or retags a local image (do not use Harbor `--force-build`).
 - **SWE-bench Pro** via **Harbor**. The `tasks` phase writes a task whose image is `jefzda/sweap-images:…`. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB each; first live job should set **one** `TASK` (`instance_id`).
 
-Each benchmark has three job shapes.
+Each benchmark has three job shapes. A tenth job, `build_jiuwenswarm_headless`, runs DeepSWE questions with the JiuwenSwarm harness instead of iCode ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)).
 
 ```mermaid
 flowchart LR
-  controller["controller: nine jobs"] --> one["one_task: 1 question, 1 rollout"]
+  controller["controller: ten jobs"] --> one["one_task: 1 question, 1 rollout"]
   controller --> some["some_task: a list or the first N"]
   controller --> full["full_suite_task: the whole suite"]
   some --> one
@@ -27,7 +27,7 @@ flowchart LR
   one --> worker["worker: Harbor, then JSON / HTML"]
 ```
 
-Start with `_one_task`. Use `_some_task` for a handful of questions and `_full_suite_task` for the whole suite. Both queue one `_one_task` build per question and rollout, then merge. Details: [evaluation.md](evaluation.md#which-job-to-run). The seven phases and the out-of-memory requeue are in [pipeline.md](pipeline.md).
+Start with `_one_task`. Use `_some_task` for a handful of questions and `_full_suite_task` for the whole suite. Both build the harness once, queue one `_one_task` build per question and rollout, then merge. Details: [evaluation.md](evaluation.md#which-job-to-run). The seven phases and the out-of-memory requeue are in [pipeline.md](pipeline.md).
 
 Workers do **not** create a `.env` or store the DeepSeek key. The key lives on the **cloud Jenkins** credential `deepseek-api-key`.
 
@@ -144,7 +144,7 @@ In Jenkins: **Manage Jenkins → Nodes**. This machine must be **online** with l
 
 Details: [icode-harness-inputs.md](icode-harness-inputs.md). Both methods work for DeepSWE and LoLBench.
 
-1. **Release binary (typical)** — download `icode-<os>-<arch>-full-vX.Y.Z`. **Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload `ICODE_RELEASE_FILE` (the original `*-full-*` name is lost; `tasks/icode` uses gzip/tar magic or copies a standalone binary as `icode`). **Local `--stage` / `--local`:** copy to `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release /path/to/that-drop`. This is **not** a git clone of GitHub Release assets.
+1. **Release binary (typical)** — download `icode-<os>-<arch>-full-vX.Y.Z`. **Jenkins:** Build with Parameters → `ICODE_MODE=release` → upload `ICODE_RELEASE_FILE` (the original `*-full-*` name is lost; `tasks/harness` uses gzip/tar magic or copies a standalone binary as `icode`). **Local `--stage` / `--local`:** copy to `~/.local/share/mac-k3d/` or `mac-k3d set --icode-release /path/to/that-drop`. This is **not** a git clone of GitHub Release assets.
 2. **Git clone** — `ICODE_MODE=git` plus URL + `ICODE_GIT_REF` + `ICODE_GIT_REF_KIND` (`branch` / `tag` / `commit` / `pr`). A tag checkout is a git tag, not a downloaded zip. Kind `pr` takes the pull-request number and checks out that tip. Report field `icode_git` records the resolved SHA. The clone is under the eval workdir, not a permanent developer tree.
 
 ```bash

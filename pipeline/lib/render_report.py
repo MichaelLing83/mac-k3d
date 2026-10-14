@@ -25,7 +25,8 @@ from eval_metrics import (
 )
 from score_results import OOM_CAUSE, infra_cause, load_json, parse_reward_value, rates_for_trial, trial_exception
 from icode_usage import find_icode_usage, icode_exit_code, icode_log_text, provider_error_marker
-from provenance import PROVENANCE_FILE
+import jiuwenswarm_usage
+from provenance import PROVENANCE_FILE, harness_line, harness_protocol
 from task_resources import cpu_count
 
 # iCode's built-in output cap. A run that recorded no max_tokens predates
@@ -147,10 +148,11 @@ def _attempt_from_trial(trial: Path, reward_path: Path | None, max_tokens: int |
         else:
             row["empty_patch_cause"] = "no_edit"
     # 137 = SIGKILL, in a trial almost always the container's memory limit.
-    # The grader's result stands; the note says why iCode stopped.
+    # The grader's result stands; the note says why the agent stopped.
     if row["icode_exit"] == 137:
+        agent = "JiuwenSwarm" if (trial / "agent" / jiuwenswarm_usage.EXIT).is_file() else "iCode"
         row["oom_killed"] = True
-        row["notes"] = _add_note(row["notes"], "iCode killed (exit 137, likely out of memory)")
+        row["notes"] = _add_note(row["notes"], f"{agent} killed (exit 137, likely out of memory)")
     # The grader's reward, F2P and P2P stand. The note says the named tests never ran.
     if has_reward and _suite_did_not_compile(trial):
         row["notes"] = _add_note(row["notes"], "suite did not compile (tests did not run)")
@@ -374,14 +376,18 @@ def build_eval_protocol(
     if not isinstance(cpu_lock, int) or isinstance(cpu_lock, bool):
         raw_lock = os.environ.get("CPU_LOCK_QTY") or ""
         cpu_lock = int(raw_lock) if raw_lock.isdigit() else None
+    harness = inputs.get("harness") if isinstance(inputs.get("harness"), dict) else None
+    if harness is None:
+        harness = harness_protocol(workdir)
     protocol = {
+        "harness": harness,
         "icode": icode,
         "model_params": {
             "model": str(inputs.get("model") or model),
             "api_base": str(inputs.get("api_base") or api_base),
             "provider": provider,
             "reasoning_effort": effort,
-            "thinking": {"type": _thinking_type(effort)},
+            "thinking": {"type": "default" if effort == "default" else _thinking_type(effort)},
             "max_tokens": max_tokens,
             "max_iterations": max_iterations,
             "n_rollouts": n_rollouts,
@@ -664,8 +670,14 @@ def icode_identity(icode: dict | None) -> str:
     return str(release.get("sha256") or "")
 
 
+def harness_display(protocol: dict | None) -> str:
+    """The harness's display name from eval_protocol.harness; iCode for runs older than it."""
+    harness = protocol.get("harness") if isinstance(protocol, dict) and isinstance(protocol.get("harness"), dict) else {}
+    return str(harness.get("display") or "iCode")
+
+
 def icode_under_test(protocol: dict | None) -> str:
-    """One line naming the iCode this run actually graded: git SHA or release sha256."""
+    """One line naming the harness build this run actually graded: git SHA or release sha256."""
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     git = icode.get("git") if isinstance(icode.get("git"), dict) else {}
     if icode.get("mode") != "release" and (git.get("sha") or icode.get("mode") == "git"):
@@ -696,14 +708,18 @@ def summary_markdown(doc: dict) -> str:
     lines.append(f"- Eval model: `{doc.get('model')}`")
     lines.append(f"- Eval API base: `{doc.get('api_base')}`")
     protocol = doc.get("eval_protocol")
+    agent = harness_display(protocol)
     if isinstance(protocol, dict):
         icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
         params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
         resources = protocol.get("resources") if isinstance(protocol.get("resources"), dict) else {}
         thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
-        lines.append(f"- iCode mode: `{icode.get('mode') or '-'}`")
-        lines.append(f"- iCode source: `{icode.get('source') or '-'}`")
-        lines.append(f"- iCode under test: `{icode_under_test(protocol)}`")
+        harness = protocol.get("harness") if isinstance(protocol.get("harness"), dict) else None
+        if harness:
+            lines.append(f"- {harness_line(harness)}")
+        lines.append(f"- {agent} mode: `{icode.get('mode') or '-'}`")
+        lines.append(f"- {agent} source: `{icode.get('source') or '-'}`")
+        lines.append(f"- {agent} under test: `{icode_under_test(protocol)}`")
         lines.append(
             "- Model params: "
             f"provider `{params.get('provider') or '-'}` · "
@@ -781,14 +797,14 @@ def summary_markdown(doc: dict) -> str:
             counts = empty_patch_cause_counts(empty_items)
             of = f" of {metrics_n * k}" if isinstance(metrics_n, int) else ""
             lines.append(
-                f"- Empty model.patch (repo unchanged after iCode): **{len(empty_items)}**{of} rollouts "
+                f"- Empty model.patch (repo unchanged after {agent}): **{len(empty_items)}**{of} rollouts "
                 f"(infra {counts['infra']} · cut_off {counts['cut_off']} · no_edit {counts['no_edit']})"
             )
         if isinstance(arm.get("cut_off_rollouts"), int):
             lines.append(f"- Cut-off replies (last reply hit max_tokens): **{arm['cut_off_rollouts']}** rollouts")
         if isinstance(arm.get("oom_killed_rollouts"), int):
             lines.append(
-                f"- OOM-killed rollouts (iCode exit 137 or the container ran out of memory): "
+                f"- OOM-killed rollouts ({agent} exit 137 or the container ran out of memory): "
                 f"**{arm['oom_killed_rollouts']}**"
             )
         macro = arm.get("macro") or {}

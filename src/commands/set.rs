@@ -19,7 +19,8 @@ pub struct SetArgs {
     #[arg(long)]
     pub check_models: bool,
 
-    /// Harness id (catalog)
+    /// Harness id (catalog): the default HARNESS of deepswe_one_task. jiuwenswarm
+    /// runs on DeepSWE only; every other job keeps icode
     #[arg(long)]
     pub harness: Option<String>,
 
@@ -496,6 +497,13 @@ fn print_set_summary(config: &MacK3dConfig, path: &Path) {
         nonempty_or(&job.default_deepseek_model, eval_catalog::default_model()),
         nonempty_or(&job.default_benchmark, "(unset)")
     );
+    if job.default_harness == "jiuwenswarm" {
+        println!(
+            "  jiuwenswarm is the default HARNESS of {} only; {} runs it on DeepSWE, and every other job keeps icode.",
+            crate::prepare::jenkins_job::DEEPSWE_ONE_TASK,
+            crate::prepare::jenkins_job::JIUWENSWARM_HEADLESS
+        );
+    }
     if !job.default_tasks.is_empty() {
         println!("  tasks={}", job.default_tasks.join(","));
     } else if !job.default_task.is_empty() {

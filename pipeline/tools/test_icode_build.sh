@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fixture tests for tasks/icode.sh: binary-mode official *-full-* names (no network).
+# Fixture tests for tasks/harness.sh (HARNESS=icode): binary-mode official *-full-* names (no network).
 set -euo pipefail
 
 STAGES="$(cd "$(dirname "$0")/../stages" && pwd)"
@@ -40,7 +40,7 @@ run_icode() {
     MAC_K3D_ICODE_PATHS="$TMP/no-saved-icode-paths.yaml" \
     ICODE_MODE=binary \
     ICODE_RELEASE="${3-}" \
-    bash "$STAGES/tasks/icode.sh"
+    bash "$STAGES/tasks/harness.sh"
 }
 
 assert_icode_ok() {
@@ -101,7 +101,7 @@ RAND="$TMP/notes.txt"
 echo not-icode >"$RAND"
 W5="$TMP/w5"
 if run_icode "$W5" "$TMP/empty-share" "$RAND" >/dev/null 2>&1; then
-  fail "expected tasks/icode to reject $RAND"
+  fail "expected tasks/harness to reject $RAND"
 fi
 ok "reject random file that is not icode or *-full-*"
 
@@ -123,10 +123,18 @@ echo "$help6" | grep -q "usage: icode" || fail "expected tarball stub, got: $hel
 echo "$help6" | grep -q WRAPPER && fail "leftover wrapper won over *-full-*"
 ok "discover prefers *-full-* over leftover icode"
 
-# 7. git mode with MAC_K3D_ICODE_FETCH_DIR (no network): wrapper + host root
+# 7. git mode with MAC_K3D_ICODE_FETCH_DIR (no network): wrapper + host root.
+# The sandbox interpreter forwards to this host's python3, so sanitizing and
+# the sandbox probe run for real on a Python icode stub.
 FETCH="$TMP/fake-icode-src"
-mkdir -p "$FETCH/.venv/bin"
-make_stub "$FETCH/.venv/bin/icode"
+mkdir -p "$FETCH/.venv/bin" "$FETCH/.venv/sandbox-cpython/bin" "$FETCH/.venv/sandbox-cpython/lib/python3.13"
+cat >"$FETCH/.venv/bin/icode" <<'EOF'
+#!/usr/bin/env python3
+print("usage: icode [--help]")
+EOF
+chmod +x "$FETCH/.venv/bin/icode"
+printf '#!/bin/sh\nexec python3 "$@"\n' >"$FETCH/.venv/sandbox-cpython/bin/python3.13"
+chmod +x "$FETCH/.venv/sandbox-cpython/bin/python3.13"
 W7="$TMP/w7"
 mkdir -p "$W7"
 env \
@@ -135,7 +143,7 @@ env \
   ICODE_MODE=git \
   MAC_K3D_ICODE_FETCH_DIR="$FETCH" \
   ICODE_RELEASE="" \
-  bash "$STAGES/tasks/icode.sh" >/dev/null
+  bash "$STAGES/tasks/harness.sh" >/dev/null
 BIN7="$(cat "$W7/icode_bin_path.txt")"
 ROOT7="$(cat "$W7/icode_host_root.txt")"
 [ "$ROOT7" = "$FETCH" ] || fail "icode_host_root.txt expected $FETCH got $ROOT7"
@@ -162,7 +170,7 @@ env \
   ICODE_MODE=git \
   MAC_K3D_ICODE_FETCH_DIR="$FETCH" \
   ICODE_RELEASE="" \
-  bash "$STAGES/tasks/icode.sh" >/dev/null
+  bash "$STAGES/tasks/harness.sh" >/dev/null
 [ ! -f "$W8B/icode_release.json" ] || fail "git mode left stale icode_release.json"
 ok "git mode drops leftover icode_release.json"
 
@@ -174,10 +182,10 @@ if env \
   MAC_K3D_SHARE="$SHARE" \
   ICODE_MODE=source \
   ICODE_RELEASE="" \
-  bash "$STAGES/tasks/icode.sh" >/dev/null 2>&1; then
-  fail "expected tasks/icode to reject ICODE_MODE=source"
+  bash "$STAGES/tasks/harness.sh" >/dev/null 2>&1; then
+  fail "expected tasks/harness to reject ICODE_MODE=source"
 fi
-ok "tasks/icode rejects ICODE_MODE=source"
+ok "tasks/harness rejects ICODE_MODE=source"
 
 # 10. release from persist parent folder containing *-full-* child
 PARENT="$TMP/iCode-binary"
@@ -192,7 +200,7 @@ env \
   MAC_K3D_ICODE_PATHS="$PATHS" \
   ICODE_MODE=release \
   ICODE_RELEASE="" \
-  bash "$STAGES/tasks/icode.sh" >/dev/null
+  bash "$STAGES/tasks/harness.sh" >/dev/null
 [ -s "$W10/icode_bin_path.txt" ] || fail "missing release bin from parent folder persist"
 ok "release mode from persist parent folder with *-full-* child"
 
@@ -208,7 +216,7 @@ env \
   ICODE_MODE=release \
   ICODE_RELEASE="$UP_GZ" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/tasks/icode.sh" >/dev/null
+  bash "$STAGES/tasks/harness.sh" >/dev/null
 [ -s "$W11/icode_bin_path.txt" ] || fail "missing bin from unnamed gzip upload"
 ok "Jenkins upload unnamed gzip (ICODE_RELEASE_FILE) unpacks"
 
@@ -224,7 +232,7 @@ env \
   ICODE_MODE=release \
   ICODE_RELEASE="$UP_BIN" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/tasks/icode.sh" >/dev/null
+  bash "$STAGES/tasks/harness.sh" >/dev/null
 [ -s "$W12/icode_bin_path.txt" ] || fail "missing bin from unnamed stub upload"
 ok "Jenkins upload unnamed stub copies as icode"
 
@@ -240,8 +248,8 @@ if env \
   ICODE_MODE=release \
   ICODE_RELEASE="" \
   ICODE_RELEASE_UPLOADED=1 \
-  bash "$STAGES/tasks/icode.sh" >/dev/null 2>&1; then
-  fail "expected tasks/icode to reject empty Jenkins upload"
+  bash "$STAGES/tasks/harness.sh" >/dev/null 2>&1; then
+  fail "expected tasks/harness to reject empty Jenkins upload"
 fi
 ok "empty Jenkins upload does not fall back to persist"
 

@@ -208,7 +208,7 @@ mac-k3d eval --stage tasks --n-tasks 1 --icode-mode git \
   --icode-git-url https://github.com/ORG/icode.git --icode-git-ref main --icode-git-ref-kind branch
 ```
 
-**Expected, step by step:** `tasks/benchmark` prints `OK deepswe tasks dir … (113 task dirs)` after checking out `https://github.com/datacurve-ai/deep-swe` at its pin; `tasks/select` prints `OK selected <ids>`; `tasks/icode` prints `OK icode helps (…)`; `tasks/agent` prints `icode_harbor_agent:ICodeAgent`; `tasks/isolation` prints `OK isolation: mount …, agent hosts api.deepseek.com api.deepseek.ai`; `tasks/leakscan` prints `OK leak scan: no task gold in …`.
+**Expected, step by step:** `tasks/benchmark` prints `OK deepswe tasks dir … (113 task dirs)` after checking out `https://github.com/datacurve-ai/deep-swe` at its pin; `tasks/select` prints `OK selected <ids>`; `tasks/harness` prints `OK icode helps (…)` when it builds iCode, then `harness bundle: <sha256> from <source> (…)` (`store` when this worker already had that bundle); `tasks/agent` prints `icode_harbor_agent:ICodeAgent`; `tasks/isolation` prints `OK isolation: mount …, agent hosts api.deepseek.com api.deepseek.ai`; `tasks/leakscan` prints `OK leak scan: no task gold in …`.
 
 ## `evaluate` — slots, canary, one `harbor run` (N=1)
 
@@ -279,7 +279,7 @@ mac-k3d eval --n-tasks 1 --icode-mode release --model deepseek-v4-pro
 |---------|------------|
 | harbor not found | Re-run `--stage env` (installs the pinned Harbor) |
 | DeepSWE clone fails | Network / git; retry `--stage tasks` |
-| `uv sync failed: iCode pins a git dependency over SSH`, or `Host key verification failed` / `Permission denied (publickey)` in `tasks/icode` | iCode pins a dependency as `ssh://git@gitcode.com/…`. Store the GitCode PAT as `gitcode-pat` on the controller (`mac-k3d config --update-secrets`) or `GITCODE_TOKEN` in `.env`; `uv sync` then fetches it over https. A worker without a PAT needs its own GitCode SSH key ([icode-harness-inputs.md](../icode-harness-inputs.md#2-git-clone-icode_modegit)) |
+| `uv sync failed: iCode pins a git dependency over SSH`, or `Host key verification failed` / `Permission denied (publickey)` in `tasks/harness` | iCode pins a dependency as `ssh://git@gitcode.com/…`. Store the GitCode PAT as `gitcode-pat` on the controller (`mac-k3d config --update-secrets`) or `GITCODE_TOKEN` in `.env`; `uv sync` then fetches it over https. A worker without a PAT needs its own GitCode SSH key ([icode-harness-inputs.md](../icode-harness-inputs.md#2-git-clone-icode_modegit)) |
 | DEEPSEEK_API_KEY missing | Copy `.env.example` → `.env` (chmod 600). Do not export the key. E7: store `deepseek-api-key` on the **cloud** controller ([secrets.md](../secrets.md)) |
 | No such option: --agent-dir | Old Pier flags. This tree runs `harbor run -a icode_harbor_agent:ICodeAgent`. |
 | Docker OOM / disk | DeepSWE images are large; free disk; lower N |

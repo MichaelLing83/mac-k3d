@@ -50,10 +50,12 @@ class PhaseLayoutTests(unittest.TestCase):
                 self.assertTrue(step.startswith(f"{phase}/"), f"{phase}.sh runs {step} from another phase")
                 self.assertTrue((STAGES / f"{step}.sh").is_file(), f"{phase}.sh lists missing {step}.sh")
 
-    def test_tasks_images_settles_the_platform_before_icode(self):
+    def test_tasks_images_settles_the_platform_before_the_harness(self):
         listed = steps("tasks")
-        # The image decision picks the task containers' platform, which picks the iCode drop or venv.
-        self.assertLess(listed.index("tasks/images"), listed.index("tasks/icode"))
+        # The image decision picks the task containers' platform, which picks the harness bundle.
+        self.assertLess(listed.index("tasks/images"), listed.index("tasks/harness"))
+        self.assertNotIn("tasks/icode", listed)
+        self.assertNotIn("tasks/icode_sandbox", listed)
         images = (STAGES / "tasks" / "images.sh").read_text(encoding="utf-8")
         self.assertIn('rm -f "$WORKDIR/env_check.json"', images)
         # Only the leak scan keeps questions out.

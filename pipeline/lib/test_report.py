@@ -1230,7 +1230,9 @@ printf 'gc:%s gh:%s' "$GITCODE_TOKEN" "$GITHUB_TOKEN"
             (STAGES / name).read_text(encoding="utf-8")
             for name in ("evaluate/harbor_cmd.sh", "evaluate/harbor_run.sh", "_common.sh")
         )
-        self.assertIn("icode_harbor_agent:ICodeAgent", text)
+        # The import path comes from the harness table, never a bare `--agent icode`.
+        self.assertIn('"icode_harbor_agent:ICodeAgent"', (LIB / "harness.py").read_text(encoding="utf-8"))
+        self.assertIn('RUN_AGENT="$(python3 "$PIPELINE_LIB/harness.py" get "$HARNESS" agent)"', text)
         self.assertIn("harbor run", text)
         # One run covers every selected task x rollout; Harbor schedules them.
         self.assertIn('cmd+=(-k "$N_ROLLOUTS")', text)
@@ -1304,8 +1306,9 @@ exit 0
         self.assertIn("https://api.deepseek.com/v1", agent)
         stage = (STAGES / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         # One `harbor run` per build names the agent once; the canary names its own.
-        self.assertEqual(stage.count("icode_harbor_agent:ICodeAgent"), 1)
-        self.assertIn("canary_harbor_agent:CanaryAgent", stage)
+        self.assertEqual(stage.count('cmd+=(-a "$RUN_AGENT")'), 1)
+        self.assertEqual(stage.count('cmd+=(-a "$CANARY_AGENT")'), 1)
+        self.assertIn('"canary_harbor_agent:CanaryAgent"', (LIB / "harness.py").read_text(encoding="utf-8"))
         self.assertIn('cmd+=(--ae "ICODE_PROVIDER=${ICODE_PROVIDER}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_API_BASE=${ICODE_API_BASE}")', stage)
         self.assertIn('cmd+=(--ae "ICODE_REASONING_EFFORT=${ICODE_REASONING_EFFORT}")', stage)
@@ -1325,7 +1328,7 @@ exit 0
             for name in ("evaluate/harbor_cmd.sh", "evaluate/harbor_run.sh", "tasks/images.sh")
         )
         self.assertIn("harbor run", text)
-        self.assertIn("icode_harbor_agent:ICodeAgent", text)
+        self.assertIn('cmd+=(-a "$RUN_AGENT")', text)
         self.assertIn('python3 "$PIPELINE_LIB/network_allowlist.py" hosts', text)
         self.assertIn("ICODE_MODEL", text)
         self.assertIn("reward.json", text)
@@ -1368,7 +1371,7 @@ exit 0
     def test_tasks_phase_installs_the_agent_for_every_benchmark(self):
         tasks = (STAGES / "tasks.sh").read_text(encoding="utf-8")
         evaluate = (STAGES / "evaluate.sh").read_text(encoding="utf-8")
-        for step in ("tasks/icode", "tasks/agent", "tasks/isolation"):
+        for step in ("tasks/harness", "tasks/agent", "tasks/isolation"):
             self.assertIn(f"  {step}\n", tasks)
         self.assertIn("evaluate/harbor_run", evaluate)
         agent = (STAGES / "tasks" / "agent.sh").read_text(encoding="utf-8")
@@ -1380,7 +1383,7 @@ exit 0
         self.assertNotIn("swebenchpro_run.py", text)
         self.assertNotIn("pier run", text)
         self.assertIn("harbor run", text)
-        self.assertIn("icode_harbor_agent:ICodeAgent", text)
+        self.assertIn('cmd+=(-a "$RUN_AGENT")', text)
         p2 = (STAGES / "tasks" / "benchmark.sh").read_text(encoding="utf-8")
         self.assertIn("swebenchpro_tasks.py", p2)
         self.assertIn("swebenchpro", p2)
@@ -4320,7 +4323,7 @@ class AgentIsolationTests(unittest.TestCase):
         stages = ROOT / "pipeline" / "stages"
         script = (
             "set -e\n"
-            'for step in tasks/icode_sandbox tasks/isolation tasks/leakscan; do bash "$1/$step.sh"; done\n'
+            'for step in tasks/isolation tasks/leakscan; do bash "$1/$step.sh"; done\n'
             'bash "$1/evaluate.sh"\n'
         )
         proc = subprocess.run(
@@ -4365,6 +4368,51 @@ class AgentIsolationTests(unittest.TestCase):
             self.assertEqual(isolation["network_allowlist"]["agent_hosts"], ["api.deepseek.com", "api.deepseek.ai"])
         stage = (ROOT / "pipeline" / "stages" / "evaluate" / "harbor_cmd.sh").read_text(encoding="utf-8")
         self.assertIn("unset GITCODE_TOKEN MAC_K3D_GITCODE_PAT GITHUB_TOKEN MAC_K3D_GITHUB_PAT", stage)
+
+    def test_eval_dry_run_of_jiuwenswarm_mounts_its_stored_tree_and_passes_its_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work = tmp / "eval"
+            tree = tmp / "store" / "jiuwenswarm" / ("b" * 64) / "tree"
+            self._write(tree / "bin" / "jiuwenswarm-run", "#!/bin/sh\n")
+            self._write(work / "harness_host_root.txt", f"{tree}\n")
+            record = {
+                "name": "jiuwenswarm",
+                "mode": "git",
+                "source": "store",
+                "bundle_sha256": "b" * 64,
+                "tree_sha256": "c" * 64,
+                "built_on": "linux/amd64",
+                "host_root": str(tree),
+            }
+            self._write(work / "harness.json", json.dumps(record))
+            proc, work = self._run_eval_dry(
+                tmp,
+                extra_env={"HARNESS": "jiuwenswarm", "JIUWENSWARM_MAX_TURNS": "300", "JIUWENSWARM_TIMEOUT_SECONDS": "1800"},
+            )
+            output = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 0, output)
+            line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("harbor dry-run")), "")
+            self.assertIn("-a jiuwenswarm_harbor_agent:JiuwenSwarmAgent", line)
+            self.assertNotIn("icode_harbor_agent", line)
+            self.assertIn('"target": "/opt/jiuwenswarm-host"', line)
+            self.assertIn(f'"source": "{tree}"', line)
+            self.assertIn("--ae JIUWENSWARM_AGENT_MODE=agent.code.normal", line)
+            self.assertIn("--ae JIUWENSWARM_MAX_TURNS=300", line)
+            self.assertIn("--ae JIUWENSWARM_TIMEOUT_SECONDS=1800", line)
+            self.assertIn("--job-name jiuwenswarm_deepswe_dry", line)
+            self.assertNotIn(self.SENTINEL_KEY, output)
+            inputs = json.loads((work / "eval_protocol_inputs.json").read_text(encoding="utf-8"))
+            self.assertEqual(inputs["harness"]["name"], "jiuwenswarm")
+            self.assertEqual(inputs["harness"]["bundle_sha256"], "b" * 64)
+            self.assertEqual(inputs["harness"]["settings"]["max_turns"], 300)
+            self.assertEqual(inputs["provider"], "OpenAI")
+            self.assertEqual(inputs["max_iterations"], 300)
+            isolation = inputs["isolation"]
+            self.assertEqual(isolation["harness"], "jiuwenswarm")
+            self.assertEqual(isolation["tree_sha256"], "c" * 64)
+            self.assertEqual(isolation["mount"], {"count": 1, "target": "/opt/jiuwenswarm-host", "read_only": True})
+            self.assertEqual(isolation["leak_scan"]["hit_tasks"], [])
 
     def test_harbor_env_lives_only_while_the_step_runs(self):
         script = (

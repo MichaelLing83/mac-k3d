@@ -144,7 +144,7 @@ def _compile(python: Path, tree: Path, target: Path, exclude_site_packages: bool
     if exclude_site_packages:
         cmd += ["-x", _SITE_PACKAGES_RX]
     cmd.append(str(target))
-    # compileall prints errors on stdout; tasks/icode captures stdout as the icode path.
+    # compileall prints errors on stdout; tasks/harness captures stdout as the icode path.
     subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr, check=False)
 
 

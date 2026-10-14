@@ -242,7 +242,7 @@ class OomTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout, "etree__killed\n")
         self.assertIn('oom="$(oom_trials)"', text)
-        self.assertIn("trials ran out of memory (iCode exit 137 or the container OOM-killed)", text)
+        self.assertIn("trials ran out of memory ($(harness_display) exit 137 or the container OOM-killed)", text)
         # A scored Harbor retry must not be re-queued from leftover log text.
         guard = text[text.index('oom="$(oom_trials)"'):text.index("if [ -n \"$oom\" ]")]
         self.assertIn('[ "${rewards:-0}" -eq 0 ]', guard)

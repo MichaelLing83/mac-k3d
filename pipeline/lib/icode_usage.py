@@ -1,4 +1,5 @@
-"""Parse iCode `--json` token usage (same shape Harbor tees to icode.txt)."""
+"""Parse the agent's token usage, exit code and log: iCode `--json` (icode.txt), or
+JiuwenSwarm's headless JSONL (jiuwenswarm.jsonl, jiuwenswarm_usage.py)."""
 
 from __future__ import annotations
 
@@ -6,6 +7,8 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+
+import jiuwenswarm_usage
 
 # iCode's is_fatal_provider_error markers, plus the OpenAI SDK's connection and
 # timeout messages. Matched as whole words so "401" inside a number does not count.
@@ -82,7 +85,7 @@ def usage_from_obj(obj: Any) -> dict[str, Any] | None:
     nested_cached = details.get("cached_tokens") if isinstance(details, dict) else None
     cache = _first_present(
         usage,
-        ("prompt_cache_hit_tokens", "cache_hit_tokens", "cached_tokens", "cache"),
+        ("prompt_cache_hit_tokens", "cache_hit_tokens", "cached_tokens", "cache_tokens", "cache"),
         nested_cached,
     )
     try:
@@ -166,38 +169,46 @@ def provider_error_marker(text: str) -> str | None:
                 obj = json.loads(stripped)
             except json.JSONDecodeError:
                 continue
-            if isinstance(obj, dict) and isinstance(obj.get("error"), str):
-                got = _marker_in(obj["error"])
+            error = obj.get("error") if isinstance(obj, dict) else None
+            if isinstance(error, dict):
+                # JiuwenSwarm's result: {"code": ..., "message": ...}.
+                error = error.get("message")
+            if isinstance(error, str):
+                got = _marker_in(error)
                 if got:
                     return got
     return None
 
 
 def icode_log_text(trial: Path, tail_bytes: int = 1048576) -> str:
-    path = trial / "agent" / "icode.txt"
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return ""
-    return raw[-tail_bytes:].decode("utf-8", errors="replace")
+    """The tail of the agent's log: icode.txt, else jiuwenswarm.jsonl."""
+    for name in ("icode.txt", jiuwenswarm_usage.LOG):
+        try:
+            raw = (trial / "agent" / name).read_bytes()
+        except OSError:
+            continue
+        return raw[-tail_bytes:].decode("utf-8", errors="replace")
+    return ""
 
 
 def icode_exit_code(trial: Path) -> int | None:
-    """iCode's exit status from `agent/icode-exit.txt`, or None when it was not written."""
-    try:
-        text = (trial / "agent" / "icode-exit.txt").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return int(text) if text.lstrip("-").isdigit() else None
+    """The agent's exit status (agent/icode-exit.txt or jiuwenswarm-exit.txt), or None when not written."""
+    for name in ("icode-exit.txt", jiuwenswarm_usage.EXIT):
+        try:
+            text = (trial / "agent" / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        return int(text) if text.lstrip("-").isdigit() else None
+    return None
 
 
 def find_icode_usage(root: Path) -> dict[str, Any] | None:
-    """Newest icode-usage.json, else last usage object in icode.txt/json."""
+    """Newest icode-usage.json or jiuwenswarm-usage.json, else last usage object in icode.txt/json or jiuwenswarm.jsonl."""
     if not root.is_dir():
         return None
     newest_usage: dict[str, Any] | None = None
     newest_mtime = -1.0
-    for path in root.rglob("icode-usage.json"):
+    for path in [*root.rglob("icode-usage.json"), *root.rglob(jiuwenswarm_usage.USAGE)]:
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -212,7 +223,7 @@ def find_icode_usage(root: Path) -> dict[str, Any] | None:
         return newest_usage
     last: dict[str, Any] | None = None
     last_mtime = -1.0
-    for name in ("icode.json", "icode.txt", "timing.json"):
+    for name in ("icode.json", "icode.txt", jiuwenswarm_usage.LOG, "timing.json"):
         for path in root.rglob(name):
             try:
                 mtime = path.stat().st_mtime

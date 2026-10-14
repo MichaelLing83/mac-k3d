@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Harbor --mounts for the iCode agent, and the allowlist tasks/isolation checks before any rollout.
+"""Harbor --mounts for the harness's agent, and the allowlist tasks/isolation checks before any rollout.
 
-The only mount is the iCode host tree, read-only, at /opt/icode-host. It must not
-be, contain, or sit inside a benchmark checkout (solution/ and tests/private).
+The only mount is the harness tree, read-only, at the harness's target
+(harness.py: /opt/icode-host for iCode, /opt/jiuwenswarm-host for
+JiuwenSwarm). It must not be, contain, or sit inside a benchmark checkout
+(solution/ and tests/private).
 """
 
 from __future__ import annotations
@@ -12,70 +14,78 @@ import json
 import sys
 from pathlib import Path
 
-ICODE_TARGET = "/opt/icode-host"
+import harness
+
+ICODE_TARGET = harness.get("icode").mount
 
 
-def build_mounts(icode_root: Path) -> list[dict]:
-    return [{"type": "bind", "source": str(icode_root), "target": ICODE_TARGET, "read_only": True}]
+def build_mounts(root: Path, target: str = ICODE_TARGET) -> list[dict]:
+    return [{"type": "bind", "source": str(root), "target": target, "read_only": True}]
 
 
 def _overlaps(a: Path, b: Path) -> bool:
     return a == b or a in b.parents or b in a.parents
 
 
-def check_mounts(mounts: object, icode_root: Path, forbidden: list[Path]) -> list[str]:
+def check_mounts(mounts: object, root: Path, forbidden: list[Path], target: str = ICODE_TARGET) -> list[str]:
     errors: list[str] = []
     if not isinstance(mounts, list):
         return ["mounts must be a JSON list"]
     if len(mounts) != 1:
-        errors.append(f"expected exactly one mount (the iCode tree), got {len(mounts)}")
-    root = icode_root.resolve()
+        errors.append(f"expected exactly one mount (the harness tree), got {len(mounts)}")
+    root = root.resolve()
     for index, mount in enumerate(mounts):
         if not isinstance(mount, dict):
             errors.append(f"mount {index} is not an object")
             continue
         if mount.get("type") != "bind":
             errors.append(f"mount {index} type must be bind")
-        if mount.get("target") != ICODE_TARGET:
-            errors.append(f"mount {index} target must be {ICODE_TARGET}")
+        if mount.get("target") != target:
+            errors.append(f"mount {index} target must be {target}")
         if mount.get("read_only") is not True:
             errors.append(f"mount {index} must set read_only: true")
         source = str(mount.get("source") or "")
         if not source or Path(source).resolve() != root:
-            errors.append(f"mount {index} source {source or '<empty>'} is not the iCode tree {root}")
+            errors.append(f"mount {index} source {source or '<empty>'} is not the harness tree {root}")
     for path in forbidden:
         if not str(path):
             continue
         bench = path.resolve()
         if _overlaps(root, bench):
-            errors.append(f"iCode tree {root} overlaps benchmark path {bench}")
+            errors.append(f"harness tree {root} overlaps benchmark path {bench}")
     return errors
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Agent mounts for the evaluate phase")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    build = sub.add_parser("build")
-    build.add_argument("--icode-root", required=True)
-    check = sub.add_parser("check")
-    check.add_argument("--mounts", required=True, help="JSON list passed to harbor --mounts")
-    check.add_argument("--icode-root", required=True)
-    check.add_argument("--forbid", action="append", default=[], help="benchmark dir the tree must not overlap")
+    for name in ("build", "check"):
+        p = sub.add_parser(name)
+        p.add_argument("--root", "--icode-root", dest="root", required=True, help="the harness tree")
+        p.add_argument("--target", default="", help="mount target (default: $HARNESS's, harness.py)")
+        if name == "check":
+            p.add_argument("--mounts", required=True, help="JSON list passed to harbor --mounts")
+            p.add_argument("--forbid", action="append", default=[], help="benchmark dir the tree must not overlap")
     args = parser.parse_args(argv)
+    try:
+        target = args.target or harness.current().mount
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     if args.cmd == "build":
-        print(json.dumps(build_mounts(Path(args.icode_root))))
+        print(json.dumps(build_mounts(Path(args.root), target)))
         return 0
     try:
         mounts = json.loads(args.mounts)
     except json.JSONDecodeError as exc:
         print(f"ERROR: --mounts is not JSON: {exc}", file=sys.stderr)
         return 1
-    errors = check_mounts(mounts, Path(args.icode_root), [Path(p) for p in args.forbid if p])
+    errors = check_mounts(mounts, Path(args.root), [Path(p) for p in args.forbid if p], target)
     for err in errors:
         print(f"ERROR: agent mounts: {err}", file=sys.stderr)
     if errors:
         return 1
-    print(f"OK agent mounts: one read-only bind of {Path(args.icode_root).resolve()} at {ICODE_TARGET}")
+    print(f"OK agent mounts: one read-only bind of {Path(args.root).resolve()} at {target}")
     return 0
 
 

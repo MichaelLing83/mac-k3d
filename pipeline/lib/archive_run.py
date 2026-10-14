@@ -47,8 +47,10 @@ _TRIAL_FILES = {
     "base_sha.txt",
     "anticheat.json",
     "trial.log",
+    "jiuwenswarm-usage.json",
+    "jiuwenswarm-exit.txt",
 }
-_GZIP_TRIAL_FILES = {"events.jsonl"}
+_GZIP_TRIAL_FILES = {"events.jsonl", "jiuwenswarm.jsonl"}
 
 _KEY_SHAPED = re.compile(r"sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}")
 _SECRET_ENV = ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ICODE_API_KEY", "GITCODE_TOKEN", "GITHUB_TOKEN")

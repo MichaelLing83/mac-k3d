@@ -112,10 +112,27 @@ pub struct EvalArgs {
     pub local: bool,
 
     /// Queue a Jenkins job: one (<benchmark>_one_task), some (_some_task) or full
-    /// (_full_suite_task). Sends only the fields given as flags; every other field
-    /// keeps the job's default, as pressing Build does
+    /// (_full_suite_task); with --harness jiuwenswarm, some and full queue
+    /// build_jiuwenswarm_headless. Sends only the fields given as flags; every
+    /// other field keeps the job's default, as pressing Build does
     #[arg(long, value_name = "one|some|full", conflicts_with_all = ["local", "stage", "icode_release"])]
     pub job: Option<String>,
+
+    /// With --job: the harness to evaluate, icode or jiuwenswarm (DeepSWE only)
+    #[arg(long, requires = "job")]
+    pub harness: Option<String>,
+
+    /// With --harness jiuwenswarm: git URL (https, allow-listed host)
+    #[arg(long, requires = "job")]
+    pub jiuwenswarm_git_url: Option<String>,
+
+    /// With --harness jiuwenswarm: branch, tag, commit SHA or pull-request number
+    #[arg(long, requires = "job")]
+    pub jiuwenswarm_git_ref: Option<String>,
+
+    /// With --harness jiuwenswarm: how to check out the ref: branch | tag | commit | pr
+    #[arg(long, requires = "job")]
+    pub jiuwenswarm_git_ref_kind: Option<String>,
 
     /// With --job some: comma-separated question ids (TASKS); wins over --n-tasks
     #[arg(long, requires = "job")]

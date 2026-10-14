@@ -1,19 +1,40 @@
 # Jenkins eval jobs
 
-`mac-k3d config` on the controller writes nine jobs: three shapes for each of three benchmarks. Every job evaluates iCode with a DeepSeek catalog model (`DEEPSEEK_MODEL`: `deepseek-flash`, the default, or `deepseek-v4-pro`). Which one to run: [evaluation.md](evaluation.md#which-job-to-run). Every parameter: [commands.md](commands.md#jenkins-job-parameters).
+`mac-k3d config` on the controller writes ten jobs: three shapes for each of three benchmarks, and `build_jiuwenswarm_headless`. Every job evaluates a harness with a DeepSeek catalog model (`DEEPSEEK_MODEL`: `deepseek-flash`, the default, or `deepseek-v4-pro`). The harness is iCode, except on `build_jiuwenswarm_headless` and on `deepswe_one_task` with `HARNESS=jiuwenswarm`, which evaluate JiuwenSwarm ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)). Which one to run: [evaluation.md](evaluation.md#which-job-to-run). Every parameter: [commands.md](commands.md#jenkins-job-parameters).
 
 | Shape | Jobs | What a build does |
 |-------|------|-------------------|
 | `one_task` | `deepswe_one_task`, `lolbench_one_task`, `swebenchpro_one_task` | Runs one question and one rollout on one worker: the seven pipeline stages, one `harbor run -k 1 -n 1` |
-| `some_task` | `deepswe_some_task`, `lolbench_some_task`, `swebenchpro_some_task` | Dispatcher on `agent none`: queues one `one_task` build per question and rollout for a `TASKS` list or the first `N_TASKS`, then merges them in its `Aggregate` stage |
+| `some_task` | `deepswe_some_task`, `lolbench_some_task`, `swebenchpro_some_task` | Dispatcher: prepares iCode once, queues one `one_task` build per question and rollout for a `TASKS` list or the first `N_TASKS`, then merges them in its `Aggregate` stage |
 | `full_suite_task` | `deepswe_full_suite_task`, `lolbench_full_suite_task`, `swebenchpro_full_suite_task` | The same dispatcher over the whole suite (DeepSWE 113, LoLBench 20, SWE-bench Pro 731 questions) |
+| JiuwenSwarm | `build_jiuwenswarm_headless` | The same dispatcher for JiuwenSwarm on DeepSWE: `TASKS`, or else the first `N_TASKS` (all 113 by default). Its shards are `deepswe_one_task` builds with `HARNESS=jiuwenswarm` |
+
+`HARNESS` is fixed on every job except `deepswe_one_task`, which offers `icode` and `jiuwenswarm`.
 
 ```mermaid
 flowchart LR
-  some["some_task / full_suite_task"] -->|"one build per question x rollout"| one["one_task on a worker"]
+  some["some_task / full_suite_task / build_jiuwenswarm_headless"] --> prep["Prepare harness: one bundle, sha256"]
+  prep -->|"one build per question x rollout"| one["one_task on a worker"]
   one --> stages["Environment, Tasks, Evaluate (CPU lock), Anti-cheat, Score, Report, Archive"]
   stages --> agg["Aggregate in the dispatcher build"]
 ```
+
+## Prepare harness
+
+Every dispatcher starts with a `Prepare harness` stage on an `AGENT_LABEL` worker. It runs `pipeline/tools/prepare_harness.sh`, which resolves the job's harness input once (a git ref to one commit, or the uploaded release), builds the harness for `linux/amd64` (the platform DeepSWE uses on Linux workers), and stores it in that worker's [harness store](pipeline.md#harness-store). Only the `gitcode-pat` and `github-pat` credentials are bound in this stage; no LLM key reaches the build.
+
+The stage archives `eval-runs/harness/bundle.tar.gz` and `bundle.json`, prints `Every shard runs harness bundle <sha256> (git <commit>)` (or `release <sha256>`), and passes every shard:
+
+| Field | Value |
+|-------|-------|
+| `HARNESS_BUNDLE_SHA256` | the bundle's sha256. A shard runs this bundle and no other |
+| `HARNESS_BUNDLE_FROM` | `<job>#<build>`, where the shard copies the bundle from |
+| `ICODE_GIT_SHA` / `JIUWENSWARM_GIT_SHA`, or `ICODE_RELEASE_SHA256` / `JIUWENSWARM_RELEASE_SHA256` | the input the bundle was built from, which a shard of another task platform builds its own from |
+| `JIUWENSWARM_RELEASE_FROM` | for a JiuwenSwarm wheel or wheelhouse, the build that archived it as `jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE` |
+
+In its Tasks stage, a shard first asks its worker's store for that sha256. On a hit it copies nothing (`harness store: bundle <sha> is already on <node>; not copying it`); otherwise it copies the bundle from the dispatcher once, and `tasks/harness` checks the sha256 and stores it. So each worker copies and unpacks the bundle once per run, however many shards it runs. A bundle with another sha256 stops the shard.
+
+When the run ends, aborted or not, the dispatcher deletes the bundle and any JiuwenSwarm release from its build's artifacts, so the controller keeps them only while shards may need them. `bundle.json` stays, and the bundle's sha256 is in `summary.md` and `report.html`.
 
 ## What a `one_task` build runs
 
@@ -29,7 +50,7 @@ On an Apple silicon Mac, DeepSWE runs each question natively on its prepared bui
 
 An eval does no first-time work on any worker: no build, pull or check in the Tasks stage. Harbor pulls a missing published image at the trial, as it always has. A Mac without `mac-k3d eval prepare --benchmark deepswe` ([commands.md](commands.md#eval-prepare)) runs DeepSWE emulated. Its `summary.md` then says `Environment: 0 native, 1 emulated on <node>` and gives the reason with the prepare hint.
 
-The iCode under test is the uploaded `ICODE_RELEASE_FILE` (release mode) or a clone of `ICODE_GIT_URL` at `ICODE_GIT_REF` (git mode): [icode-harness-inputs.md](icode-harness-inputs.md). LLM keys and forge tokens are Jenkins credentials on the controller, injected per build: [secrets.md](secrets.md).
+The iCode under test is the uploaded `ICODE_RELEASE_FILE` (release mode) or a clone of `ICODE_GIT_URL` at `ICODE_GIT_REF` (git mode): [icode-harness-inputs.md](icode-harness-inputs.md). JiuwenSwarm has the same two modes with its own `JIUWENSWARM_*` fields: [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md). A shard of a dispatcher runs the dispatcher's bundle ([Prepare harness](#prepare-harness)). LLM keys and forge tokens are Jenkins credentials on the controller, injected per build: [secrets.md](secrets.md).
 
 ## Where builds run
 
@@ -52,8 +73,8 @@ mac-k3d eval --job one --benchmark deepswe --task abs-module-cache-flags --icode
 mac-k3d eval --job one --benchmark deepswe --task abs-module-cache-flags --icode-mode git             # queue it; prints the build URL
 ```
 
-`--job some` and `--job full` queue the dispatchers. Release mode needs the file upload, which only the job page has. See [commands.md](commands.md#queue-a-jenkins-job-from-the-cli).
+`--job some` and `--job full` queue the dispatchers; with `--harness jiuwenswarm` they queue `build_jiuwenswarm_headless`. Release mode needs the file upload, which only the job page has. See [commands.md](commands.md#queue-a-jenkins-job-from-the-cli).
 
 ## If `config` cannot write a job
 
-`config` prints `Warning: failed to update job …` or `failed to create job …` with the HTTP reply. Delete the job under the Jenkins UI and run `mac-k3d config` again on the controller; it recreates all nine. Do not edit the job XML by hand: the next `config` overwrites it.
+`config` prints `Warning: failed to update job …` or `failed to create job …` with the HTTP reply. Delete the job under the Jenkins UI and run `mac-k3d config` again on the controller; it recreates all ten. Do not edit the job XML by hand: the next `config` overwrites it.

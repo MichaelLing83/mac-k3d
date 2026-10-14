@@ -380,7 +380,9 @@ def report_html(doc: dict) -> str:
     cpus_each = _root(doc, arm, "cpus_each")
     model = _root(doc, arm, "model")
     catalog = _catalog_id(model)
-    candidate = f"icode + {catalog}" if catalog else CANDIDATE
+    protocol_harness = (doc.get("eval_protocol") or {}).get("harness") if isinstance(doc.get("eval_protocol"), dict) else None
+    name = str(protocol_harness.get("name") or CANDIDATE) if isinstance(protocol_harness, dict) else CANDIDATE
+    candidate = f"{name} + {catalog}" if catalog else name
     api_base = _root(doc, arm, "api_base")
     run_id = _root(doc, arm, "run_label") or _root(doc, arm, "run_id")
 
@@ -434,7 +436,11 @@ def report_html(doc: dict) -> str:
         mean_tokens = token_total / token_tasks
 
     title = f"{suite}: {candidate}"
-    run_clause = f"Harness iCode, {n_tasks} tasks × {n_rollouts} rollouts"
+    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
+    from render_report import harness_display
+
+    agent = harness_display(protocol)
+    run_clause = f"Harness {agent}, {n_tasks} tasks × {n_rollouts} rollouts"
     if concurrency is not None:
         run_clause += f", concurrency {concurrency}"
     if cpus_each is not None:
@@ -444,14 +450,13 @@ def report_html(doc: dict) -> str:
         clauses.append(f"Model {model}.")
     if api_base is not None:
         clauses.append(f"API {api_base}.")
-    protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else None
     if protocol:
         params = protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {}
         thinking = params.get("thinking") if isinstance(params.get("thinking"), dict) else {}
         from render_report import icode_under_test
 
         clauses.append(
-            f"iCode under test: {icode_under_test(protocol)}. "
+            f"{agent} under test: {icode_under_test(protocol)}. "
             f"Provider {params.get('provider') or '-'}. "
             f"reasoning_effort {params.get('reasoning_effort') or '-'}. "
             f"thinking.type {thinking.get('type') or '-'}. "

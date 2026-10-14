@@ -95,7 +95,7 @@ class ModelKeyTests(unittest.TestCase):
             path = site / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(textwrap.dedent(text), encoding="utf-8")
-        mine = ("harbor", "icode_harbor_agent", "canary_harbor_agent")
+        mine = cls.MINE
         cls._saved = {k: v for k, v in sys.modules.items() if k.split(".")[0] in mine}
         for key in cls._saved:
             sys.modules.pop(key)
@@ -107,13 +107,17 @@ class ModelKeyTests(unittest.TestCase):
             os.environ["MAC_K3D_TRIAL_SUBNETS"] = "off"
             import canary_harbor_agent
             import icode_harbor_agent
+            import jiuwenswarm_harbor_agent
         cls.icode = icode_harbor_agent
         cls.canary = canary_harbor_agent
+        cls.jw = jiuwenswarm_harbor_agent
+
+    MINE = ("harbor", "icode_harbor_agent", "canary_harbor_agent", "jiuwenswarm_harbor_agent")
 
     @classmethod
     def tearDownClass(cls):
         sys.path.remove(str(cls._site))
-        for key in [k for k in sys.modules if k.split(".")[0] in ("harbor", "icode_harbor_agent", "canary_harbor_agent")]:
+        for key in [k for k in sys.modules if k.split(".")[0] in cls.MINE]:
             sys.modules.pop(key)
         sys.modules.update(cls._saved)
         cls._tmp.cleanup()
@@ -220,7 +224,63 @@ class ModelKeyTests(unittest.TestCase):
         self.assertEqual((upload["target"], upload["mode"]), (self.icode.MODEL_KEY_FILE, 0o600))
         probe = next(command for _, _, command in environment.execs if "canary_probe.sh probe" in command)
         self.assertTrue(probe.startswith("set -o pipefail; " + self.icode.MODEL_KEY_LOADER), probe[:120])
-        self.assertTrue((self.logs / "canary_host.json").is_file())
+        self.assertNotIn("canary_probe.sh runtime", probe)
+        host = json.loads((self.logs / "canary_host.json").read_text(encoding="utf-8"))
+        self.assertEqual((host["harness"], host["mount"], host["runtime_probes"]), ("icode", "/opt/icode-host", []))
+
+    def test_jiuwenswarm_gets_the_key_as_api_key_from_a_private_file_only(self):
+        agent = self.jw.JiuwenSwarmAgent(
+            logs_dir=self.logs, extra_env={"DEEPSEEK_API_KEY": SENTINEL, "ICODE_MODEL": "deepseek-v4-pro"},
+        )
+        environment = self.environment()
+        self.run_agent(agent, environment)
+        self.assert_key_never_in_an_exec(environment)
+        targets = {upload["target"]: upload for upload in environment.uploads}
+        self.assertEqual(targets[self.icode.MODEL_KEY_FILE]["mode"], 0o600)
+        self.assertEqual(targets[self.jw.TASK_FILE]["text"], "fix the bug\n")
+
+        user, env, command = environment.execs[-1]
+        self.assertIsNone(user)
+        self.assertNotIn("API_KEY", env)
+        self.assertEqual(
+            {k: env[k] for k in ("API_BASE", "MODEL_NAME", "MODEL_PROVIDER", "ENDPOINT_PROFILE", "JIUWENSWARM_DATA_DIR")},
+            {"API_BASE": "https://api.deepseek.com/v1", "MODEL_NAME": "deepseek-v4-pro", "MODEL_PROVIDER": "OpenAI",
+             "ENDPOINT_PROFILE": "deepseek", "JIUWENSWARM_DATA_DIR": "/tmp/jiuwenswarm"},
+        )
+        prologue = "set -o pipefail; " + self.icode.MODEL_KEY_LOADER + self.jw.KEY_EXPORT
+        self.assertTrue(command.startswith(prologue), command[:160])
+        run = command.index(f"{self.jw.RUNNER} --run-json")
+        for earlier in (f"{self.jw.TRIAL} seed", f"{self.jw.TRIAL} rundoc", "set +o pipefail"):
+            self.assertLess(command.index(earlier), run, earlier)
+        self.assertLess(run, command.index(self.jw.EXIT_FILE))
+        self.assertLess(command.index(self.jw.EXIT_FILE), command.index(f"bash {self.icode.CAPTURE} capture"))
+
+        out = self.root / "seen"
+        proc = self.run_loader(environment, self.jw.KEY_EXPORT + f'printf "%s" "$API_KEY" > {out}; '
+                                            '[ -z "${DEEPSEEK_API_KEY+x}" ] && echo unset')
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "unset")
+        self.assertEqual(out.read_text(encoding="utf-8"), SENTINEL)
+
+    def test_the_jiuwenswarm_canary_runs_the_runtime_and_probes_its_mount(self):
+        spec = self.root / "canary_spec.json"
+        spec.write_text(json.dumps({"version": "v1", "task": "alpha", "allow_host": None}), encoding="utf-8")
+        agent = self.jw.JiuwenSwarmCanaryAgent(logs_dir=self.logs, spec=str(spec))
+        self.assertEqual(agent.name(), "jiuwenswarm-canary")
+        self.assertEqual(agent.run_env()["MODEL_NAME"], self.icode.DEFAULT_MODEL)
+        environment = self.environment()
+        self.run_agent(agent, environment)
+        self.assert_key_never_in_an_exec(environment)
+        _, env, probe = next(e for e in environment.execs if "canary_probe.sh probe" in e[2])
+        self.assertTrue(probe.startswith("set -o pipefail; " + self.icode.MODEL_KEY_LOADER + self.jw.KEY_EXPORT))
+        self.assertEqual(env["CANARY_MOUNT"], "/opt/jiuwenswarm-host")
+        for name in ("python", "runner", "seed"):
+            self.assertLess(probe.index(f"canary_probe.sh runtime {name} "), probe.index("canary_probe.sh probe"))
+        root = [c for u, _, c in environment.execs if u == "root" and "canary_probe.sh mount" in c]
+        self.assertEqual(root, ["set -o pipefail; CANARY_MOUNT=/opt/jiuwenswarm-host bash /installed-agent/canary_probe.sh mount"])
+        host = json.loads((self.logs / "canary_host.json").read_text(encoding="utf-8"))
+        self.assertEqual((host["harness"], host["mount"]), ("jiuwenswarm", "/opt/jiuwenswarm-host"))
+        self.assertEqual(host["runtime_probes"], ["python", "runner", "seed"])
 
 
 if __name__ == "__main__":

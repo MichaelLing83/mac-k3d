@@ -247,7 +247,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 
 `jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys. A worker's YAML always has both keys; `''` means not filled in yet, and `config` then prints which keys to fill in. `mac-k3d export` writes `api_token: ''`.
 
-`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the nine eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
+`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the ten eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
 
 ### `jenkins_job` (controller)
 
@@ -258,8 +258,11 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_icode_release` | *(empty)* | Local persist / CLI default for a `*-full-*` path or stub `icode` (not a Jenkins UI string; Jenkins release uses `ICODE_RELEASE_FILE` upload) |
 | `default_icode_git_url` | *(empty)* | Default `ICODE_GIT_URL` for git mode |
 | `default_icode_git_ref` | `main` | Default git ref for git mode |
+| `default_jiuwenswarm_git_url` | `https://gitcode.com/michaelling/jiuwenswarm` | Default `JIUWENSWARM_GIT_URL` ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)) |
+| `default_jiuwenswarm_git_ref` | `2` | Default `JIUWENSWARM_GIT_REF`; empty means `2` |
+| `default_jiuwenswarm_git_ref_kind` | `pr` | Default `JIUWENSWARM_GIT_REF_KIND`: `branch`, `tag`, `commit` or `pr` |
 | `default_icode_args` | *(empty)* | Argv after `./icode` |
-| `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`) |
+| `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`): the first `HARNESS` choice of `deepswe_one_task`. Every other job's harness is fixed |
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-flash`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-v4-pro`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
@@ -275,6 +278,10 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `RUST_LOG` | Logging filter (e.g. `mac_k3d=debug`) |
 | `KUBECONFIG` | Respected by kubectl invocations |
 | `MAC_K3D_CONFIG` | *(planned)* alternate config path |
+| `MAC_K3D_HARNESS_STORE` | Worker pipeline: the [harness store](pipeline.md#harness-store) folder (default `$MAC_K3D_SHARE/harness-store`) |
+| `MAC_K3D_HARNESS_STORE_KEEP` | Worker pipeline: bundles kept per harness (default 6); one used in the last 24 hours is never removed |
+| `MAC_K3D_BUILD_NETWORK` | Worker pipeline: `docker run --network` for the harness build container, for example `host` when the bridge cannot reach PyPI. Trials keep their own network |
+| `JIUWENSWARM_TIMEOUT_SECONDS` | Worker pipeline: `timeout_seconds` in JiuwenSwarm's run document. Unset leaves JiuwenSwarm's default |
 
 ## Multi-Mac setup guidance
 

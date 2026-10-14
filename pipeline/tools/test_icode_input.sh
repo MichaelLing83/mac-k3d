@@ -279,7 +279,7 @@ bash "$IN" --token-env-for-host github.com | grep -qx GITHUB_TOKEN || fail "gith
 must_fail "evil token host" --token-env-for-host github.com.evil.com
 grep -q 'sandbox-cpython' "$IN" || fail "missing sandbox-cpython git wrapper"
 grep -q 'icode_embed_sandbox_cpython' "$IN" || fail "missing embed helper"
-grep -q 'gitignored .env' "$IN" || fail "missing private-clone PAT hint"
+grep -q 'gitignored .env' "$LIB/harness_git.sh" || fail "missing private-clone PAT hint"
 ok "token env names + fail-fast clone hints"
 
 if grep -q 'get_local_icode' "$IN"; then

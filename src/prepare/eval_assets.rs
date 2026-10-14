@@ -294,6 +294,23 @@ mod tests {
             PIPELINE.get_file("lib/swebenchpro_tasks.py").is_some(),
             "pipeline/lib/swebenchpro_tasks.py must be embedded"
         );
+        // The harness store and JiuwenSwarm, which every worker runs from this binary.
+        for file in [
+            "stages/tasks/harness.sh",
+            "tools/prepare_harness.sh",
+            "lib/harness.py",
+            "lib/harness_store.py",
+            "lib/harness_lib.sh",
+            "lib/harness_git.sh",
+            "lib/harness_labels.py",
+            "lib/jiuwenswarm_input.sh",
+            "lib/jiuwenswarm_build.sh",
+            "lib/jiuwenswarm_harbor_agent.py",
+            "lib/jiuwenswarm_trial.py",
+            "lib/jiuwenswarm_usage.py",
+        ] {
+            assert!(PIPELINE.get_file(file).is_some(), "pipeline/{file} must be embedded");
+        }
     }
 
     #[test]

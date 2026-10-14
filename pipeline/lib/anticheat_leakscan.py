@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report files in the mounted iCode tree that contain a task's gold patch.
+"""Report files in the mounted harness tree (iCode or JiuwenSwarm) that contain a task's gold patch.
 
 Gold lines follow the report's H3 audit rule: unique stripped lines of at least
 25 characters, not starting with '#', added in non-test files of
@@ -171,7 +171,7 @@ def scan(tree: Path, tasks_dir: Path, ids: list[str]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Scan the mounted iCode tree for task gold patches")
+    parser = argparse.ArgumentParser(description="Scan the mounted harness tree for task gold patches")
     parser.add_argument("--tree", required=True)
     parser.add_argument("--tasks-dir", required=True)
     which = parser.add_mutually_exclusive_group(required=True)
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     tasks_dir = Path(args.tasks_dir)
     try:
         if not tree.is_dir():
-            raise FileNotFoundError(f"missing iCode tree {tree}")
+            raise FileNotFoundError(f"missing harness tree {tree}")
         if not tasks_dir.is_dir():
             raise FileNotFoundError(f"missing tasks dir {tasks_dir}")
         ids = task_ids(tasks_dir, Path(args.selected) if args.selected else None)

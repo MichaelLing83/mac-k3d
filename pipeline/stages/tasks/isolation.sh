@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tasks/isolation: what the agent may see and reach, checked before Harbor runs.
-#   - one read-only mount, iCode at /opt/icode-host, never overlapping a benchmark
-#     (written to agent_mounts.json for every later `harbor run`);
+#   - one read-only mount, the harness tree at its target (iCode at
+#     /opt/icode-host, JiuwenSwarm at /opt/jiuwenswarm-host), never overlapping
+#     a benchmark (written to agent_mounts.json for every later `harbor run`);
 #   - the model API host is on pipeline/config/network-allowlist-v1.json;
 #   - both are recorded in eval_protocol_inputs.json for the report.
 set -euo pipefail
@@ -11,8 +12,9 @@ source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 TASKS_DIR="$(benchmark_tasks_dir)"
 [ -d "$TASKS_DIR" ] || die "run tasks/benchmark first (missing $TASKS_DIR)"
 ensure_selected_tasks
-HOST_ICODE="$(icode_host_root)"
-[ -d "$HOST_ICODE" ] || die "icode host tree missing: $HOST_ICODE"
+HOST_ICODE="$(harness_host_root)"
+[ -d "$HOST_ICODE" ] || die "$(harness_display) host tree missing: $HOST_ICODE"
+MOUNT_TARGET="$(harness_mount_target)"
 
 case "${BENCHMARK:-deepswe}" in
   lolbench)
@@ -31,10 +33,11 @@ esac
 
 MOUNTS_FILE="$WORKDIR/agent_mounts.json"
 rm -f "$MOUNTS_FILE"
-MOUNTS_JSON="$(python3 "$PIPELINE_LIB/agent_mounts.py" build --icode-root "$HOST_ICODE")"
+MOUNTS_JSON="$(python3 "$PIPELINE_LIB/agent_mounts.py" build --root "$HOST_ICODE" --target "$MOUNT_TARGET")"
 python3 "$PIPELINE_LIB/agent_mounts.py" check \
   --mounts "$MOUNTS_JSON" \
-  --icode-root "$HOST_ICODE" \
+  --root "$HOST_ICODE" \
+  --target "$MOUNT_TARGET" \
   --forbid "$DEEPSWE_DIR" \
   --forbid "$LOLBENCH_DIR" \
   --forbid "$SWEBENCHPRO_DIR" \

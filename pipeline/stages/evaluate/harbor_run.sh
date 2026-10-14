@@ -2,7 +2,8 @@
 # evaluate/harbor_run: one `harbor run` for every selected task x rollout.
 # Harbor schedules the trials, applies each task.toml, enforces the agent's
 # network allowlist and runs the verifier. This step watches it, then writes
-# meta.json and gives the iCode host tree back to the build user.
+# meta.json and gives a workspace harness tree back to the build user (a
+# harness-store tree is shared and read-only, so it is left as it is).
 set -euo pipefail
 # shellcheck source=../_common.sh
 source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
@@ -10,6 +11,10 @@ source "$(cd "$(dirname "$0")/.." && pwd)/_common.sh"
 source "$PIPELINE_LIB/icode_input.sh"
 # shellcheck source=./harbor_cmd.sh
 source "$(cd "$(dirname "$0")" && pwd)/harbor_cmd.sh"
+
+reclaim_harness_tree() {
+  harness_tree_stored "$HOST_ICODE" || icode_reclaim_host_tree "$HOST_ICODE"
+}
 
 write_harness_meta() {
   python3 - "$HARNESS_DIR" "$DEEPSEEK_MODEL" "$STARTED_AT" "$FINISHED_AT" "$DURATION" "$1" "$PIPELINE_LIB" <<'PY'
@@ -116,7 +121,7 @@ print(re.sub(r"\s+", " ", hits[-1])[:300] if hits else "no error line in the log
 PY
 }
 
-# Trials whose iCode the kernel killed (exit 137) or whose container Harbor
+# Trials whose agent the kernel killed (exit 137) or whose container Harbor
 # reported out of memory, one trial name per line.
 oom_trials() {
   python3 - "$JOBS_DIR" "$PIPELINE_LIB" <<'PY' || true
@@ -184,14 +189,14 @@ run_harbor() {
   fi
   if [ -n "$oom" ]; then
     printf '%s\n' "$oom" >"$HARNESS_DIR/oom_trials.txt"
-    echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory (iCode exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
+    echo "WARNING: $(printf '%s\n' "$oom" | wc -l | tr -d ' ') trials ran out of memory ($(harness_display) exit 137 or the container OOM-killed): $(printf '%s' "$oom" | tr '\n' ' ')"
     echo "  Removing the container now. The rollout is queued again at the end of the run."
     python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$JOBS_DIR" || true
   else
     # This workspace is shared. A previous build's list must not mark this one.
     rm -f "$HARNESS_DIR/oom_trials.txt"
     if [ "$rc" -ne 0 ] && [ "${rewards:-0}" -eq 0 ] && [ "${finished:-0}" -eq 0 ]; then
-      icode_reclaim_host_tree "$HOST_ICODE"
+      reclaim_harness_tree
       die "harbor run exited $rc before any trial finished: $(harbor_last_error "$unit_log") (see $unit_log)"
     elif [ "${rewards:-0}" -eq 0 ]; then
       echo "WARNING: no reward.json under $JOBS_DIR (unscored / no-response; see $unit_log)"
@@ -233,7 +238,7 @@ SECONDS=0
 LAST_RC=0
 run_harbor
 python3 "$PIPELINE_LIB/trial_network.py" teardown --jobs-dir "$JOBS_DIR" || true
-icode_reclaim_host_tree "$HOST_ICODE"
+reclaim_harness_tree
 
 DURATION="$SECONDS"
 FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

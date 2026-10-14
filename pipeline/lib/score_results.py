@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import harness as harness_table
 from icode_usage import find_icode_usage
 
 
@@ -307,7 +308,7 @@ def find_pier_task_dir(harness_dir: Path, tid: str) -> Path | None:
 
 
 def load_icode_git() -> dict | None:
-    """tasks/icode writes WORKDIR/icode_git.json so a PR SHA eval can be identified later."""
+    """tasks/harness writes WORKDIR/icode_git.json so a PR SHA eval can be identified later."""
     candidates: list[Path] = []
     for env in ("WORKDIR", "MAC_K3D_EVAL_WORKDIR"):
         raw = os.environ.get(env)
@@ -1094,7 +1095,7 @@ def main() -> int:
 
     doc = {
         "suite": os.environ.get("BENCHMARK") or "deepswe",
-        "harness": "icode",
+        "harness": harness_table.current().name,
         "model": model_id,
         "model_served": served,
         "api_base": api_base,

@@ -20,7 +20,8 @@ Do not add a new top-level folder for each feature branch. Update these product 
 |----------|-------------|
 | [workflow.md](workflow.md) | End-to-end: new machine → controller/worker → JSON |
 | [icode-harness-inputs.md](icode-harness-inputs.md) | Jenkins upload vs git clone (`branch` / `tag` / `commit` / `pr`); which Linux drop a Mac needs |
-| [jenkins-jobs.md](jenkins-jobs.md) | The nine jobs `config` writes: three shapes x three benchmarks |
+| [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md) | JiuwenSwarm on DeepSWE: git or release (wheel, wheelhouse, bundle), what one rollout runs, `build_jiuwenswarm_headless` |
+| [jenkins-jobs.md](jenkins-jobs.md) | The ten jobs `config` writes: three shapes x three benchmarks, and `build_jiuwenswarm_headless` |
 | [evaluation.md](evaluation.md) | What a run stores, which job shape to pick, and what the fields mean |
 | [export-import.md](export-import.md) | Export, `set`, and import. CPU limit is a live worker edit; model and task go through the controller file |
 | [secrets.md](secrets.md) | Jenkins credentials on the controller; local `.env` for `--local` |
@@ -64,7 +65,7 @@ Current install is the GitHub Release binary on **Users** above. This table is t
 
 | Version | What it implemented | Where to read |
 |---------|---------------------|---------------|
-| v0.5.4 (this tree, not released yet) | macOS workers (Mac mini): the same phases, inputs and outputs as a Linux worker. DeepSWE runs the native arm64 builds that `mac-k3d eval prepare` proved, else its amd64 images under Rosetta, and the report says which; SWE-bench Pro keeps its amd64 images (Rosetta); the iCode release drop is picked by CPU type; git mode builds the iCode runtime in a Linux container; Docker Desktop's memory and CPUs are the limits; LaunchAgent restart and auto-login/sleep warnings | [pipeline.md](pipeline.md#linux-and-macos-workers), [new-machine.md](new-machine.md#mac-mini-worker), [testing/mac-mini-worker.md](testing/mac-mini-worker.md) |
+| v0.5.4 (this tree, not released yet) | macOS workers (Mac mini): the same phases, inputs and outputs as a Linux worker. DeepSWE runs the native arm64 builds that `mac-k3d eval prepare` proved, else its amd64 images under Rosetta, and the report says which; SWE-bench Pro keeps its amd64 images (Rosetta); the iCode release drop is picked by CPU type; git mode builds the iCode runtime in a Linux container; Docker Desktop's memory and CPUs are the limits; LaunchAgent restart and auto-login/sleep warnings. JiuwenSwarm as a second harness on DeepSWE (`build_jiuwenswarm_headless`), and a sha256-checked harness store: every dispatcher prepares the harness once and each worker unpacks it once | [pipeline.md](pipeline.md#linux-and-macos-workers), [new-machine.md](new-machine.md#mac-mini-worker), [testing/mac-mini-worker.md](testing/mac-mini-worker.md), [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md), [pipeline.md](pipeline.md#harness-store) |
 | v0.5.3 | One `one_task` build is one question and one rollout. Executors are `cpu_cores / 2`. An out-of-memory trial is queued again. The Linux agent is kept off the host OOM killer's list | [pipeline.md](pipeline.md), [evaluation.md](evaluation.md), [export-import.md](export-import.md) |
 | v0.5.2 | Jenkins iCode **git** (`branch` / `tag` / `commit`) or **release** file upload; leftover clone wipe; SWE-bench Pro third job | [user-guide.md](user-guide.md), [icode-tag-commit-release/README.md](icode-tag-commit-release/README.md) |
 | binary-initializer (v0.4+) | Download `mac-k3d-{os}-{arch}`; `setup` installs Docker; controller vs worker | [new-machine.md](new-machine.md), [binary-initializer/README.md](binary-initializer/README.md) |

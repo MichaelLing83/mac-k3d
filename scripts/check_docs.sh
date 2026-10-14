@@ -25,6 +25,7 @@ PRODUCT_MD=(
   optimization.md
   icode-harness-inputs.md
   integration-log.md
+  jiuwenswarm-harness-inputs.md
   initializer-new-machine.md
   jenkins-jobs.md
   new-machine.md

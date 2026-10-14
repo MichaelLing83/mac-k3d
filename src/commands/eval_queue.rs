@@ -1,7 +1,8 @@
-//! `mac-k3d eval --job one|some|full`: queue one of the nine Jenkins eval jobs
-//! with the fields of its Build with Parameters page. Only the fields given on
-//! the command line are sent; every other field keeps the job's default, which
-//! is what pressing Build with the form untouched does.
+//! `mac-k3d eval --job one|some|full`: queue one of the Jenkins eval jobs with
+//! the fields of its Build with Parameters page. Only the fields given on the
+//! command line are sent; every other field keeps the job's default, which is
+//! what pressing Build with the form untouched does. `--harness jiuwenswarm`
+//! queues `deepswe_one_task` for one, else `build_jiuwenswarm_headless`.
 
 use std::time::Duration;
 
@@ -25,6 +26,11 @@ pub(super) struct QueueRequest {
     pub icode_git_url: Option<String>,
     pub icode_git_ref: Option<String>,
     pub icode_git_ref_kind: Option<String>,
+    /// `--harness`, checked against the benchmark.
+    pub harness: Option<String>,
+    pub jiuwenswarm_git_url: Option<String>,
+    pub jiuwenswarm_git_ref: Option<String>,
+    pub jiuwenswarm_git_ref_kind: Option<String>,
     pub model: Option<String>,
     /// `--param NAME=VALUE`, in the order given.
     pub params: Vec<String>,
@@ -32,8 +38,14 @@ pub(super) struct QueueRequest {
 
 impl QueueRequest {
     pub(super) fn from_args(args: &EvalArgs, shape: JobShape) -> Result<Self> {
+        let benchmark = eval_catalog::require_benchmark(args.benchmark.as_deref().unwrap_or("deepswe"))?;
+        let harness = args
+            .harness
+            .as_deref()
+            .map(|h| eval_catalog::require_harness_for(h, &benchmark))
+            .transpose()?;
         Ok(Self {
-            benchmark: eval_catalog::require_benchmark(args.benchmark.as_deref().unwrap_or("deepswe"))?,
+            benchmark,
             shape,
             task: args.task.clone(),
             tasks: args.tasks.clone(),
@@ -43,13 +55,31 @@ impl QueueRequest {
             icode_git_url: args.icode_git_url.clone(),
             icode_git_ref: args.icode_git_ref.clone(),
             icode_git_ref_kind: args.icode_git_ref_kind.clone(),
+            harness,
+            jiuwenswarm_git_url: args.jiuwenswarm_git_url.clone(),
+            jiuwenswarm_git_ref: args.jiuwenswarm_git_ref.clone(),
+            jiuwenswarm_git_ref_kind: args.jiuwenswarm_git_ref_kind.clone(),
             model: args.model.clone(),
             params: args.param.clone(),
         })
     }
 
+    fn jiuwenswarm(&self) -> bool {
+        self.harness.as_deref() == Some("jiuwenswarm")
+    }
+
+    /// The page this request fills: JiuwenSwarm's dispatcher for its some and
+    /// full runs, else the suite's job of that shape.
+    fn page_shape(&self) -> JobShape {
+        if self.jiuwenswarm() && self.shape != JobShape::One {
+            JobShape::Headless
+        } else {
+            self.shape
+        }
+    }
+
     fn job(&self) -> String {
-        jenkins_job::eval_job_name(&self.benchmark, self.shape)
+        jenkins_job::eval_job_name(&self.benchmark, self.page_shape())
     }
 }
 
@@ -64,6 +94,7 @@ pub(super) fn parse_shape(job: &str) -> Result<JobShape> {
 
 /// Fields with a dedicated flag; `--param` refuses them so each value is checked once.
 const FLAG_FIELDS: &[(&str, &str)] = &[
+    ("HARNESS", "--harness"),
     ("TASK", "--task"),
     ("TASKS", "--tasks"),
     ("N_TASKS", "--n-tasks"),
@@ -72,8 +103,61 @@ const FLAG_FIELDS: &[(&str, &str)] = &[
     ("ICODE_GIT_URL", "--icode-git-url"),
     ("ICODE_GIT_REF", "--icode-git-ref"),
     ("ICODE_GIT_REF_KIND", "--icode-git-ref-kind"),
+    ("JIUWENSWARM_GIT_URL", "--jiuwenswarm-git-url"),
+    ("JIUWENSWARM_GIT_REF", "--jiuwenswarm-git-ref"),
+    ("JIUWENSWARM_GIT_REF_KIND", "--jiuwenswarm-git-ref-kind"),
     ("DEEPSEEK_MODEL", "--model"),
 ];
+
+/// The file uploads of a job page, which only Build with Parameters can attach.
+const UPLOAD_FIELDS: &[&str] = &["ICODE_RELEASE_FILE", "JIUWENSWARM_RELEASE_FILE"];
+
+/// A harness's git URL, ref and ref kind: field names, then their flags.
+type GitFields = ([&'static str; 3], [&'static str; 3]);
+const ICODE_GIT: GitFields = (
+    ["ICODE_GIT_URL", "ICODE_GIT_REF", "ICODE_GIT_REF_KIND"],
+    ["--icode-git-url", "--icode-git-ref", "--icode-git-ref-kind"],
+);
+const JIUWENSWARM_GIT: GitFields = (
+    ["JIUWENSWARM_GIT_URL", "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND"],
+    ["--jiuwenswarm-git-url", "--jiuwenswarm-git-ref", "--jiuwenswarm-git-ref-kind"],
+);
+
+/// The git fields from their flags, checked as the pipeline checks them.
+fn git_fields(
+    (names, flags): GitFields,
+    url: Option<String>,
+    git_ref: Option<String>,
+    kind: Option<String>,
+) -> Result<Vec<(&'static str, String, &'static str)>> {
+    let mut set = Vec::new();
+    if let Some(url) = url {
+        set.push((names[0], eval_catalog::require_git_url(names[0], &url)?, flags[0]));
+    }
+    match (git_ref, kind) {
+        (Some(git_ref), Some(kind)) => {
+            let (kind, git_ref) = eval_catalog::require_git_ref_for_kind(names[1], &kind, &git_ref)?;
+            set.push((names[1], git_ref, flags[1]));
+            set.push((names[2], kind, flags[2]));
+        }
+        (Some(git_ref), None) => {
+            set.push((names[1], eval_catalog::require_git_ref(names[1], &git_ref)?, flags[1]));
+        }
+        (None, Some(kind)) => {
+            let kind = kind.to_ascii_lowercase();
+            if !eval_catalog::ICODE_GIT_REF_KINDS.contains(&kind.as_str()) {
+                return Err(Error::Config(format!(
+                    "{} {kind}: use one of {}",
+                    flags[2],
+                    eval_catalog::join_allowed(eval_catalog::ICODE_GIT_REF_KINDS)
+                )));
+            }
+            set.push((names[2], kind, flags[2]));
+        }
+        (None, None) => {}
+    }
+    Ok(set)
+}
 
 fn at_least_one(flag: &str, n: u32) -> Result<String> {
     if n < 1 {
@@ -86,9 +170,32 @@ fn at_least_one(flag: &str, n: u32) -> Result<String> {
 /// field for, rather than letting Jenkins ignore it.
 fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
     let job = req.job();
-    let page = jenkins_job::job_params(&req.benchmark, req.shape);
+    let page = jenkins_job::job_params(&req.benchmark, req.page_shape());
     let mut set: Vec<(&'static str, String, &'static str)> = Vec::new();
     let nonblank = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+
+    // Each harness takes its own inputs.
+    let icode_flags = [
+        (&req.icode_mode, "--icode-mode"),
+        (&req.icode_git_url, "--icode-git-url"),
+        (&req.icode_git_ref, "--icode-git-ref"),
+        (&req.icode_git_ref_kind, "--icode-git-ref-kind"),
+    ];
+    let jiuwen_flags = [
+        (&req.jiuwenswarm_git_url, "--jiuwenswarm-git-url"),
+        (&req.jiuwenswarm_git_ref, "--jiuwenswarm-git-ref"),
+        (&req.jiuwenswarm_git_ref_kind, "--jiuwenswarm-git-ref-kind"),
+    ];
+    if req.jiuwenswarm() {
+        if let Some((_, flag)) = icode_flags.iter().find(|(v, _)| nonblank(v).is_some()) {
+            return Err(Error::Config(format!(
+                "{flag} is an iCode input; JiuwenSwarm takes --jiuwenswarm-git-url, --jiuwenswarm-git-ref \
+                 and --jiuwenswarm-git-ref-kind"
+            )));
+        }
+    } else if let Some((_, flag)) = jiuwen_flags.iter().find(|(v, _)| nonblank(v).is_some()) {
+        return Err(Error::Config(format!("{flag} needs --harness jiuwenswarm")));
+    }
 
     match req.shape {
         JobShape::One => {
@@ -102,33 +209,19 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
                     "{job} runs one question: use --job some --n-tasks N for several"
                 )));
             }
+            // A dispatcher's harness is its job; only a one_task page has the choice.
+            if let Some(harness) = &req.harness {
+                set.push(("HARNESS", harness.clone(), "--harness"));
+            }
             if let Some(task) = nonblank(&req.task) {
                 set.push(("TASK", task, "--task"));
             }
-            if let Some(mode) = nonblank(&req.icode_mode) {
-                if eval_catalog::normalize_icode_mode(&mode)? == "release" {
-                    return Err(Error::Config(format!(
-                        "{job} with ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE, which the CLI \
-                         cannot attach. Open the job's Build with Parameters page, or use --icode-mode git"
-                    )));
-                }
-                set.push(("ICODE_MODE", "git".into(), "--icode-mode"));
-            }
         }
-        JobShape::Some_ | JobShape::FullSuite => {
+        JobShape::Some_ | JobShape::FullSuite | JobShape::Headless => {
             if nonblank(&req.task).is_some() {
                 return Err(Error::Config(format!(
                     "{job} takes a list: use --tasks a,b,c (--task is for --job one)"
                 )));
-            }
-            if let Some(mode) = nonblank(&req.icode_mode) {
-                if eval_catalog::normalize_icode_mode(&mode)? == "release" {
-                    return Err(Error::Config(format!(
-                        "{job} with ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE, which the CLI \
-                         cannot attach. Open the job's Build with Parameters page, or use --icode-mode git"
-                    )));
-                }
-                set.push(("ICODE_MODE", "git".into(), "--icode-mode"));
             }
             if let Some(raw) = nonblank(&req.tasks) {
                 if req.shape == JobShape::FullSuite {
@@ -145,7 +238,27 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
             if let Some(n) = req.n_tasks {
                 set.push(("N_TASKS", at_least_one("--n-tasks", n)?, "--n-tasks"));
             }
+            // Its page runs every question when both are left alone; that is --job full.
+            if req.page_shape() == JobShape::Headless
+                && req.shape != JobShape::FullSuite
+                && !set.iter().any(|(n, _, _)| matches!(*n, "TASKS" | "N_TASKS"))
+            {
+                return Err(Error::Config(format!(
+                    "{job} runs all {} DeepSWE questions by default: give --tasks a,b,c or --n-tasks N, \
+                     or use --job full",
+                    jenkins_job::full_suite_size(&req.benchmark)
+                )));
+            }
         }
+    }
+    if let Some(mode) = nonblank(&req.icode_mode) {
+        if eval_catalog::normalize_icode_mode(&mode)? == "release" {
+            return Err(Error::Config(format!(
+                "{job} with ICODE_MODE=release needs an uploaded ICODE_RELEASE_FILE, which the CLI \
+                 cannot attach. Open the job's Build with Parameters page, or use --icode-mode git"
+            )));
+        }
+        set.push(("ICODE_MODE", "git".into(), "--icode-mode"));
     }
     if let Some(n) = req.n_rollouts {
         if req.shape == JobShape::One && n != 1 {
@@ -157,30 +270,18 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
             set.push(("N_ROLLOUTS", at_least_one("--n-rollouts", n)?, "--n-rollouts"));
         }
     }
-    if let Some(url) = nonblank(&req.icode_git_url) {
-        set.push(("ICODE_GIT_URL", eval_catalog::require_icode_git_url(&url)?, "--icode-git-url"));
-    }
-    match (nonblank(&req.icode_git_ref), nonblank(&req.icode_git_ref_kind)) {
-        (Some(git_ref), Some(kind)) => {
-            let (kind, git_ref) = eval_catalog::require_icode_git_ref_for_kind(&kind, &git_ref)?;
-            set.push(("ICODE_GIT_REF", git_ref, "--icode-git-ref"));
-            set.push(("ICODE_GIT_REF_KIND", kind, "--icode-git-ref-kind"));
-        }
-        (Some(git_ref), None) => {
-            set.push(("ICODE_GIT_REF", eval_catalog::require_icode_git_ref(&git_ref)?, "--icode-git-ref"));
-        }
-        (None, Some(kind)) => {
-            let kind = kind.to_ascii_lowercase();
-            if !eval_catalog::ICODE_GIT_REF_KINDS.contains(&kind.as_str()) {
-                return Err(Error::Config(format!(
-                    "--icode-git-ref-kind {kind}: use one of {}",
-                    eval_catalog::join_allowed(eval_catalog::ICODE_GIT_REF_KINDS)
-                )));
-            }
-            set.push(("ICODE_GIT_REF_KIND", kind, "--icode-git-ref-kind"));
-        }
-        (None, None) => {}
-    }
+    set.extend(git_fields(
+        ICODE_GIT,
+        nonblank(&req.icode_git_url),
+        nonblank(&req.icode_git_ref),
+        nonblank(&req.icode_git_ref_kind),
+    )?);
+    set.extend(git_fields(
+        JIUWENSWARM_GIT,
+        nonblank(&req.jiuwenswarm_git_url),
+        nonblank(&req.jiuwenswarm_git_ref),
+        nonblank(&req.jiuwenswarm_git_ref_kind),
+    )?);
     if let Some(model) = nonblank(&req.model) {
         set.push(("DEEPSEEK_MODEL", eval_catalog::require_model(&model)?, "--model"));
     }
@@ -196,13 +297,13 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
         })?;
         if !field.settable {
             return Err(Error::Config(format!(
-                "{name} is set by some_task / full_suite_task on each shard build; it cannot be set by hand"
+                "{name} is set by the dispatcher on each shard build; it cannot be set by hand"
             )));
         }
-        if name == "ICODE_RELEASE_FILE" {
-            return Err(Error::Config(
-                "ICODE_RELEASE_FILE is a file upload: use the job's Build with Parameters page".into(),
-            ));
+        if UPLOAD_FIELDS.contains(&name.as_str()) {
+            return Err(Error::Config(format!(
+                "{name} is a file upload: use the job's Build with Parameters page"
+            )));
         }
         if let Some((_, flag)) = FLAG_FIELDS.iter().find(|(n, _)| *n == name) {
             return Err(Error::Config(format!("{name} has its own flag, which checks the value: use {flag}")));
@@ -210,7 +311,7 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
         if set.iter().any(|(n, _, _)| *n == field.name) {
             return Err(Error::Config(format!("--param {name} is given twice")));
         }
-        set.push((field.name, value.trim().to_string(), "--param"));
+        set.push((field.name, param_value(&job, &name, value.trim())?, "--param"));
     }
 
     for (name, _, flag) in &set {
@@ -221,6 +322,28 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
     let order = |name: &str| page.iter().position(|p| p.name == name).unwrap_or(usize::MAX);
     set.sort_by_key(|(name, _, _)| order(name));
     Ok(set.into_iter().map(|(name, value, _)| (name, value)).collect())
+}
+
+/// A `--param` value, checked here when the pipeline would refuse it later.
+fn param_value(job: &str, name: &str, value: &str) -> Result<String> {
+    match name {
+        "JIUWENSWARM_MODE" => match value.to_ascii_lowercase().as_str() {
+            "git" => Ok("git".into()),
+            "release" => Err(Error::Config(format!(
+                "{job} with JIUWENSWARM_MODE=release needs an uploaded JIUWENSWARM_RELEASE_FILE, which the CLI \
+                 cannot attach. Open the job's Build with Parameters page"
+            ))),
+            other => Err(Error::Config(format!("JIUWENSWARM_MODE={other}: use git or release"))),
+        },
+        "JIUWENSWARM_AGENT_MODE" => eval_catalog::require_jiuwenswarm_agent_mode(value),
+        "JIUWENSWARM_MAX_TURNS" => {
+            let turns = value
+                .parse::<u32>()
+                .map_err(|_| Error::Config(format!("JIUWENSWARM_MAX_TURNS={value}: write a whole number")))?;
+            Ok(eval_catalog::require_jiuwenswarm_max_turns(turns)?.to_string())
+        }
+        _ => Ok(value.to_string()),
+    }
 }
 
 fn page_field<'a>(page: &'a [JobParam], name: &str) -> Option<&'a JobParam> {
@@ -290,11 +413,11 @@ pub(super) fn queue(config: &MacK3dConfig, req: &QueueRequest, dry_run: bool) ->
         println!("Dry run: nothing queued.");
         return Ok(());
     }
-    if let Some((_, url)) = fields.iter().find(|(n, _)| *n == "ICODE_GIT_URL") {
+    if let Some((name, url)) = fields.iter().find(|(n, _)| matches!(*n, "ICODE_GIT_URL" | "JIUWENSWARM_GIT_URL")) {
         if let Ok(spec) = eval_catalog::git_pat_spec(url) {
             println!(
                 "The git clone uses controller credential {} ({}); for a private repo add it with \
-                 `mac-k3d config --update-secrets` on the controller, never in ICODE_GIT_URL.",
+                 `mac-k3d config --update-secrets` on the controller, never in {name}.",
                 spec.jenkins_id, spec.env_var
             );
         }
@@ -496,6 +619,98 @@ mod tests {
             names(&request_fields(&req).unwrap()),
             ["AGENT_LABEL=mac-Michael-Ubuntu"]
         );
+    }
+
+    fn jiuwen(shape: JobShape, f: fn(&mut QueueRequest)) -> QueueRequest {
+        let mut req = QueueRequest {
+            benchmark: "deepswe".into(),
+            shape,
+            harness: Some("jiuwenswarm".into()),
+            ..Default::default()
+        };
+        f(&mut req);
+        req
+    }
+
+    #[test]
+    fn jiuwenswarm_queues_deepswe_one_task_or_build_jiuwenswarm_headless() {
+        let one = jiuwen(JobShape::One, |r| r.task = Some("wazero-multi-module-snapshots".into()));
+        assert_eq!(one.job(), "deepswe_one_task");
+        assert_eq!(
+            names(&request_fields(&one).unwrap()),
+            ["HARNESS=jiuwenswarm", "TASK=wazero-multi-module-snapshots"]
+        );
+        let list = jiuwen(JobShape::Some_, |r| {
+            r.tasks = Some("a, b".into());
+            r.n_rollouts = Some(1);
+            r.jiuwenswarm_git_ref = Some("main".into());
+            r.jiuwenswarm_git_ref_kind = Some("branch".into());
+            r.params = vec!["jiuwenswarm_agent_mode=Agent.Code.Plan".into(), "JIUWENSWARM_MAX_TURNS=40".into()];
+        });
+        assert_eq!(list.job(), "build_jiuwenswarm_headless");
+        assert_eq!(
+            names(&request_fields(&list).unwrap()),
+            [
+                "TASKS=a,b",
+                "N_ROLLOUTS=1",
+                "JIUWENSWARM_GIT_REF=main",
+                "JIUWENSWARM_GIT_REF_KIND=branch",
+                "JIUWENSWARM_AGENT_MODE=agent.code.plan",
+                "JIUWENSWARM_MAX_TURNS=40",
+            ]
+        );
+        // Its page already runs the whole suite.
+        let full = jiuwen(JobShape::FullSuite, |_| {});
+        assert_eq!(full.job(), "build_jiuwenswarm_headless");
+        assert!(request_fields(&full).unwrap().is_empty());
+        let err = request_fields(&jiuwen(JobShape::Some_, |_| {})).unwrap_err().to_string();
+        assert!(err.contains("runs all 113 DeepSWE questions by default"), "{err}");
+        let few = jiuwen(JobShape::Some_, |r| r.n_tasks = Some(3));
+        assert_eq!(names(&request_fields(&few).unwrap()), ["N_TASKS=3"]);
+        // iCode keeps its own jobs, and names its harness only on a one_task page.
+        let mut icode = some("a");
+        icode.harness = Some("icode".into());
+        assert_eq!(icode.job(), "deepswe_some_task");
+        assert_eq!(names(&request_fields(&icode).unwrap()), ["TASKS=a"]);
+    }
+
+    #[test]
+    fn each_harness_takes_only_its_own_inputs() {
+        let err = |req: QueueRequest| request_fields(&req).unwrap_err().to_string();
+        assert!(err(jiuwen(JobShape::One, |r| r.icode_git_ref = Some("2".into())))
+            .contains("--icode-git-ref is an iCode input"));
+        assert!(err(jiuwen(JobShape::Some_, |r| r.icode_mode = Some("git".into())))
+            .contains("--icode-mode is an iCode input"));
+        let mut req = some("a");
+        req.jiuwenswarm_git_url = Some("https://gitcode.com/michaelling/jiuwenswarm".into());
+        assert!(err(req).contains("--jiuwenswarm-git-url needs --harness jiuwenswarm"));
+        assert!(err(jiuwen(JobShape::One, |r| r.jiuwenswarm_git_url = Some("https://evil.example/x".into())))
+            .contains("JIUWENSWARM_GIT_URL host 'evil.example'"));
+        assert!(err(jiuwen(JobShape::One, |r| {
+            r.jiuwenswarm_git_ref = Some("main".into());
+            r.jiuwenswarm_git_ref_kind = Some("pr".into());
+        }))
+        .contains("JIUWENSWARM_GIT_REF_KIND=pr requires a pull-request number"));
+        let param = |p: &str| {
+            let mut req = jiuwen(JobShape::FullSuite, |_| {});
+            req.params = vec![p.into()];
+            err(req)
+        };
+        assert!(param("JIUWENSWARM_MODE=release").contains("needs an uploaded JIUWENSWARM_RELEASE_FILE"));
+        assert!(param("JIUWENSWARM_RELEASE_FILE=x").contains("file upload"));
+        assert!(param("JIUWENSWARM_MAX_TURNS=2000").contains("1 to 1000"));
+        assert!(param("JIUWENSWARM_AGENT_MODE=team").contains("unknown JiuwenSwarm agent mode"));
+        assert!(param("JIUWENSWARM_GIT_REF=2").contains("use --jiuwenswarm-git-ref"));
+        assert!(param("ICODE_GIT_REF=2").contains("has no field ICODE_GIT_REF"));
+        assert!(param("HARNESS=icode").contains("use --harness"));
+
+        let args = EvalArgs {
+            benchmark: Some("lolbench".into()),
+            harness: Some("jiuwenswarm".into()),
+            ..Default::default()
+        };
+        let err = QueueRequest::from_args(&args, JobShape::One).unwrap_err().to_string();
+        assert!(err.contains("harness jiuwenswarm runs on deepswe only, not lolbench"), "{err}");
     }
 
     #[test]

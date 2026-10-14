@@ -19,7 +19,7 @@ flowchart TD
   one --> worker --> report
 ```
 
-- **Controller:** Jenkins inside a k3d cluster (`http://localhost:17070`). It holds the nine eval jobs (three shapes for each benchmark), the DeepSeek key and the queue. It never runs Harbor.
+- **Controller:** Jenkins inside a k3d cluster (`http://localhost:17070`). It holds the ten eval jobs (three shapes for each benchmark, plus `build_jiuwenswarm_headless` for JiuwenSwarm on DeepSWE), the DeepSeek key and the queue. It never runs Harbor.
 - **Worker:** Linux or macOS with Docker, Java, git, the pinned Harbor and a Jenkins inbound agent. Executors are the CPU limit divided by 2. More workers run more questions at once; nothing in the pipeline changes when you add one, and a Mac worker gives the same phases, inputs and outputs as a Linux one.
 - **A build** lands on one worker, locks only the CPUs its question declares while Harbor runs, and runs the seven phases from the `pipeline/` built into that worker's `mac-k3d`, so the result names the commit that produced it. `some_task` and `full_suite_task` queue one `one_task` build per question and rollout and merge them into one report.
 - **Harbor** (pinned in `pipeline/config/toolchain.env`) runs the trials: containers, each task's declared limits, retries and grading. The agent can reach only the hosts in `pipeline/config/network-allowlist-v1.json`, the DeepSeek API.

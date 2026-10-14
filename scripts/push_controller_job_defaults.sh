@@ -51,6 +51,9 @@ job["default_icode_release"] = job.get("default_icode_release") or ""
 job["default_icode_git_url"] = "https://gitcode.com/michaelling/jiuwenicode"
 job["default_icode_git_ref"] = "2"
 job["default_icode_git_ref_kind"] = "pr"
+job["default_jiuwenswarm_git_url"] = "https://gitcode.com/michaelling/jiuwenswarm"
+job["default_jiuwenswarm_git_ref"] = "2"
+job["default_jiuwenswarm_git_ref_kind"] = "pr"
 doc["jenkins_job"] = job
 path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
 print("patched", path)
@@ -63,6 +66,9 @@ for k in (
     "default_icode_git_url",
     "default_icode_git_ref",
     "default_icode_git_ref_kind",
+    "default_jiuwenswarm_git_url",
+    "default_jiuwenswarm_git_ref",
+    "default_jiuwenswarm_git_ref_kind",
 ):
     print(f"  {k}={job.get(k)!r}")
 PY
@@ -75,4 +81,6 @@ echo
 echo "Done. In Jenkins UI confirm Build with Parameters on lolbench_one_task / deepswe_one_task:"
 echo "  TASK/TASKS empty, N_TASKS=1, N_ROLLOUTS=4, ICODE_MODE=git,"
 echo "  URL=https://gitcode.com/michaelling/jiuwenicode, REF=2, KIND=pr"
+echo "and on build_jiuwenswarm_headless: JIUWENSWARM_MODE=git,"
+echo "  URL=https://gitcode.com/michaelling/jiuwenswarm, REF=2, KIND=pr"
 echo "Jenkins: http://43.107.42.252:17070"

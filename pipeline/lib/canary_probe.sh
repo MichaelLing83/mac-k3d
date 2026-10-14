@@ -11,6 +11,9 @@
 # of those sha256 values. The spec carries hashes, never gold text.
 #
 #   canary_probe.sh home <tag>   iCode home state -> canary_home_<tag>.json
+#   canary_probe.sh runtime <name> <command...>
+#                                As the agent user: run one of the harness's own
+#                                commands -> canary_runtime_<name>.json
 #   canary_probe.sh probe        As the agent user: egress, filesystem search,
 #                                mount write, repo history, env names -> canary.json
 #   canary_probe.sh mount        As root: write to the mount -> canary_root.json
@@ -385,6 +388,34 @@ cmd_probe() {
   rm -f "$names"
 }
 
+cmd_runtime() {
+  local name="${1:-}" rc errf
+  case "$name" in
+    '' | *[!a-z0-9_]*)
+      echo "runtime: name must be [a-z0-9_]+ (got '$name')" >&2
+      exit 2
+      ;;
+  esac
+  shift
+  if [ "$#" -eq 0 ]; then
+    echo "runtime $name: no command" >&2
+    exit 2
+  fi
+  errf=$(need_temp) || exit 1
+  (cd /tmp && bounded 300 "$@") >/dev/null 2>"$errf"
+  rc=$?
+  {
+    printf '{\n'
+    printf '  "schema": %s,\n' "$(json_str "$SCHEMA")"
+    printf '  "name": %s,\n' "$(json_str "$name")"
+    printf '  "command": %s,\n' "$(json_str "$*")"
+    printf '  "exit": %s,\n' "$(json_int_or_null "$rc")"
+    printf '  "error": %s\n' "$(json_or_null "$(awk 'NF { line = $0 } END { print line }' "$errf" | cut -c1-300)")"
+    printf '}\n'
+  } | write_json "canary_runtime_${name}.json"
+  rm -f "$errf"
+}
+
 cmd_mount() {
   local rc errf erofs=0
   errf=$(need_temp) || exit 1
@@ -407,10 +438,14 @@ cmd_mount() {
 
 case "${1:-}" in
   home) cmd_home "${2:-post}" ;;
+  runtime)
+    shift
+    cmd_runtime "$@"
+    ;;
   probe) cmd_probe ;;
   mount) cmd_mount ;;
   *)
-    echo "usage: canary_probe.sh home <tag>|probe|mount" >&2
+    echo "usage: canary_probe.sh home <tag>|runtime <name> <command...>|probe|mount" >&2
     exit 2
     ;;
 esac

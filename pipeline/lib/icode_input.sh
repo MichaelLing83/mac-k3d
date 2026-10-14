@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Host-side iCode inputs for the tasks phase (sourced by stages/tasks/icode.sh,
-# tasks/icode_sandbox.sh and evaluate/harbor_run.sh).
+# Host-side iCode inputs (sourced by icode_prepare.sh, tasks/harness.sh and
+# evaluate/harbor_run.sh). The git and build-container helpers are in
+# harness_git.sh; the icode_* names below are iCode's view of them.
 # get_release_icode: official *-full-* drop / URL (not a git clone of Release assets).
 # get_bin_icode: allow-listed https git URL + tag/commit/branch, uv sync, Docker wrapper.
 # Does not print tokens.
@@ -14,6 +15,8 @@ fi
 if ! declare -F have >/dev/null 2>&1; then
   have() { command -v "$1" >/dev/null 2>&1; }
 fi
+# shellcheck source=./harness_git.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness_git.sh"
 
 icode_normalize_mode() {
   case "${ICODE_MODE:-binary}" in
@@ -26,97 +29,15 @@ icode_normalize_mode() {
   esac
 }
 
-icode_git_host_allowed() {
-  case "$1" in
-    github.com | www.github.com | gitcode.com) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-icode_validate_git_url() {
-  local url="${1:-}" rest host
-  [ -n "$url" ] || die "ICODE_GIT_URL is empty"
-  case "$url" in
-    https://*) ;;
-    *) die "ICODE_GIT_URL must be https:// (not file://, ssh://, or http://)" ;;
-  esac
-  rest="${url#https://}"
-  case "$rest" in
-    *@*) die "ICODE_GIT_URL must not contain userinfo (no tokens in the URL)" ;;
-  esac
-  host="${rest%%/*}"
-  host="${host%%:*}"
-  icode_git_host_allowed "$host" || die "ICODE_GIT_URL host '${host}' is not allow-listed (github.com, www.github.com, gitcode.com)"
-}
-
-icode_validate_git_ref() {
-  local ref="${1:-}"
-  [ -n "$ref" ] || die "ICODE_GIT_REF is empty"
-  case "$ref" in
-    -*) die "ICODE_GIT_REF must not start with -" ;;
-  esac
-  case "$ref" in
-    *..*) die "ICODE_GIT_REF must not contain .." ;;
-  esac
-  [[ "$ref" =~ ^[A-Za-z0-9._/+\-]+$ ]] || die "ICODE_GIT_REF is not a tag, commit, or branch name"
-}
-
-icode_looks_like_commit() {
-  [[ "${1:-}" =~ ^[0-9a-fA-F]{7,40}$ ]]
-}
-
-icode_looks_like_pr_number() {
-  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
-}
-
-icode_normalize_ref_kind() {
-  local k="${1:-auto}" ref="${2:-}"
-  k="$(printf '%s' "$k" | tr 'A-Z' 'a-z')"
-  case "$k" in
-    branch | tag | commit | pr)
-      printf '%s\n' "$k"
-      ;;
-    auto | "")
-      if icode_looks_like_commit "$ref"; then
-        printf '%s\n' commit
-      else
-        printf '%s\n' branch
-      fi
-      ;;
-    *)
-      die "ICODE_GIT_REF_KIND must be branch, tag, commit, or pr (got ${k})"
-      ;;
-  esac
-}
-
-icode_validate_ref_for_kind() {
-  local kind="$1" ref="$2"
-  case "$kind" in
-    commit)
-      icode_looks_like_commit "$ref" || die "ICODE_GIT_REF_KIND=commit requires a git SHA (7–40 hex chars), not a branch name. Use kind=branch for '${ref}'."
-      ;;
-    pr)
-      icode_looks_like_pr_number "$ref" || die "ICODE_GIT_REF_KIND=pr requires a pull-request number (positive integer), not '${ref}'."
-      ;;
-  esac
-}
-
-# GitHub: refs/pull/N/head. GitCode (and a local test remote): merge-requests, then pull.
-icode_git_pr_refs() {
-  local url="$1" number="$2" host
-  host="${url#https://}"
-  host="${host%%/*}"
-  host="${host%%:*}"
-  case "$host" in
-    github.com | www.github.com)
-      printf '%s\n' "refs/pull/${number}/head"
-      ;;
-    *)
-      printf '%s\n' "refs/merge-requests/${number}/head"
-      printf '%s\n' "refs/pull/${number}/head"
-      ;;
-  esac
-}
+# Git inputs: harness_git.sh, with iCode's names in the messages.
+icode_git_host_allowed() { hgit_host_allowed "$@"; }
+icode_validate_git_url() { HGIT_LABEL=ICODE_GIT hgit_validate_url "$@"; }
+icode_validate_git_ref() { HGIT_LABEL=ICODE_GIT hgit_validate_ref "$@"; }
+icode_looks_like_commit() { hgit_looks_like_commit "$@"; }
+icode_looks_like_pr_number() { hgit_looks_like_pr_number "$@"; }
+icode_normalize_ref_kind() { HGIT_LABEL=ICODE_GIT hgit_normalize_ref_kind "$@"; }
+icode_validate_ref_for_kind() { HGIT_LABEL=ICODE_GIT hgit_validate_ref_for_kind "$@"; }
+icode_git_pr_refs() { hgit_pr_refs "$@"; }
 
 icode_record_git_meta() {
   local dest="$1" url="$2" kind="$3" ref="$4" sha subject out
@@ -156,12 +77,12 @@ icode_assert_recorded_sha() {
   elif [ -n "${HOST_ROOT:-}" ] && [ -d "${HOST_ROOT}/.git" ]; then
     head="$(git -C "$HOST_ROOT" rev-parse HEAD 2>/dev/null | tr '[:upper:]' '[:lower:]')"
   else
-    die "ICODE_EXPECT_SHA is set but tasks/icode did not record an iCode SHA"
+    die "ICODE_EXPECT_SHA is set but tasks/harness did not record an iCode SHA"
   fi
   [ "$head" = "$expect" ] || die "ICODE_EXPECT_SHA=$expect but recorded SHA is $head"
 }
 
-# The generated launcher is the only file tasks/icode may add. .venv is gitignored upstream.
+# The generated launcher is the only file tasks/harness may add. .venv is gitignored upstream.
 icode_assert_clean_checkout() {
   local dest="$1" line
   [ -n "$dest" ] && [ -d "$dest/.git" ] || return 0
@@ -175,16 +96,7 @@ icode_assert_clean_checkout() {
   done < <(git -C "$dest" status --porcelain)
 }
 
-icode_sha256() {
-  python3 - "$1" <<'PY'
-import hashlib, sys
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-PY
-}
+icode_sha256() { hgit_sha256 "$@"; }
 
 icode_record_release() {
   local src="$1" name="$2" target hash
@@ -210,30 +122,9 @@ PY
   echo "OK icode_release file=${name} sha256=${hash}" >&2
 }
 
-icode_docker_platform() {
-  case "$(uname -m)" in
-    aarch64 | arm64) printf '%s\n' linux/arm64 ;;
-    *) printf '%s\n' linux/amd64 ;;
-  esac
-}
-
-# Platform the iCode runtime runs on: this build's task containers
-# (task_container_platform in _common.sh), else this host's CPU.
-icode_target_platform() {
-  if declare -F task_container_platform >/dev/null 2>&1; then
-    task_container_platform
-  else
-    icode_docker_platform
-  fi
-}
-
-# x86_64 or aarch64 for a linux/<arch> platform, as iCode drop names spell it.
-icode_platform_cpu() {
-  case "${1#linux/}" in
-    arm64 | aarch64) printf '%s\n' aarch64 ;;
-    *) printf '%s\n' x86_64 ;;
-  esac
-}
+icode_docker_platform() { hgit_docker_platform; }
+icode_target_platform() { hgit_target_platform; }
+icode_platform_cpu() { hgit_platform_cpu "$@"; }
 
 # CPU type a drop's name gives (icode-linux-x86_64-full-v…); darwin for a macOS
 # build; empty when the name does not say.
@@ -298,16 +189,11 @@ icode_pick_release_bin() {
   die "the iCode release is built for ${found}, but this build's task containers are ${plat} (linux-${want}). Use icode-linux-${want}-full-vX.Y.Z, or upload one .tar.gz holding icode-linux-x86_64-full-vX.Y.Z and icode-linux-aarch64-full-vX.Y.Z of the same version; each build takes the one it needs. A worker can also keep both drops in one folder: mac-k3d set --icode-release <folder>."
 }
 
-ICODE_LINUX_UV=/mac-k3d-uv
+ICODE_LINUX_UV="$HGIT_LINUX_UV"
 
 # uv sync runs in ICODE_LINUX_BUILD_IMAGE when this host cannot run the task
-# containers' Linux runtime itself: macOS, or a Linux host of another CPU type.
-# MAC_K3D_ICODE_CONTAINER_BUILD=1 forces it (tests).
-icode_container_build_needed() {
-  [ "${MAC_K3D_ICODE_CONTAINER_BUILD:-}" = 1 ] && return 0
-  [ "$(uname -s)" = Linux ] || return 0
-  [ "$(icode_docker_platform)" != "$(icode_target_platform)" ]
-}
+# containers' Linux runtime itself (hgit_container_build_needed).
+icode_container_build_needed() { hgit_container_build_needed; }
 
 # A venv uv built in the container links its python into the container's uv
 # cache; embed, sanitize and the probes then run there too.
@@ -318,58 +204,8 @@ icode_tree_built_in_container() {
   return 1
 }
 
-icode_linux_image() {
-  local img="${ICODE_LINUX_BUILD_IMAGE:-}" lib
-  if [ -z "$img" ]; then
-    lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    img="$(sed -n 's/^ICODE_LINUX_BUILD_IMAGE=//p' "$lib/../config/toolchain.env" 2>/dev/null | head -n 1)"
-  fi
-  [ -n "$img" ] || die "ICODE_LINUX_BUILD_IMAGE is missing from pipeline/config/toolchain.env"
-  printf '%s\n' "$img"
-}
-
-# Run a command in ICODE_LINUX_BUILD_IMAGE on the task platform, as this user.
-# $1 and pipeline/lib are mounted at their own paths, so venv links, .pth files
-# and the sanitizer manifest name the same paths as a host-built tree. uv's
-# cache and managed CPython live in one cache per platform under MAC_K3D_SHARE,
-# always mounted at ICODE_LINUX_UV. ICODE_LINUX_WORKDIR sets the working
-# directory (default $1). Git credentials pass by name, never on the command line.
-icode_linux_run() {
-  local dest="$1" plat lib cache name passwd
-  local -a args
-  shift
-  have docker || die "docker is required to build the iCode runtime for $(icode_target_platform) on this host"
-  plat="$(icode_target_platform)"
-  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  cache="${MAC_K3D_SHARE:-$HOME/.local/share/mac-k3d}/uv-cache-linux-${plat#linux/}"
-  mkdir -p "$cache"
-  args=(run --rm --platform "$plat" --user "$(id -u):$(id -g)"
-    -e HOME=/tmp
-    -e "UV_CACHE_DIR=$ICODE_LINUX_UV/cache"
-    -e "UV_PYTHON_INSTALL_DIR=$ICODE_LINUX_UV/python"
-    -e UV_PYTHON_PREFERENCE=only-managed
-    -e UV_LINK_MODE=copy
-    -v "$cache:$ICODE_LINUX_UV"
-    -v "$dest:$dest"
-    -v "$lib:$lib:ro"
-    -w "${ICODE_LINUX_WORKDIR:-$dest}")
-  for name in MAC_K3D_GIT_TOKEN MAC_K3D_GIT_USERNAME GIT_TERMINAL_PROMPT GIT_CONFIG_NOSYSTEM \
-    GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_SSH_COMMAND; do
-    if printenv "$name" >/dev/null 2>&1; then
-      args+=(-e "$name")
-    fi
-  done
-  if [ -n "${GIT_ASKPASS:-}" ] && [ -f "$GIT_ASKPASS" ]; then
-    args+=(-e GIT_ASKPASS -v "$GIT_ASKPASS:$GIT_ASKPASS:ro")
-  fi
-  # ssh refuses to run for a uid without a passwd entry.
-  if [ -n "${GIT_SSH_COMMAND:-}" ] && [ -d "$HOME/.ssh" ]; then
-    passwd="${cache}.passwd"
-    printf 'root:x:0:0:root:/root:/bin/sh\nmac-k3d:x:%s:%s:mac-k3d:/tmp:/bin/sh\n' "$(id -u)" "$(id -g)" >"$passwd"
-    args+=(-v "$passwd:/etc/passwd:ro" -v "$HOME/.ssh:/tmp/.ssh:ro")
-  fi
-  docker "${args[@]}" "$(icode_linux_image)" "$@"
-}
+icode_linux_image() { hgit_linux_image; }
+icode_linux_run() { hgit_linux_run "$@"; }
 
 # Check a release icode answers --help: on this host, or in the Linux build
 # image when the binary is a Linux build this host cannot exec.
@@ -382,108 +218,19 @@ icode_release_help() {
   fi
 }
 
-# Delete a leftover tree/file even when Docker left root/nobody-owned files.
-# Plain rm first; if that fails, alpine as root on a parent bind-mount (no sudo).
-icode_force_rm() {
-  local path="${1:-}" parent base plat
-  [ -n "$path" ] || return 0
-  [ -e "$path" ] || [ -L "$path" ] || return 0
-  rm -rf "$path" 2>/dev/null || true
-  [ -e "$path" ] || [ -L "$path" ] || return 0
-  have docker || die "cannot remove leftover ${path} (root/nobody files from a prior sandbox). Docker is required to delete it."
-  parent="$(cd "$(dirname "$path")" && pwd)" || die "cannot resolve parent of ${path}"
-  base="$(basename "$path")"
-  case "$base" in
-    '' | . | .. | /) die "refusing to docker-rm unsafe path ${path}" ;;
-  esac
-  [ "$parent" != "/" ] || die "refusing to docker-rm under /"
-  plat="$(icode_docker_platform)"
-  echo "removing leftover ${path} via docker (prior sandbox left root/nobody files)" >&2
-  docker run --rm --platform "$plat" -v "${parent}:/mac-k3d-wipe" alpine:3.20 rm -rf "/mac-k3d-wipe/${base}"
-  if [ -e "$path" ] || [ -L "$path" ]; then
-    die "cannot remove leftover ${path} (docker rm of root/nobody sandbox files failed)"
-  fi
-}
-
-# After Pier/Harbor, give the bind-mounted host tree back to the invoking user.
-icode_reclaim_host_tree() {
-  local dest="${1:-}" parent base plat uid gid
-  [ -n "$dest" ] && [ -d "$dest" ] || return 0
-  have docker || return 0
-  parent="$(cd "$(dirname "$dest")" && pwd)" || return 0
-  base="$(basename "$dest")"
-  case "$base" in
-    '' | . | .. | /) return 0 ;;
-  esac
-  [ "$parent" != "/" ] || return 0
-  uid="$(id -u)"
-  gid="$(id -g)"
-  plat="$(icode_docker_platform)"
-  docker run --rm --platform "$plat" -v "${parent}:/mac-k3d-wipe" alpine:3.20 chown -R "${uid}:${gid}" "/mac-k3d-wipe/${base}" >/dev/null 2>&1 || true
-}
+icode_force_rm() { hgit_force_rm "$@"; }
+icode_reclaim_host_tree() { hgit_reclaim_tree "$@"; }
 
 icode_git_checkout() {
-  local dest="$1" url="$2" ref="$3" kind="$4" tok fetched spec
-  local -a git_cmd
-  tok="${MAC_K3D_GIT_TOKEN:-}"
-  git_cmd=(git -c core.hooksPath=/dev/null -c init.defaultBranch=main -c advice.defaultBranchName=false -c credential.helper= -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30)
-  if [ "${MAC_K3D_ICODE_GIT_ALLOW_FILE:-}" != 1 ]; then
-    git_cmd+=(-c protocol.file.allow=never)
-  fi
-  if [ -e "$dest" ]; then
-    icode_force_rm "$dest"
-  fi
-  mkdir -p "$dest"
-  icode_git "${git_cmd[@]}" init "$dest" >/dev/null || icode_git_clone_fail "$url" "$ref" "$tok"
-  icode_git "${git_cmd[@]}" -C "$dest" remote add origin "$url" || icode_git_clone_fail "$url" "$ref" "$tok"
-  case "$kind" in
-    pr)
-      icode_validate_ref_for_kind pr "$ref"
-      fetched=0
-      while IFS= read -r spec; do
-        [ -n "$spec" ] || continue
-        if icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$spec"; then
-          fetched=1
-          break
-        fi
-      done < <(icode_git_pr_refs "$url" "$ref")
-      [ "$fetched" -eq 1 ] || icode_git_clone_fail "$url" "$ref" "$tok"
-      icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
-      ;;
-    commit)
-      fetched=0
-      if icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \
-        || icode_git "${git_cmd[@]}" -C "$dest" fetch origin "$ref" >/dev/null 2>&1 \
-        || icode_git "${git_cmd[@]}" -C "$dest" fetch origin "+${ref}:refs/commits/${ref}" >/dev/null 2>&1; then
-        fetched=1
-      fi
-      if [ "$fetched" -eq 0 ]; then
-        # Abbreviated SHA: fetch advertised heads/tags, then resolve the object locally.
-        icode_git "${git_cmd[@]}" -C "$dest" fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' || icode_git_clone_fail "$url" "$ref" "$tok"
-      fi
-      icode_git "${git_cmd[@]}" -C "$dest" checkout --detach "$ref" || icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
-      ;;
-    tag)
-      if ! icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}"; then
-        icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin tag "$ref" || icode_git "${git_cmd[@]}" -C "$dest" fetch origin "refs/tags/${ref}:refs/tags/${ref}" || icode_git_clone_fail "$url" "$ref" "$tok"
-      fi
-      icode_git "${git_cmd[@]}" -C "$dest" checkout --detach "refs/tags/${ref}" || icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
-      ;;
-    *)
-      if ! icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "${ref}:refs/remotes/origin/${ref}"; then
-        icode_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$ref" || icode_git "${git_cmd[@]}" -C "$dest" fetch origin "$ref" || icode_git_clone_fail "$url" "$ref" "$tok"
-      fi
-      icode_git "${git_cmd[@]}" -C "$dest" checkout -B "$ref" FETCH_HEAD || icode_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || icode_git_clone_fail "$url" "$ref" "$tok"
-      ;;
-  esac
-  icode_assert_expect_sha "$dest"
+  HGIT_LABEL=ICODE_GIT hgit_checkout "$@"
+  icode_assert_expect_sha "$1"
 }
 
 icode_write_wrapper() {
   local dest="$1"
   cat >"$dest" <<'WRAP'
 #!/bin/sh
-# Bind-mounted git venv: host uv CPython is not in the sandbox. tasks/icode copies it to
+# Bind-mounted git venv: host uv CPython is not in the sandbox. tasks/harness copies it to
 # .venv/sandbox-cpython. Always use the mount path so Harbor/Pier `cp` of this
 # file to /usr/local/bin/icode still works.
 ROOT="${ICODE_SOURCE_HOST:-/opt/icode-host}"
@@ -583,7 +330,7 @@ icode_probe_sandbox() {
       break
     fi
   done
-  [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (tasks/icode embed failed)"
+  [ -n "$py" ] || die "sandbox python missing under $dest/.venv/sandbox-cpython (tasks/harness embed failed)"
   site="$(ls -d "$dest/.venv/lib"/python3.*/site-packages 2>/dev/null | head -1 || true)"
   tmp="$(mktemp -d)"
   if ! icode_probe_run "$dest" "$tmp" "$site" "$py" "$dest/.venv/bin/icode" --help; then
@@ -662,70 +409,12 @@ icode_write_host_root() {
   printf '%s\n' "$1" >"$WORKDIR/icode_host_root.txt"
 }
 
-icode_write_askpass() {
-  local f="$WORKDIR/.git-askpass"
-  umask 077
-  cat >"$f" <<'ASK'
-#!/bin/sh
-case "$1" in
-  *[Uu]sername*) printf '%s\n' "${MAC_K3D_GIT_USERNAME:-x-access-token}" ;;
-  *) printf '%s\n' "${MAC_K3D_GIT_TOKEN:-}" ;;
-esac
-ASK
-  chmod 700 "$f"
-  printf '%s\n' "$f"
-}
-
-icode_token_env_for_host() {
-  case "$1" in
-    github.com | www.github.com) printf '%s\n' GITHUB_TOKEN ;;
-    gitcode.com) printf '%s\n' GITCODE_TOKEN ;;
-    *) die "ICODE_GIT_URL host '${1}' is not allow-listed (github.com, www.github.com, gitcode.com)" ;;
-  esac
-}
-
-icode_resolve_git_token() {
-  local host="$1"
-  case "$host" in
-    github.com | www.github.com) printf '%s\n' "${GITHUB_TOKEN:-${MAC_K3D_GITHUB_PAT:-}}" ;;
-    gitcode.com) printf '%s\n' "${GITCODE_TOKEN:-${MAC_K3D_GITCODE_PAT:-}}" ;;
-    *) printf '%s\n' "" ;;
-  esac
-}
-
-icode_git_username_for_host() {
-  if [ -n "${MAC_K3D_GIT_USERNAME:-}" ]; then
-    printf '%s\n' "$MAC_K3D_GIT_USERNAME"
-    return 0
-  fi
-  case "$1" in
-    gitcode.com) printf '%s\n' oauth2 ;;
-    *) printf '%s\n' x-access-token ;;
-  esac
-}
-
-# Fail-fast: no credential helper prompt, abort stalled HTTPS instead of hanging.
-icode_git() {
-  local rc
-  if have timeout; then
-    timeout 90 "$@"
-    rc=$?
-    if [ "$rc" -eq 124 ]; then
-      echo "ERROR: git timed out after 90s (often a private repo with no PAT)" >&2
-      return 124
-    fi
-    return "$rc"
-  fi
-  "$@"
-}
-
-icode_git_clone_fail() {
-  local url="$1" ref="$2" token="$3"
-  if [ -z "$token" ]; then
-    die "git clone failed for ${url}. If the repo is private, store GITCODE_TOKEN (gitcode.com) or GITHUB_TOKEN (github.com) in gitignored .env (chmod 600), or Jenkins credential gitcode-pat / github-pat. Do not put the token in the URL or paste it into chat. GitCode username override: MAC_K3D_GIT_USERNAME in .env."
-  fi
-  die "git clone failed for ${url} (ref ${ref}). Check URL/ref and that the PAT can read the repo. Token not printed."
-}
+icode_write_askpass() { hgit_write_askpass; }
+icode_token_env_for_host() { HGIT_LABEL=ICODE_GIT hgit_token_env_for_host "$@"; }
+icode_resolve_git_token() { hgit_resolve_token "$@"; }
+icode_git_username_for_host() { hgit_username_for_host "$@"; }
+icode_git() { hgit_git "$@"; }
+icode_git_clone_fail() { hgit_clone_fail "$@"; }
 
 icode_paths_file() {
   if [ -n "${MAC_K3D_ICODE_PATHS:-}" ]; then
@@ -879,39 +568,13 @@ icode_uv_sync() {
   die "uv sync failed in ${dest}"
 }
 
-icode_begin_git_auth() {
-  local url="$1" host token
-  host="${url#https://}"
-  host="${host%%/*}"
-  host="${host%%:*}"
-  export GIT_TERMINAL_PROMPT=0
-  export GIT_CONFIG_NOSYSTEM=1
-  token="$(icode_resolve_git_token "$host")"
-  export MAC_K3D_GIT_USERNAME="$(icode_git_username_for_host "$host")"
-  if [ -n "$token" ]; then
-    export MAC_K3D_GIT_TOKEN="$token"
-    GIT_ASKPASS="$(icode_write_askpass)"
-    export GIT_ASKPASS
-  fi
-}
-
-icode_end_git_auth() {
-  unset MAC_K3D_GIT_TOKEN GIT_ASKPASS || true
-}
+icode_begin_git_auth() { hgit_begin_auth "$@"; }
+icode_end_git_auth() { hgit_end_auth; }
 
 # Fetch the form's ref, or ICODE_GIT_SHA when a dispatcher pinned one commit.
 icode_checkout_requested() {
-  local dest="$1" url="$2" ref="$3" kind="$4" pin head want
-  pin="${ICODE_GIT_SHA:-}"
-  if [ -n "$pin" ]; then
-    icode_looks_like_commit "$pin" || die "ICODE_GIT_SHA must be a git SHA (7–40 hex chars), not '${pin}'."
-    icode_git_checkout "$dest" "$url" "$pin" commit
-    head="$(git -C "$dest" rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
-    want="$(printf '%s' "$pin" | tr '[:upper:]' '[:lower:]')"
-    [ "$head" = "$want" ] || die "ICODE_GIT_SHA=$want but checkout HEAD is $head"
-  else
-    icode_git_checkout "$dest" "$url" "$ref" "$kind"
-  fi
+  HGIT_LABEL=ICODE_GIT hgit_checkout_requested "$1" "$2" "$3" "$4" "${ICODE_GIT_SHA:-}"
+  icode_assert_expect_sha "$1"
 }
 
 # Print the commit the form names. Stdout is only the SHA; checkout chatter goes to stderr.

@@ -10,6 +10,8 @@ import re
 import sys
 from pathlib import Path
 
+import harness as harness_table
+
 REQUIRED_TOP = (
     "harness",
     "suite",
@@ -88,7 +90,17 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
     errors: list[str] = []
     loc = "eval_protocol.isolation"
     mode = isolation.get("mode")
-    if mode == "git":
+    harness = harness_table.from_record(protocol.get("harness") if isinstance(protocol.get("harness"), dict) else None)
+    if isolation.get("harness") == "jiuwenswarm" and harness.name != "jiuwenswarm":
+        errors.append(f"{loc}.harness is jiuwenswarm but eval_protocol.harness is {harness.name}")
+    if harness.name == "jiuwenswarm":
+        # No sanitizer: the tree is the harness store's, verified when the build took it.
+        if mode not in ("git", "release"):
+            errors.append(f"{loc}.mode must be git or release")
+        for key in ("tree_sha256", "bundle_sha256"):
+            if not _SHA256.match(str(isolation.get(key) or "")):
+                errors.append(f"{loc}.{key} must be a sha256 (the harness store's bundle and tree)")
+    elif mode == "git":
         if not _nonempty_str(isolation.get("sanitizer")):
             errors.append(f"missing {loc}.sanitizer")
         if isolation.get("sourceless") is not True:
@@ -101,8 +113,8 @@ def official_isolation_errors(isolation: object, doc: dict | None = None) -> lis
     elif mode != "release":
         errors.append(f"{loc}.mode must be git or release")
     mount = isolation.get("mount") if isinstance(isolation.get("mount"), dict) else {}
-    if mount.get("count") != 1 or mount.get("target") != "/opt/icode-host" or mount.get("read_only") is not True:
-        errors.append(f"{loc}.mount must be one read-only mount at /opt/icode-host")
+    if mount.get("count") != 1 or mount.get("target") != harness.mount or mount.get("read_only") is not True:
+        errors.append(f"{loc}.mount must be one read-only mount at {harness.mount}")
     leak = isolation.get("leak_scan") if isinstance(isolation.get("leak_scan"), dict) else {}
     leak_hashed = _nonempty_str(leak.get("report_sha256")) or (
         bool(ran) and all(_nonempty_str(s.get("leak_scan_sha256")) for s in ran)
@@ -232,6 +244,14 @@ def official_provenance_errors(doc: dict) -> list[str]:
         errors.append("eval_protocol.pipeline.dirty: a run needs a clean pipeline commit")
     if doc.get("pipeline_status") == "mixed":
         errors.append("pipeline_status mixed: the shards ran different pipeline builds")
+    mismatch = protocol.get("model_params_mismatch") if isinstance(protocol.get("model_params_mismatch"), dict) else {}
+    for key, what in (
+        ("harness", "harnesses"),
+        ("icode_version", "harness builds"),
+        ("harness_bundle_sha256", "harness bundles on one platform"),
+    ):
+        if key in mismatch:
+            errors.append(f"eval_protocol.model_params_mismatch.{key}: the shards ran different {what}")
     errors.extend(official_isolation_errors(protocol.get("isolation"), doc))
     anticheat = doc.get("anticheat") if isinstance(doc.get("anticheat"), dict) else {}
     if anticheat.get("status") != "ok" or not _nonempty_str(anticheat.get("version")):
@@ -410,8 +430,8 @@ def validate(doc: object) -> list[str]:
     for key in REQUIRED_TOP:
         if key not in doc:
             errors.append(f"missing {key}")
-    if doc.get("harness") not in (None, "icode"):
-        errors.append("harness should be icode")
+    if doc.get("harness") not in (None, *harness_table.HARNESSES):
+        errors.append(f"harness should be {' or '.join(harness_table.HARNESSES)}")
     if doc.get("suite") not in (None, "deepswe", "lolbench", "swebenchpro"):
         errors.append("suite should be deepswe, lolbench, or swebenchpro")
     icode_git = doc.get("icode_git")

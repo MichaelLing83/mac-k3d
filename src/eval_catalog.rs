@@ -1,12 +1,16 @@
 //! Allow-lists for eval YAML / Jenkins parameters.
 //!
-//! v1 runners are `icode` + `deepseek` on `deepswe` | `lolbench` | `swebenchpro`. Chat Completions
-//! ids live in `MODELS` (not `LLMS`). Append here when a new harness, LLM, model,
-//! or benchmark is implemented.
+//! v1 runners are `icode` + `deepseek` on `deepswe` | `lolbench` | `swebenchpro`, and
+//! `jiuwenswarm` + `deepseek` on `deepswe`. Chat Completions ids live in `MODELS`
+//! (not `LLMS`). Append here when a new harness, LLM, model, or benchmark is implemented.
 
 use crate::error::{Error, Result};
 
-pub const HARNESSES: &[&str] = &["icode"];
+/// The first is the default.
+pub const HARNESSES: &[&str] = &["icode", "jiuwenswarm"];
+/// Benchmarks a harness is limited to; one not listed runs on every benchmark.
+/// Same rule as `pipeline/lib/harness.py`.
+const HARNESS_BENCHMARKS: &[(&str, &[&str])] = &[("jiuwenswarm", &["deepswe"])];
 pub const LLMS: &[&str] = &["deepseek"];
 pub const BENCHMARKS: &[&str] = &["deepswe", "lolbench", "swebenchpro"];
 /// DeepSeek Chat Completions ids (`DEEPSEEK_MODEL` / `--model`). First is the default.
@@ -19,6 +23,15 @@ pub const ICODE_CI_MODES: &[&str] = &["release", "git"];
 pub const ICODE_GIT_HOSTS: &[&str] = &["github.com", "www.github.com", "gitcode.com"];
 /// How `ICODE_GIT_REF` is checked out. Jenkins/CLI pick branch, tag, commit, or pr (`auto` is leftover).
 pub const ICODE_GIT_REF_KINDS: &[&str] = &["branch", "tag", "commit", "pr"];
+/// `JIUWENSWARM_MODE`: a git ref built in the task platform's image, or an
+/// uploaded release (.whl, wheelhouse .tar.gz or mac-k3d bundle).
+pub const JIUWENSWARM_MODES: &[&str] = &["git", "release"];
+/// The single-agent modes `jiuwenswarm-process` runs headless; first is the
+/// default. Same list as `pipeline/lib/jiuwenswarm_trial.py`.
+pub const JIUWENSWARM_AGENT_MODES: &[&str] = &["agent.code.normal", "agent.code.plan"];
+pub const JIUWENSWARM_MAX_TURNS_DEFAULT: u32 = 500;
+/// JiuwenSwarm's own ceiling on `max_turns`.
+pub const JIUWENSWARM_MAX_TURNS_LIMIT: u32 = 1000;
 
 pub fn join_allowed(items: &[&str]) -> String {
     items.join(", ")
@@ -34,6 +47,27 @@ pub fn parse_task_list(raw: &str) -> Vec<String> {
 
 pub fn require_harness(value: &str) -> Result<String> {
     require_in(value, HARNESSES, "harness")
+}
+
+/// Whether `harness` runs on `benchmark`.
+pub fn harness_supports(harness: &str, benchmark: &str) -> bool {
+    match HARNESS_BENCHMARKS.iter().find(|(h, _)| *h == harness) {
+        Some((_, benches)) => benches.contains(&benchmark),
+        None => HARNESSES.contains(&harness),
+    }
+}
+
+/// `require_harness`, then refuse a benchmark the harness does not run on.
+pub fn require_harness_for(value: &str, benchmark: &str) -> Result<String> {
+    let harness = require_harness(value)?;
+    if !harness_supports(&harness, benchmark) {
+        let benches: Vec<&str> = BENCHMARKS.iter().copied().filter(|b| harness_supports(&harness, b)).collect();
+        return Err(Error::Config(format!(
+            "harness {harness} runs on {} only, not {benchmark}",
+            join_allowed(&benches)
+        )));
+    }
+    Ok(harness)
 }
 
 pub fn require_llm(value: &str) -> Result<String> {
@@ -63,17 +97,23 @@ pub fn normalize_icode_mode(value: &str) -> Result<String> {
 }
 
 pub fn require_icode_git_url(value: &str) -> Result<String> {
+    require_git_url("ICODE_GIT_URL", value)
+}
+
+/// An https clone URL on an allow-listed host with no userinfo. `field` names
+/// it in errors: `ICODE_GIT_URL` or `JIUWENSWARM_GIT_URL`.
+pub fn require_git_url(field: &str, value: &str) -> Result<String> {
     let u = value.trim();
     if u.is_empty() {
-        return Err(Error::Config("ICODE_GIT_URL is empty".into()));
+        return Err(Error::Config(format!("{field} is empty")));
     }
     let rest = u
         .strip_prefix("https://")
-        .ok_or_else(|| Error::Config("ICODE_GIT_URL must be https://".into()))?;
+        .ok_or_else(|| Error::Config(format!("{field} must be https://")))?;
     if rest.contains('@') {
-        return Err(Error::Config(
-            "ICODE_GIT_URL must not contain userinfo (no tokens in the URL)".into(),
-        ));
+        return Err(Error::Config(format!(
+            "{field} must not contain userinfo (no tokens in the URL)"
+        )));
     }
     let host = rest
         .split('/')
@@ -84,7 +124,7 @@ pub fn require_icode_git_url(value: &str) -> Result<String> {
         .unwrap_or("");
     if !ICODE_GIT_HOSTS.iter().any(|h| *h == host) {
         return Err(Error::Config(format!(
-            "ICODE_GIT_URL host '{host}' is not allow-listed ({})",
+            "{field} host '{host}' is not allow-listed ({})",
             join_allowed(ICODE_GIT_HOSTS)
         )));
     }
@@ -92,22 +132,26 @@ pub fn require_icode_git_url(value: &str) -> Result<String> {
 }
 
 pub fn require_icode_git_ref(value: &str) -> Result<String> {
+    require_git_ref("ICODE_GIT_REF", value)
+}
+
+pub fn require_git_ref(field: &str, value: &str) -> Result<String> {
     let r = value.trim();
     if r.is_empty() {
-        return Err(Error::Config("ICODE_GIT_REF is empty".into()));
+        return Err(Error::Config(format!("{field} is empty")));
     }
     if r.starts_with('-') || r.contains("..") {
-        return Err(Error::Config(
-            "ICODE_GIT_REF must not start with - or contain ..".into(),
-        ));
+        return Err(Error::Config(format!(
+            "{field} must not start with - or contain .."
+        )));
     }
     if !r
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '+' | '-'))
     {
-        return Err(Error::Config(
-            "ICODE_GIT_REF is not a tag, commit, or branch name".into(),
-        ));
+        return Err(Error::Config(format!(
+            "{field} is not a tag, commit, or branch name"
+        )));
     }
     Ok(r.to_string())
 }
@@ -147,19 +191,38 @@ pub fn normalize_icode_git_ref_kind(kind: &str, git_ref: &str) -> Result<String>
 }
 
 pub fn require_icode_git_ref_for_kind(kind: &str, git_ref: &str) -> Result<(String, String)> {
-    let git_ref = require_icode_git_ref(git_ref)?;
+    require_git_ref_for_kind("ICODE_GIT_REF", kind, git_ref)
+}
+
+/// `field` is `ICODE_GIT_REF` or `JIUWENSWARM_GIT_REF`; its kind is `<field>_KIND`.
+pub fn require_git_ref_for_kind(field: &str, kind: &str, git_ref: &str) -> Result<(String, String)> {
+    let git_ref = require_git_ref(field, git_ref)?;
     let kind = normalize_icode_git_ref_kind(kind, &git_ref)?;
+    let flag = format!("--{}-kind", field.to_ascii_lowercase().replace('_', "-"));
     if kind == "commit" && !looks_like_git_commit(&git_ref) {
         return Err(Error::Config(format!(
-            "ICODE_GIT_REF_KIND=commit requires a git SHA (7–40 hex chars), not '{git_ref}'. Use --icode-git-ref-kind branch or tag."
+            "{field}_KIND=commit requires a git SHA (7–40 hex chars), not '{git_ref}'. Use {flag} branch or tag."
         )));
     }
     if kind == "pr" && !looks_like_pr_number(&git_ref) {
         return Err(Error::Config(format!(
-            "ICODE_GIT_REF_KIND=pr requires a pull-request number (positive integer), not '{git_ref}'."
+            "{field}_KIND=pr requires a pull-request number (positive integer), not '{git_ref}'."
         )));
     }
     Ok((kind, git_ref))
+}
+
+pub fn require_jiuwenswarm_agent_mode(value: &str) -> Result<String> {
+    require_in(value, JIUWENSWARM_AGENT_MODES, "JiuwenSwarm agent mode")
+}
+
+pub fn require_jiuwenswarm_max_turns(value: u32) -> Result<u32> {
+    if (1..=JIUWENSWARM_MAX_TURNS_LIMIT).contains(&value) {
+        return Ok(value);
+    }
+    Err(Error::Config(format!(
+        "JIUWENSWARM_MAX_TURNS must be 1 to {JIUWENSWARM_MAX_TURNS_LIMIT} (JiuwenSwarm's own limit), not {value}"
+    )))
 }
 
 /// Env / Jenkins binding for a private git clone. Never put the PAT in the URL.
@@ -241,6 +304,7 @@ pub fn print_catalog() {
     println!("benchmark:  {}", join_allowed(BENCHMARKS));
     println!("questions:  --task ID  |  --n-tasks N  |  --tasks id,id,…  (mutually exclusive)");
     println!("icode:      release | git  (Jenkins + CLI; persist binary path with mac-k3d set --icode-release)");
+    println!("jiuwenswarm: git | release on deepswe only; agent mode {}", join_allowed(JIUWENSWARM_AGENT_MODES));
     println!("git hosts:  {}", join_allowed(ICODE_GIT_HOSTS));
     println!(
         "git ref:    {}  (legacy auto: 7-40 hex -> commit, else branch)",
@@ -258,7 +322,50 @@ mod tests {
     #[test]
     fn reject_unknown_harness() {
         let err = require_harness("oracle").unwrap_err().to_string();
-        assert!(err.contains("allowed: icode"), "{err}");
+        assert!(err.contains("allowed: icode, jiuwenswarm"), "{err}");
+    }
+
+    #[test]
+    fn jiuwenswarm_runs_on_deepswe_only() {
+        assert_eq!(HARNESSES[0], "icode");
+        for bench in BENCHMARKS {
+            assert!(harness_supports("icode", bench), "{bench}");
+            assert_eq!(harness_supports("jiuwenswarm", bench), *bench == "deepswe", "{bench}");
+        }
+        assert!(!harness_supports("oracle", "deepswe"));
+        assert_eq!(require_harness_for("JiuwenSwarm", "deepswe").unwrap(), "jiuwenswarm");
+        let err = require_harness_for("jiuwenswarm", "lolbench").unwrap_err().to_string();
+        assert!(err.contains("runs on deepswe only, not lolbench"), "{err}");
+        // pipeline/lib/harness.py keeps the same table for the stages.
+        let table = include_str!("../pipeline/lib/harness.py");
+        assert!(table.contains("benchmarks=(\"deepswe\",)"), "harness.py limits jiuwenswarm to deepswe");
+    }
+
+    #[test]
+    fn jiuwenswarm_settings_match_what_the_trial_accepts() {
+        let trial = include_str!("../pipeline/lib/jiuwenswarm_trial.py");
+        let modes = JIUWENSWARM_AGENT_MODES.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ");
+        assert!(trial.contains(&format!("MODES = ({modes})")), "jiuwenswarm_trial.py MODES differ");
+        assert!(trial.contains(&format!("_positive_int(\"JIUWENSWARM_MAX_TURNS\", {JIUWENSWARM_MAX_TURNS_DEFAULT})")));
+        assert!(trial.contains(&format!("if turns > {JIUWENSWARM_MAX_TURNS_LIMIT}:")));
+        let common = include_str!("../pipeline/stages/_common.sh");
+        assert!(common.contains(&format!("JIUWENSWARM_AGENT_MODE:-{}", JIUWENSWARM_AGENT_MODES[0])));
+        assert!(common.contains(&format!("JIUWENSWARM_MAX_TURNS:-{JIUWENSWARM_MAX_TURNS_DEFAULT}")));
+        assert_eq!(require_jiuwenswarm_agent_mode("Agent.Code.Plan").unwrap(), "agent.code.plan");
+        assert!(require_jiuwenswarm_agent_mode("team").is_err());
+        assert_eq!(require_jiuwenswarm_max_turns(1000).unwrap(), 1000);
+        assert!(require_jiuwenswarm_max_turns(0).is_err());
+        assert!(require_jiuwenswarm_max_turns(1001).unwrap_err().to_string().contains("1 to 1000"));
+    }
+
+    #[test]
+    fn git_checks_name_the_field_they_check() {
+        let err = require_git_url("JIUWENSWARM_GIT_URL", "https://evil.example/x").unwrap_err().to_string();
+        assert!(err.contains("JIUWENSWARM_GIT_URL host 'evil.example' is not allow-listed"), "{err}");
+        let err = require_git_ref_for_kind("JIUWENSWARM_GIT_REF", "commit", "main").unwrap_err().to_string();
+        assert!(err.contains("JIUWENSWARM_GIT_REF_KIND=commit") && err.contains("--jiuwenswarm-git-ref-kind"), "{err}");
+        let err = require_icode_git_ref_for_kind("commit", "main").unwrap_err().to_string();
+        assert!(err.contains("Use --icode-git-ref-kind branch or tag."), "{err}");
     }
 
     #[test]

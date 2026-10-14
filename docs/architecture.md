@@ -184,13 +184,16 @@ The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and 
 
 ### Job topology
 
-Nine evaluation jobs — three shapes for each of `deepswe`, `lolbench`, `swebenchpro`:
+Ten evaluation jobs: three shapes for each of `deepswe`, `lolbench`, `swebenchpro`, and `build_jiuwenswarm_headless`:
 
 | Job | Shape | Purpose |
 |---|---|---|
 | `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change; also every unit a dispatcher queues |
 | `<suite>_some_task` | dispatcher, `agent none` | a `TASKS` list or the first `N_TASKS`, at full rollouts |
 | `<suite>_full_suite_task` | dispatcher, `agent none` | the whole suite at full rollouts |
+| `build_jiuwenswarm_headless` | dispatcher, `agent none` | DeepSWE with JiuwenSwarm instead of iCode: a `TASKS` list, or the first `N_TASKS` (the whole suite by default) |
+
+A dispatcher's first stage, `Prepare harness`, builds the harness once on a worker; every shard runs that bundle, by its sha256 ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)).
 
 ```mermaid
 flowchart LR

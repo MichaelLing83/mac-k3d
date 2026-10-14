@@ -37,6 +37,7 @@ from render_report import (  # noqa: E402
     build_artifact,
     container_mem_peak,
     eval_model_label,
+    harness_display,
     icode_identity,
     read_skipped_tasks,
     write_report,
@@ -48,6 +49,7 @@ VERDICTS = ("clean", "flagged", "rejected", "not_run")
 # What has to match for the shards to be one measurement of one iCode setup.
 COMPARED_MODEL_PARAMS = ("model", "api_base", "provider", "reasoning_effort", "max_tokens", "max_iterations")
 INPUT_PROTOCOL_KEYS = (
+    "harness",
     "harbor",
     "benchmark",
     "grader_overlay",
@@ -147,7 +149,7 @@ def inputs_protocol(inputs: dict) -> dict:
         "api_base": inputs.get("api_base"),
         "provider": inputs.get("provider"),
         "reasoning_effort": effort,
-        "thinking": {"type": _thinking_type(effort)} if effort else {},
+        "thinking": {"type": "default" if effort == "default" else _thinking_type(effort)} if effort else {},
         "max_tokens": inputs.get("max_tokens") or None,
         "max_iterations": inputs.get("max_iterations") or None,
         "n_rollouts": inputs.get("n_rollouts"),
@@ -193,6 +195,12 @@ def shard_row(index: int, builds: list[str], protocol: dict) -> dict:
         "model_params": protocol.get("model_params") if isinstance(protocol.get("model_params"), dict) else {},
         "icode_version": icode_identity(icode) or None,
     }
+    harness = protocol.get("harness") if isinstance(protocol.get("harness"), dict) else None
+    if harness is not None:
+        row["harness"] = str(harness.get("name") or "")
+        row["harness_bundle_sha256"] = str(harness.get("bundle_sha256") or "") or None
+        row["harness_bundle_platform"] = str(harness.get("bundle_platform") or harness.get("platform") or "") or None
+        row["harness_source"] = str(harness.get("source") or "") or None
     probe = egress_probe_of(protocol)
     if probe is not None:
         row["egress_probe"] = {"image": str(probe.get("image")), "substituted": probe.get("substituted") is True}
@@ -431,18 +439,28 @@ def merge_protocols(
 
 
 def shard_mismatches(rows: list[dict]) -> dict:
-    """Model params and iCode versions that differ between shards, by key.
+    """Model params, harness versions and harness bundles that differ between shards, by key.
 
     A value a shard did not record (it stopped early) is unknown, not different.
+    Shards of one platform share the dispatcher's bundle; a shard on another
+    platform builds its own from the same pinned input, so bundles compare per platform.
     """
     found: dict[str, list] = {}
     for key in COMPARED_MODEL_PARAMS:
         values = {json.dumps(row["model_params"].get(key)) for row in rows if row["model_params"].get(key) is not None}
         if len(values) > 1:
             found[key] = sorted(json.loads(v) for v in values)
-    versions = {row.get("icode_version") for row in rows if row.get("icode_version")}
-    if len(versions) > 1:
-        found["icode_version"] = sorted(str(v) for v in versions)
+    for key in ("icode_version", "harness"):
+        values = {row.get(key) for row in rows if row.get(key)}
+        if len(values) > 1:
+            found[key] = sorted(str(v) for v in values)
+    bundles: dict[str, set] = {}
+    for row in rows:
+        if row.get("harness_bundle_sha256"):
+            bundles.setdefault(str(row.get("harness_bundle_platform") or ""), set()).add(row["harness_bundle_sha256"])
+    mixed = sorted(sha for shas in bundles.values() if len(shas) > 1 for sha in shas)
+    if mixed:
+        found["harness_bundle_sha256"] = mixed
     return found
 
 
@@ -732,17 +750,22 @@ def merge_anticheat(summaries: list[dict]) -> dict | None:
 
 
 def _print_icode_under_test(doc: dict) -> None:
-    """Name the iCode the merged shards graded, or MIXED when they disagree."""
+    """Name the harness build the merged shards graded, or MIXED when they disagree."""
     protocol = doc.get("eval_protocol") if isinstance(doc.get("eval_protocol"), dict) else {}
+    agent = harness_display(protocol)
     shards = [s for s in protocol.get("shards") or [] if isinstance(s, dict) and s.get("icode_version")]
     versions = sorted({str(s["icode_version"]) for s in shards})
     icode = protocol.get("icode") if isinstance(protocol.get("icode"), dict) else {}
     n = len(shards) or 1
     if len(versions) > 1:
-        print(f"iCode under test ({n} shards): MIXED: {', '.join(versions)}")
+        print(f"{agent} under test ({n} shards): MIXED: {', '.join(versions)}")
         return
     shown = versions[0] if versions else (icode.get("version") or "-")
-    print(f"iCode under test ({n} shards): {shown}")
+    print(f"{agent} under test ({n} shards): {shown}")
+    bundles = sorted({str(s["harness_bundle_sha256"]) for s in protocol.get("shards") or []
+                      if isinstance(s, dict) and s.get("harness_bundle_sha256")})
+    if bundles:
+        print(f"{agent} bundle ({n} shards): {'MIXED: ' if len(bundles) > 1 else ''}{', '.join(bundles)}")
 
 
 def main() -> int:
@@ -814,9 +837,10 @@ def main() -> int:
         if mismatched:
             protocol["model_params_mismatch"] = mismatched
             detail = "; ".join(f"{key} {values}" for key, values in mismatched.items())
+            agent = harness_display(protocol)
             print(
-                f"WARNING: shards ran different model params or iCode ({detail}). "
-                "This report is not one measurement of one iCode setup.",
+                f"WARNING: shards ran different model params or {agent} ({detail}). "
+                f"This report is not one measurement of one {agent} setup.",
                 file=sys.stderr,
             )
     applied = (merged["resources"] or {}).get("applied") or {}

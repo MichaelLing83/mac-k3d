@@ -34,19 +34,19 @@ Global `-c / --config` is honored.
 
 1. Run `prepare`: the wizard (questions only) if there is no config, or the existing-config menu (**Use existing config** / **Re-run wizard** / **Cancel**). The YAML is saved before anything is installed; then the installs and the pinned Harbor are applied. If a step needs root and `sudo` is not available, it stops with one block for an administrator and how to resume ([setup.md](setup.md#apply-root-steps-and-disk-check)).
 2. Prompt **Continue and apply now?**
-3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, the nine eval jobs).
+3. **Controller / standalone:** `start` then `config` (k3d, Jenkins, the ten eval jobs).
 4. **Worker:** `config` only (Jenkins agent). Does **not** run `start`.
 5. Print role, config path, Jenkins URL, agent unit/LaunchAgent name.
 
 If stdin is not a TTY and no subcommand is given, the CLI exits 2 with a short usage line.
 
-Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **nine** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and delete the retired `eval_aggregate` job if an older version created it. They share one pipeline of seven phases ([pipeline.md](pipeline.md)); pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
+Keep `prepare` / `start` / `config` for power users. Controller `config`/`start` ensure **ten** jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and `build_jiuwenswarm_headless` (JiuwenSwarm on DeepSWE), and delete the retired `eval_aggregate` job if an older version created it. They share one pipeline of seven phases ([pipeline.md](pipeline.md)); pick the job or `--benchmark`. Which shape to use: [evaluation.md](evaluation.md#which-job-to-run).
 
 ---
 
 ## `eval`
 
-Run the iCode **agent harness** with a DeepSeek catalog model through Harbor on DeepSWE, LoLBench or SWE-bench Pro (Process 2). Phases, steps and Harbor flags: [pipeline.md](pipeline.md). See [user-guide.md](user-guide.md), [icode-harness-inputs.md](icode-harness-inputs.md), and [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md).
+Run an **agent harness** with a DeepSeek catalog model through Harbor: iCode on DeepSWE, LoLBench or SWE-bench Pro, or JiuwenSwarm on DeepSWE (Process 2). Phases, steps and Harbor flags: [pipeline.md](pipeline.md). See [user-guide.md](user-guide.md), [icode-harness-inputs.md](icode-harness-inputs.md), [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md), and [testing/testing-eval-pipeline.md](testing/testing-eval-pipeline.md).
 
 ```bash
 mac-k3d eval --stage env
@@ -60,13 +60,14 @@ mac-k3d eval --local --benchmark deepswe --n-tasks 1 --model deepseek-flash
 mac-k3d eval --local --benchmark swebenchpro --n-tasks 1 --icode-mode release
 mac-k3d eval --job some --tasks ipython-session-bundle-replay,ytt-jsonpath-query-api --n-rollouts 1
 mac-k3d eval --job one --benchmark lolbench --task ruff_1 --icode-mode git
+mac-k3d eval --job some --harness jiuwenswarm --tasks abs-module-cache-flags --n-rollouts 1
 mac-k3d eval                         # interactive → local or Jenkins *_one_task
 # Jenkins release: open the job page and upload ICODE_RELEASE_FILE (the CLI cannot attach a file)
 ```
 
 ### Queue a Jenkins job from the CLI
 
-`--job one|some|full` queues `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with the same fields as its Build with Parameters page. Only the fields given as flags are sent; every other field keeps the job's default, exactly as pressing **Build** with the form untouched does. Environment variables and `jenkins_job.*` are not read for this, so the CLI and the UI start the same build from the same inputs.
+`--job one|some|full` queues `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with the same fields as its Build with Parameters page. With `--harness jiuwenswarm`, `--job one` queues `deepswe_one_task` with `HARNESS=jiuwenswarm`, and `--job some` and `--job full` queue `build_jiuwenswarm_headless`. Only the fields given as flags are sent; every other field keeps the job's default, exactly as pressing **Build** with the form untouched does. Environment variables and `jenkins_job.*` are not read for this, so the CLI and the UI start the same build from the same inputs.
 
 ```bash
 # what would be sent; nothing is queued
@@ -83,7 +84,7 @@ mac-k3d eval --job one --task abs-module-cache-flags --param AGENT_LABEL=linux-M
 
 Run it on any machine whose config (or `~/.config/mac-k3d/worker.yaml`) has `jenkins_agent.controller_url`, `api_user` and `api_token`. curl gets the credentials on stdin, never in its arguments or the URL. Before queueing, the CLI reads the live job's field names; a field the live job lacks means its jobs are older than this binary, and it stops and asks for a controller redeploy instead of letting Jenkins drop the value.
 
-A flag the job has no field for is refused rather than ignored: `--tasks` on `--job one`, `--n-rollouts` other than 1 on `--job one` (several rollouts of one question use `--job some --tasks ID`), `--task` on `--job some`, `--n-tasks` above 1 on `--job one` (use `--job some`), `--icode-mode release` anywhere (the release drop is a file upload; use the job page), and any `--param` that names a field with its own flag, a dispatcher field (`TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD` on `one_task`) or a field the job does not have.
+A flag the job has no field for is refused rather than ignored: `--tasks` on `--job one`, `--n-rollouts` other than 1 on `--job one` (several rollouts of one question use `--job some --tasks ID`), `--task` on `--job some`, `--n-tasks` above 1 on `--job one` (use `--job some`), `--icode-mode release` anywhere (the release drop is a file upload; use the job page), an iCode flag with `--harness jiuwenswarm` or a `--jiuwenswarm-git-*` flag without it, `--job some --harness jiuwenswarm` with neither `--tasks` nor `--n-tasks` (that page runs all 113 questions; use `--job full`), and any `--param` that names a field with its own flag, a dispatcher field (`TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD` on `one_task`) or a field the job does not have.
 
 ### Flags
 
@@ -91,7 +92,11 @@ A flag the job has no field for is refused rather than ignored: `--tasks` on `--
 |------|-------------|
 | `--stage PHASE` | Run one phase: `env`, `tasks`, `evaluate`, `anticheat`, `score`, `report`, `archive`, or `all`; `baseline` runs the manual LLM-only arm (`pipeline/tools/baseline.sh`). An old `p0`…`p8` exits with the phase that replaced it, for example `--stage p5 is gone; … Use --stage evaluate` |
 | `--local` | Full local `run_all.sh` (no Jenkins). `--local` and `--stage` set `CPU_LOCK_QTY` to `jenkins_agent.cpu_cores` from `~/.config/mac-k3d/worker.yaml`, the count Jenkins locks on this node, unless `CPU_LOCK_QTY` is already set; with no worker.yaml it falls back to the loaded config, then the logical CPU count. See [optimization.md](optimization.md#how-many-fit) |
-| `--job one\|some\|full` | Queue `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with only the fields given ([above](#queue-a-jenkins-job-from-the-cli)). Not with `--local`, `--stage` or `--icode-release` |
+| `--job one\|some\|full` | Queue `<benchmark>_one_task`, `_some_task` or `_full_suite_task` with only the fields given ([above](#queue-a-jenkins-job-from-the-cli)); with `--harness jiuwenswarm`, `some` and `full` queue `build_jiuwenswarm_headless`. Not with `--local`, `--stage` or `--icode-release` |
+| `--harness icode\|jiuwenswarm` | With `--job`: the harness to evaluate. `jiuwenswarm` runs on DeepSWE only. Omitted, the job's own harness |
+| `--jiuwenswarm-git-url URL` | With `--harness jiuwenswarm`: `https://` on github.com or gitcode.com (no tokens in the URL). Default `https://gitcode.com/michaelling/jiuwenswarm` |
+| `--jiuwenswarm-git-ref REF` | With `--harness jiuwenswarm`: branch name, tag, commit SHA, or pull-request number when kind is `pr`. Default `2` |
+| `--jiuwenswarm-git-ref-kind KIND` | With `--harness jiuwenswarm`: `branch`, `tag`, `commit` or `pr` (default). A JiuwenSwarm release is a file upload: use the job page ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)) |
 | `--tasks a,b,c` | With `--job some`: the question list (`TASKS`); wins over `--n-tasks` |
 | `--n-rollouts N` | With `--job some` or `--job full`: attempts per question. `--job one` is always one rollout |
 | `--param NAME=VALUE` | With `--job`, repeatable: any other field of the job page, for example `CANARY=on` or `AGENT_LABEL=<node name>` |
@@ -110,13 +115,13 @@ A flag the job has no field for is refused rather than ignored: `--tasks` on `--
 
 Private `ICODE_MODE=git` clones: on a TTY, `eval` asks for a GitCode or GitHub PAT (hidden input), writes `GITCODE_TOKEN` / `GITHUB_TOKEN` to gitignored `.env` (mode 600), and never prints it. Jenkins uses controller credentials `gitcode-pat` / `github-pat` — add them with `mac-k3d config --update-secrets` on the controller. Do not put a PAT in the URL or job parameters.
 
-v1 harness=`icode`, llm=`deepseek`. Catalog models: `deepseek-flash` (default) and `deepseek-v4-pro`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a backup at `output/<benchmark>/<same run folder>.tar.gz` under the pipeline root (`$WORKSPACE/mac-k3d-pipeline` on Jenkins, the checkout locally). Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
+Harnesses: `icode`, and `jiuwenswarm` on DeepSWE only (`--job` only; `--local` and `--stage` run iCode). llm=`deepseek`. Catalog models: `deepseek-flash` (default) and `deepseek-v4-pro`. Benchmark is `deepswe`, `lolbench`, or `swebenchpro`. Output: `eval-runs/output/<benchmark>/jenkins-<build>-<UTC>/artifact.json`, with `summary.md` and `report.html` in that folder, and a backup at `output/<benchmark>/<same run folder>.tar.gz` under the pipeline root (`$WORKSPACE/mac-k3d-pipeline` on Jenkins, the checkout locally). Field glossary: [evaluation.md](evaluation.md). Slot packing: [optimization.md](optimization.md).
 
 There is no `--sync-pipeline`. A Jenkins build runs the `pipeline/` embedded in its worker's installed binary (see [`pipeline`](#pipeline)), so the pipeline under test is always the commit that binary was built from — see the development loop in [workflow.md](workflow.md#development-loop-commit-push-redeploy). `--stage` and `--local` still run the working tree directly, which is the fast path for a fixture-level change.
 
 ### Jenkins job parameters
 
-Every job starts with `HARNESS`, `LLM` and `BENCHMARK`. Each is a one-option choice fixed by the job, so the page and every build name (`#12 icode/deepseek-v4-pro/deepswe`) say what is being evaluated. Change harness or LLM with `mac-k3d set --harness/--llm` on the controller, then `config --skip-secrets`; change the benchmark by running another suite's job.
+Every job starts with `HARNESS`, `LLM` and `BENCHMARK`. Each is a one-option choice fixed by the job, so the page and every build name (`#12 icode/deepseek-v4-pro/deepswe`) say what is being evaluated. The exception is `deepswe_one_task`, whose `HARNESS` offers `icode` and `jiuwenswarm`; `mac-k3d set --harness` picks which comes first. Change LLM with `mac-k3d set --llm` on the controller, then `config --skip-secrets`; change the benchmark by running another suite's job; evaluate JiuwenSwarm over several questions with `build_jiuwenswarm_headless`.
 
 What else a job shows depends on its shape and on `jenkins_job.ui_profile` in the controller's config (`mac-k3d set --ui-profile user|developer`, default `user`). The developer page is the user page, field for field and with the same defaults, followed by extra testing fields; a test on the developer page is therefore a test of what a user gets. Each extra field's help text starts with `Developer (testing):`, so the page shows which ones a user never sees. A unit test (`developer_page_is_the_user_page_plus_extras`) keeps it that way.
 
@@ -127,6 +132,7 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | `<suite>_one_task` | `TASK`, `N_ROLLOUTS` (default 1), `ICODE_MODE`, `ICODE_RELEASE_FILE`, `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `DEEPSEEK_MODEL` |
 | `<suite>_some_task` | `TASKS` (a list; wins if set), `N_TASKS` (first N sorted when `TASKS` is empty), `N_ROLLOUTS` (default 4), `ICODE_MODE`, `ICODE_RELEASE_FILE`, the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
 | `<suite>_full_suite_task` | `N_ROLLOUTS` (default 4), `ICODE_MODE`, `ICODE_RELEASE_FILE`, the three `ICODE_GIT_*`, `DEEPSEEK_MODEL` |
+| `build_jiuwenswarm_headless` | `TASKS`, `N_TASKS` (default 113), `N_ROLLOUTS` (default 4), `JIUWENSWARM_MODE`, `JIUWENSWARM_RELEASE_FILE`, the three `JIUWENSWARM_GIT_*`, `DEEPSEEK_MODEL`, `JIUWENSWARM_AGENT_MODE` (default `agent.code.normal`), `JIUWENSWARM_MAX_TURNS` (default 500). No `ICODE_*` and no `LOLBENCH_REF` |
 
 **Developer profile only.** In `user` profile these are hidden parameters (Hidden Parameter plugin) that keep their defaults:
 
@@ -138,10 +144,11 @@ What else a job shows depends on its shape and on `jenkins_job.ui_profile` in th
 | `MAX_IN_FLIGHT` | `0` | `some_task` / `full_suite_task`: how many `one_task` builds may sit in Jenkins at once. `0` means twice the online executors that can run the suite |
 | `OOM_RETRIES` | `2` | How many times an out-of-memory rollout is queued again. `2` means three tries in all |
 | `N_TASKS` | suite size | `full_suite_task` only, hidden unless the profile is `developer`: lower it for a rehearsal |
+| `JIUWENSWARM_*` | as on `build_jiuwenswarm_headless` | `deepswe_one_task` only: the JiuwenSwarm inputs and settings for a direct build with `HARNESS=jiuwenswarm`. In `user` profile they keep their defaults (PR 2 of `michaelling/jiuwenswarm`) |
 | `TEST_MEMORY_MB` | empty | testing only: Harbor `--override-memory-mb` for a trial, to force an out of memory. Empty leaves the `task.toml` limit. The dispatcher forwards it to every `one_task` build |
 | `TEST_MEMORY_ATTEMPTS` | `1` | testing only: `TEST_MEMORY_MB` applies while `ATTEMPT` is at most this number. `1` limits the first try; a re-queued try runs as declared |
 
-**Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`, `ICODE_RELEASE_FROM`, `ICODE_RELEASE_SHA256`. A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API. `mac-k3d eval --job … --param OFFICIAL=1` (and `CANARY`, `CANARY_ALLOW_HOST`, `ICODE_EXPECT_SHA`) is refused: those fields are gone.
+**Always hidden** on `one_task`, because the dispatcher sets them on a shard build: `TASKS`, `N_TASKS`, `TASK_OFFSET`, `RUN_GROUP`, `SHARD`, `REQUESTED_BY`, `ROLLOUT`, `ATTEMPT`, `HARNESS_BUNDLE_FROM`, `HARNESS_BUNDLE_SHA256`, `ICODE_GIT_SHA`, `ICODE_RELEASE_SHA256`, and on `deepswe_one_task` `JIUWENSWARM_GIT_SHA`, `JIUWENSWARM_RELEASE_FROM`, `JIUWENSWARM_RELEASE_SHA256` ([Prepare harness](jenkins-jobs.md#prepare-harness)). A hidden parameter still accepts a value from `build job:` or `buildWithParameters`, so a developer can override one in `user` profile through the API. `mac-k3d eval --job … --param OFFICIAL=1` (and `CANARY`, `CANARY_ALLOW_HOST`, `ICODE_EXPECT_SHA`) is refused: those fields are gone.
 
 There is no `CPU_LOCK_QTY`, `SHARD_SIZE`, `SHARDS` or `RESUME` parameter. Executors are `cpu_cores / cpus_per_executor` (default 2). Evaluate locks the CPUs that question declares, and Harbor runs `-n 1`. There is no pipeline URL or ref parameter either: the pipeline is the worker binary's, and `scripts/redeploy.sh` is how a commit reaches it.
 
@@ -309,7 +316,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 2. Poll `docker info` until ready or timeout (`docker.startup_timeout_secs`).
 3. If cluster missing: `k3d cluster create` with port mappings from config.
 4. If cluster exists but stopped: `k3d cluster start`.
-5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), then create/update the nine eval jobs (and delete a leftover `eval_aggregate`) unless `--skip-job`. That rewrite uses `jenkins.remote_trigger_token` from `config.yaml`, generating and saving one the first time, so "Trigger builds remotely" stays ticked.
+5. If Jenkins is enabled (config or `--jenkins in-cluster`): Helm install/upgrade Jenkins with `additionalPlugins` (`lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`), then create/update the ten eval jobs (and delete a leftover `eval_aggregate`) unless `--skip-job`. That rewrite uses `jenkins.remote_trigger_token` from `config.yaml`, generating and saving one the first time, so "Trigger builds remotely" stays ticked.
 6. Write state file under `~/.local/state/mac-k3d/`.
 
 `--jenkins` overrides `jenkins.enabled` for this invocation only. If omitted, the config file value is used.
@@ -317,7 +324,7 @@ mac-k3d start [--jenkins <skip|in-cluster>] [--no-wait-docker] [--skip-job]
 ### Idempotency
 
 - Second `start` on a running cluster is a no-op aside from Helm upgrade when Jenkins is enabled.
-- Job create/update refreshes the nine eval jobs on each `start`/`config`, rendered for the current `ui_profile`. Plugin list changes require **controller** `start` (Helm), not `config`.
+- Job create/update refreshes the ten eval jobs on each `start`/`config`, rendered for the current `ui_profile`. Plugin list changes require **controller** `start` (Helm), not `config`.
 
 ---
 
@@ -345,7 +352,7 @@ mac-k3d config [--no-merge-kubeconfig] [--show-jenkins] [--skip-agent] [--skip-j
 1. If the named k3d cluster exists: merge kubeconfig, select context, wait for API.
 2. Worker without a local cluster: skip kubeconfig (agent-only is OK).
 3. If Jenkins enabled or `--show-jenkins`: print URL and admin password from the cluster secret.
-4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update the nine eval jobs with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`. Parameter defaults come from `jenkins_job.*`. See [jenkins-jobs.md](jenkins-jobs.md) and [icode-harness-inputs.md](icode-harness-inputs.md). The same rewrite sets `<authToken>` from `jenkins.remote_trigger_token`, which ticks **Trigger builds remotely** on every job. The first time that field is empty, `config` generates a token, saves it in `config.yaml` (mode 600), and prints one example URL (`…/job/deepswe_one_task/buildWithParameters?token=…`). Later `config` and `start` reuse the saved token and do not print it again. `mac-k3d eval` still queues with the API user; the token is only for that remote URL.
+4. **Controller / Jenkins enabled:** upload pending CI secrets into Jenkins Credentials (see [secrets.md](secrets.md)); create/update the ten eval jobs with `ICODE_MODE` (`release` / `git`), `ICODE_RELEASE_FILE` (upload), `ICODE_GIT_URL`, `ICODE_GIT_REF`, `ICODE_GIT_REF_KIND`, `TASK`, and on `build_jiuwenswarm_headless` and `deepswe_one_task` the `JIUWENSWARM_*` fields. Parameter defaults come from `jenkins_job.*`. See [jenkins-jobs.md](jenkins-jobs.md), [icode-harness-inputs.md](icode-harness-inputs.md) and [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md). The same rewrite sets `<authToken>` from `jenkins.remote_trigger_token`, which ticks **Trigger builds remotely** on every job. The first time that field is empty, `config` generates a token, saves it in `config.yaml` (mode 600), and prints one example URL (`…/job/deepswe_one_task/buildWithParameters?token=…`). Later `config` and `start` reuse the saved token and do not print it again. `mac-k3d eval` still queues with the API user; the token is only for that remote URL.
 5. **Worker:** warn when the installed Harbor is not `HARBOR_VERSION` or git is missing; using `jenkins_agent.api_user` / `api_token` from config, create/update the Jenkins node (executors = `cpu_cores / cpus_per_executor`, default 2), write the node's connection secret to `{remote_fs}/.agent-secret` (mode 600) and rewrite `launch-agent.sh` (mode 700), which passes it as `-secret @<file>` so it never appears in the agent's arguments (an older script's inline secret moves to the file), create the `<agent>-core-1..N` resources (labelled with the shared `CPU_CORES` label and the agent name, N = `jenkins_agent.cpu_cores`) and delete any `<agent>-core-M` above N that no build holds, and **start the agent daemon** (systemd user unit `mac-k3d-jenkins-agent.service` on Linux, LaunchAgent `com.mac-k3d.jenkins-agent` on macOS) unless `--skip-agent`. The Linux unit sets `OOMScoreAdjust=-1000` so the host OOM killer skips the agent. A blank `jenkins_agent.name` becomes `{os}-<hostname>` (`linux` or `macos`, then the short hostname). A saved name that is exactly the old default `mac-<hostname>` is renamed the same way: the old node is deleted and the new one registered, the old node and its `<old>-core-N` locks are removed, the new name is written into the YAML, and the agent starts under the new node. Any other saved name is left alone. With blank keys it prints which keys to fill in and the command to re-run. `config` is the only command that registers an agent.
 6. Every role: extract `~/.local/share/mac-k3d/pipeline` for `eval --local` and manual runs (does not overwrite `icode`). Builds extract their own copy.
 
@@ -423,7 +430,7 @@ TTY with no flags: select harness / LLM family / DeepSeek model / benchmark, the
 | Flag | Description |
 |------|-------------|
 | `--list` | Print allowed harness / LLM / model / benchmark values and exit |
-| `--harness <ID>` | Catalog harness (v1: `icode`) |
+| `--harness <ID>` | Catalog harness: `icode` or `jiuwenswarm`. Sets the default `HARNESS` of `deepswe_one_task` only; `build_jiuwenswarm_headless` runs JiuwenSwarm and every other job keeps iCode |
 | `--llm <ID>` | Catalog LLM family (v1: `deepseek`) |
 | `--model <ID>` | DeepSeek Chat Completions id (`deepseek-flash` default, or `deepseek-v4-pro`) |
 | `--check-models` | Optional live `GET /models` against `.env` key; fail if YAML/`--model` id is not a provider id |

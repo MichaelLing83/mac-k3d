@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# evaluate/canary: the isolation canary. A CanaryAgent trial with iCode's exact
-# flags, mounts and env probes what the agent can reach and read: on the first
+# evaluate/canary: the isolation canary. A canary trial with the harness's exact
+# flags, mounts and env (harness.py: CanaryAgent for iCode,
+# JiuwenSwarmCanaryAgent for JiuwenSwarm) probes what the agent can reach and read: on the first
 # question whose trial starts (CANARY=only: on every question). A failure stops
 # the build before any rollout. Never calls the model.
 set -euo pipefail
@@ -36,21 +37,28 @@ fi
 # number. The first rollout of the question to land here runs it; the rest of
 # this run reuse that pass. A direct build (no RUN_GROUP) always runs it.
 canary_marker() {
-  python3 - "$MAC_K3D_ROOT/pipeline/BUILD.json" "$1" <<'PY'
+  python3 - "$MAC_K3D_ROOT/pipeline/BUILD.json" "$1" "$WORKDIR/harness.json" <<'PY'
 import hashlib, json, os, sys
 from pathlib import Path
-pipe = {}
-path = Path(sys.argv[1])
-if path.is_file():
+
+
+def load(path):
     try:
-        pipe = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        pipe = {}
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+pipe = load(sys.argv[1])
+harness = load(sys.argv[3])
 raw = "|".join([
     os.environ.get("RUN_GROUP", ""),
     sys.argv[2],
     str(pipe.get("pipeline_hash") or pipe.get("commit") or ""),
     os.environ.get("ICODE_GIT_SHA") or os.environ.get("ICODE_RELEASE_SHA256") or "",
+    os.environ.get("HARNESS", "icode"),
+    str(harness.get("tree_sha256") or ""),
 ])
 digest = hashlib.sha256(raw.encode()).hexdigest()[:32]
 workspace = os.environ.get("WORKSPACE", "")
@@ -91,7 +99,7 @@ run_canary() {
   local tid="$1" spec rc
   spec="$(canary_spec "$tid")"
   build_canary_cmd "$tid" "$spec"
-  echo "canary: task=$tid -a canary_harbor_agent:CanaryAgent (iCode's flags, mounts and env) log=$unit_log"
+  echo "canary: task=$tid -a $CANARY_AGENT ($(harness_display)'s flags, mounts and env) log=$unit_log"
   set +e
   run_cmd >"$unit_log" 2>&1
   rc=$?

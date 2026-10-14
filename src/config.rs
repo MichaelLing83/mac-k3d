@@ -254,7 +254,8 @@ pub struct JenkinsJobConfig {
     /// Deprecated honeyc-era field; ignored by the job generator.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_honeyc_args: String,
-    /// Eval harness id (`mac-k3d set --harness`). Catalog: `icode`.
+    /// Eval harness id (`mac-k3d set --harness`). Catalog: `icode`, `jiuwenswarm`
+    /// (DeepSWE only, so it is the default only where a job offers it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_harness: String,
     /// Deprecated alias; `default_llm` is the live field.
@@ -281,6 +282,15 @@ pub struct JenkinsJobConfig {
     /// Git ref kind for job param default: `branch` | `tag` | `commit` | `pr`.
     #[serde(default = "default_icode_git_ref_kind_pr")]
     pub default_icode_git_ref_kind: String,
+    /// JiuwenSwarm git URL for `JIUWENSWARM_MODE=git` (DeepSWE only; a private GitCode clone uses `gitcode-pat`).
+    #[serde(default = "default_jiuwenswarm_git_url")]
+    pub default_jiuwenswarm_git_url: String,
+    /// JiuwenSwarm git ref: a branch, tag, commit or PR number.
+    #[serde(default = "default_jiuwenswarm_git_ref")]
+    pub default_jiuwenswarm_git_ref: String,
+    /// `branch` | `tag` | `commit` | `pr`.
+    #[serde(default = "default_icode_git_ref_kind_pr")]
+    pub default_jiuwenswarm_git_ref_kind: String,
     /// `user` shows each job's short parameter list; `developer` also shows the
     /// pins, canary and scheduling knobs (`mac-k3d set --ui-profile`).
     #[serde(default = "default_ui_profile")]
@@ -334,6 +344,14 @@ fn default_icode_git_ref_kind_pr() -> String {
     "pr".into()
 }
 
+fn default_jiuwenswarm_git_url() -> String {
+    "https://gitcode.com/michaelling/jiuwenswarm".into()
+}
+
+fn default_jiuwenswarm_git_ref() -> String {
+    "2".into()
+}
+
 impl Default for JenkinsJobConfig {
     fn default() -> Self {
         Self {
@@ -355,6 +373,9 @@ impl Default for JenkinsJobConfig {
             default_n_rollouts: 4,
             default_tasks: Vec::new(),
             default_icode_git_ref_kind: "pr".into(),
+            default_jiuwenswarm_git_url: default_jiuwenswarm_git_url(),
+            default_jiuwenswarm_git_ref: default_jiuwenswarm_git_ref(),
+            default_jiuwenswarm_git_ref_kind: default_icode_git_ref_kind_pr(),
             ui_profile: default_ui_profile(),
             default_shard_size: default_shard_size(),
             max_in_flight: 0,

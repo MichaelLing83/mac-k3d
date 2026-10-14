@@ -72,6 +72,9 @@ jenkins_job:              # controller: *_one_task parameter defaults (non-secre
   default_icode_git_url: "https://gitcode.com/michaelling/jiuwenicode"
   default_icode_git_ref: "2"
   default_icode_git_ref_kind: pr   # branch | tag | commit | pr
+  default_jiuwenswarm_git_url: "https://gitcode.com/michaelling/jiuwenswarm"   # DeepSWE only
+  default_jiuwenswarm_git_ref: "2"
+  default_jiuwenswarm_git_ref_kind: pr   # branch | tag | commit | pr
   default_icode_args: ""      # argv after ./icode (smoke: --help)
   max_in_flight: 0             # 0 = 2 x online executors for the suite
   oom_retries: 2               # an OOM rollout is queued again at most this many times

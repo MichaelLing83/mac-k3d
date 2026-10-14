@@ -10,7 +10,7 @@ Each machine is self-contained: its Docker, its k3d cluster (controller only) an
 
 | Role | Runs | Config file |
 |------|------|-------------|
-| Controller | Docker, a k3d cluster with Jenkins in it: the queue, the nine eval jobs, and the credentials ([secrets.md](secrets.md)) | `config.yaml` |
+| Controller | Docker, a k3d cluster with Jenkins in it: the queue, the ten eval jobs, and the credentials ([secrets.md](secrets.md)) | `config.yaml` |
 | Worker | Docker, Java, git, the pinned Harbor and the Jenkins agent. Eval builds run their Harbor containers on the worker's Docker. No k3d (`mac-k3d start -c worker.yaml` is rejected) | `worker.yaml` |
 | Standalone | Docker and a local k3d cluster, optionally Harbor for `mac-k3d eval --local` | `config.yaml` |
 

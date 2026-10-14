@@ -161,6 +161,9 @@ fn pick_artifact(paths: &[String]) -> Option<&str> {
 }
 
 fn job_benchmark(job: &str) -> &str {
+    if job == crate::prepare::jenkins_job::JIUWENSWARM_HEADLESS {
+        return "deepswe";
+    }
     let head = job.split('_').next().unwrap_or("");
     if crate::eval_catalog::BENCHMARKS.contains(&head) {
         head
@@ -296,6 +299,7 @@ mod tests {
         assert_eq!(job_benchmark("deepswe_one_task"), "deepswe");
         assert_eq!(job_benchmark("lolbench_some_task"), "lolbench");
         assert_eq!(job_benchmark("swebenchpro_full_suite_task"), "swebenchpro");
+        assert_eq!(job_benchmark("build_jiuwenswarm_headless"), "deepswe");
         assert_eq!(job_benchmark("other"), "");
     }
 

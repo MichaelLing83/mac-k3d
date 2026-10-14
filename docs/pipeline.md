@@ -70,12 +70,11 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 | `env/model_api` | `DEEPSEEK_MODEL` is served by `GET /models`. Skipped with a note when no key is set | — |
 | `tasks/benchmark` | Checks out the benchmark (see [Where the benchmarks come from](#where-the-benchmarks-come-from)). Question images are fetched later, see [Benchmark checkout and question images](#benchmark-checkout-and-question-images) | `deep-swe/`, `lolbench/` or `swebenchpro/` |
 | `tasks/select` | Picks the questions from `TASK`, `TASKS`, `N_TASKS` and `TASK_OFFSET`; every later step reads this file. `TASK_OFFSET` counts in `suite_tasks.txt`, every task dir in byte order (`LC_ALL=C`), so all workers cut the same slices | `selected_tasks.txt`, `selected_tasks_offset.txt`, `suite_tasks.txt` |
-| `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE on an x86-64 host and SWE-bench Pro: nothing; Harbor pulls the images at the trial. DeepSWE on an arm64 host: each question runs natively on the build `mac-k3d eval prepare` made and proved, else on the published image under emulation, with the reason; it never builds, pulls or checks ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). Settles the task containers' platform before `tasks/icode` | `env_check.json` (arm64 DeepSWE) |
-| `tasks/icode` | Resolves the iCode under test: a release drop, or a git clone built with `uv sync`. Prints `iCode under test:` (git SHA or release sha256) before any canary or rollout. Never changes iCode's source | `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) or `icode_release.json` |
-| `tasks/icode_sandbox` | Makes a git build runnable at `/opt/icode-host`: embedded CPython, sanitized venv, wrapper, probe. A release drop keeps its own binary | — |
-| `tasks/agent` | Harbor's Python can import `icode_harbor_agent` and `patch_harbor_agent` | — |
+| `tasks/images` | LoLBench: each selected task's image exists for this CPU architecture, rebuilt from its Dockerfile when it does not. DeepSWE on an x86-64 host and SWE-bench Pro: nothing; Harbor pulls the images at the trial. DeepSWE on an arm64 host: each question runs natively on the build `mac-k3d eval prepare` made and proved, else on the published image under emulation, with the reason; it never builds, pulls or checks ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). Settles the task containers' platform before `tasks/harness` | `env_check.json` (arm64 DeepSWE) |
+| `tasks/harness` | The harness under test (`HARNESS`: `icode`, or `jiuwenswarm` on DeepSWE), ready to mount read-only: the dispatcher's bundle, else the one this worker's [harness store](#harness-store) holds for the same input, else prepared now and stored. iCode: a release drop, or a git clone built with `uv sync`, then its embedded CPython, sanitized venv and wrapper. JiuwenSwarm: [jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md). Prints `<harness> under test:` (git SHA or release sha256) and the bundle sha256 before any canary or rollout. Never changes the harness's source | `harness.json`, `harness_host_root.txt`, `icode_bin_path.txt`, `icode_host_root.txt`, `icode_git.json` (git) or `icode_release.json` |
+| `tasks/agent` | Harbor's Python can import the harness's agent and canary (`pipeline/lib/harness.py`) and `patch_harbor_agent` | — |
 | `tasks/isolation` | Builds the one read-only mount and refuses a tree that overlaps a benchmark; checks the model API host is on the network allowlist; records both | `agent_mounts.json`, `eval_protocol_inputs.json` |
-| `tasks/leakscan` | Searches the mounted iCode tree for any selected task's gold patch. A hit question is skipped; the build stops only when every selected question is hit | `anticheat_leakscan.json`, `skipped_tasks.txt` |
+| `tasks/leakscan` | Searches the mounted harness tree for any selected task's gold patch. A hit question is skipped; the build stops only when every selected question is hit | `anticheat_leakscan.json`, `skipped_tasks.txt` |
 | `evaluate/slots` | Clears this build's Harbor job, memory samples, and any OOM list left by the previous build in this workspace, then divides `CPU_LOCK_QTY` by each task's declared `cpus` into `EVAL_SLOTS`. Refuses a worker that cannot host one trial | `eval_resources.json` |
 | `evaluate/canary` | The isolation canary (see [Anti-cheat](#anti-cheat)) | `canary/jenkins-<N>/` |
 | `evaluate/harbor_run` | One `harbor run` for every selected task × rollout, with a 60 s heartbeat and memory sampling; then `meta.json`, and the iCode tree handed back to the build user. A Harbor that exits non-zero before any trial finished fails the step with Harbor's last `…Error:` line | `harness/harbor_runs/jenkins-<N>/`, `harness/harbor.log`, `harness/progress.json`, `harness/meta.json` |
@@ -88,6 +87,37 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 
 `evaluate/harbor_cmd.sh` is not a step. Both evaluate steps source it, and it is the only file that builds a Harbor command line.
 
+## Harness store
+
+A harness is prepared once per input and platform, and each worker keeps what it prepared or received in its harness store (`pipeline/lib/harness_store.py`). A `some_task`, `full_suite_task` or `build_jiuwenswarm_headless` build therefore prepares the harness once in its `Prepare harness` stage ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)), and each worker unpacks that bundle once, however many shards it runs.
+
+**Bundle.** One reproducible gzipped tar (`tar --sort=name`, mtime 0, owner 0, `gzip -n`) of `bundle.json` and `tree/`, the prepared tree a trial mounts read-only. `bundle.json` records the harness, the input it was built from (`git` url, kind, ref, sha and subject, or `release` filename, sha256 and format), the platform, the recipe, the build and node that made it, and for JiuwenSwarm `runtime.json` and `uv pip freeze`. The bundle's name is the sha256 of the tarball.
+
+**Layout.** The store is `$MAC_K3D_HARNESS_STORE`, else `$MAC_K3D_SHARE/harness-store` (by default `~/.local/share/mac-k3d/harness-store`):
+
+```text
+harness-store/<harness>/<bundle sha256>/   bundle.json  tree/  entry.json  READY  last_used  [bundle.tar.gz]
+harness-store/<harness>/by-input/<key>     the bundle sha256 built from that input
+```
+
+The input key is the sha256 of the harness, the commit or release sha256, the platform and the recipe. The recipe names the build image, the Python and wheel platform (JiuwenSwarm) and a digest of the scripts that build the tree, so a change to those scripts builds a new tree instead of reusing an old one. Only the dispatcher's entry keeps `bundle.tar.gz`, to hand on; a shard keeps the tree alone.
+
+**Where a build gets its harness.** `tasks/harness` takes the first that applies and records it as `eval_protocol.harness.source`:
+
+| Source | When |
+|--------|------|
+| `dispatcher` | A shard given `HARNESS_BUNDLE_SHA256`. That bundle and no other: found in the store, or copied from the dispatcher build, checked against that sha256 and stored. A bundle with another sha256 stops the build |
+| `upload` | A mac-k3d bundle uploaded as the JiuwenSwarm release |
+| `store` | The store holds a bundle built from the same input (`by-input/`), for example a second direct `one_task` build of the same commit |
+| `worker` | Prepared by this build, packed and stored. Also a shard whose task platform differs from the dispatcher's bundle: it prepares its own from the same pinned commit or release |
+| `workspace` | Prepared by this build and not stored: a direct iCode release build, whose drop unpacks in seconds |
+
+**Integrity.** `entry.json` holds the bundle sha256 and a digest of the unpacked tree (content, mode and links). Every lookup recomputes that digest, so a tree that changed on disk is never mounted: the entry is removed and the bundle is copied or prepared again (`harness store: a stored … tree was damaged and removed`). An entry is unpacked into a temporary folder under a per-harness lock, made read-only, and renamed into place only after `READY` is written, so a half-unpacked tree is never used and concurrent shards unpack once.
+
+**Eviction.** After each use, the store keeps the newest `MAC_K3D_HARNESS_STORE_KEEP` entries per harness (default 6) and never removes one used in the last 24 hours. Each entry holds the full tree; the console prints its size when it is stored (`harness store: stored … bundle <sha> (<size>)`).
+
+**Console.** A shard prints one of `harness store: bundle <sha> is already on <node>; not copying it`, `harness store: copied bundle <sha> from <job>#<build>` and `harness store: stored the dispatcher's bundle <sha>`. A direct build prints `… is already prepared on this worker (bundle <sha>); nothing built` on a store hit.
+
 ## Linux and macOS workers
 
 A build runs the same seven phases, the same steps and the same Harbor command on a Linux or macOS worker, reads the same inputs and writes the same files under `$WORKDIR`. The task containers are Linux on both, so the grader, the anti-cheat checks and the report do not depend on the worker's OS. Where the host differs, each OS uses its usual tool:
@@ -98,7 +128,8 @@ A build runs the same seven phases, the same steps and the same Harbor command o
 | `env/host` VPN MTU hint | `ip link` | `ifconfig` |
 | `env/host` agent service | systemd user unit | LaunchAgent |
 | `env/network` host routes | `ip route` / `ip addr` | `netstat -rn` / `ifconfig` |
-| `tasks/icode` git build | `uv sync` on the host when its CPU type matches the containers | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
+| `tasks/harness` iCode git build | `uv sync` on the host when its CPU type matches the containers | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` ([icode-harness-inputs.md](icode-harness-inputs.md#linux-and-macos-workers)) |
+| `tasks/harness` JiuwenSwarm build | `uv sync` inside `ICODE_LINUX_BUILD_IMAGE` | the same ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#git-jiuwenswarm_modegit)) |
 | Provenance `Worker` line | `/proc/cpuinfo` | `sysctl` |
 
 SWE-bench Pro always runs `linux/amd64`, because Harbor runs its prebuilt images and those are published for amd64 only. DeepSWE uses that published image on an x86-64 host. On an arm64 host it uses the native build `mac-k3d eval prepare` made of the task Dockerfile, else the published image under emulation ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)). LoLBench runs the Docker host's platform (`linux/arm64` on Apple silicon), unless a selected task's Dockerfile downloads an x86-64-only build. On an arm64 host an amd64 task runs emulated (Rosetta in Docker Desktop, QEMU on Linux). `container_platform.json` records the platform, and the report's `Worker` line ends with `os Darwin · containers linux/arm64` (or `linux/amd64 emulated`). Per-OS command differences for operators are in [dependencies.md](dependencies.md#linux-and-macos).
@@ -181,7 +212,7 @@ clone the question (same files on both machines)
                                        goes into the report
 ```
 
-`tasks/images` (`deepswe_images` in `pipeline/stages/tasks/images.sh`) makes the eval's choice before `tasks/icode`, so the iCode drop or venv matches the platform the questions will run on. On an x86-64 host it does nothing for DeepSWE, as before the native work: the published image is the benchmark's own and is used as is, with no check.
+`tasks/images` (`deepswe_images` in `pipeline/stages/tasks/images.sh`) makes the eval's choice before `tasks/harness`, so the harness bundle (and an iCode release's drop) matches the platform the questions will run on. On an x86-64 host it does nothing for DeepSWE, as before the native work: the published image is the benchmark's own and is used as is, with no check.
 
 **Prepare.** `mac-k3d eval prepare --benchmark deepswe` ([commands.md](commands.md#eval-prepare)) extracts the pipeline and runs `pipeline/tools/prewarm_task_images.sh`: `env/harbor`, `tasks/benchmark`, then `tasks/select` and `tasks/images` with `MAC_K3D_DEEPSWE_PREPARE=1`, one question at a time. The native build is ours, so it is checked; the published image is the benchmark's, so it is not. The check uses Harbor's oracle agent (applies the reference solution: every fail-to-pass and pass-to-pass test must pass) and then its nop agent (changes nothing: some fail-to-pass test must fail, every pass-to-pass test must pass). The nop runs only after the oracle passes. No model is called, and nothing from iCode is mounted. The check trials use the canary's network setup (egress probe, trial subnets, teardown) under `env-check/<id>/` in the prepare folder.
 
@@ -284,12 +315,13 @@ Each trial gets its own Docker network, and Harbor 0.22 lets Docker pick its sub
 
 | When | Control | Where |
 |------|---------|-------|
-| Before Harbor | Sanitized iCode runtime (git builds): task deliverables such as `tomllib` and stdlib tests removed, the sandbox stdlib compiled to `.pyc` without sources. iCode's tracked files stay as shipped | `tasks/icode_sandbox`, `icode_sanitize.py` |
+| Before Harbor | Sanitized iCode runtime (git builds): task deliverables such as `tomllib` and stdlib tests removed, the sandbox stdlib compiled to `.pyc` without sources. iCode's tracked files stay as shipped | `tasks/harness`, `icode_prepare.sh`, `icode_sanitize.py` |
+| Before Harbor | The harness tree is the bundle the build asked for: its sha256, and a digest of the unpacked tree checked on every use ([Harness store](#harness-store)) | `tasks/harness`, `harness_store.py` |
 | Before Harbor | One read-only mount that cannot overlap a benchmark or task folder | `tasks/isolation`, `agent_mounts.py` |
 | Before Harbor | The model API host is on the network allowlist | `tasks/isolation`, `network_allowlist.py check` |
 | Before Harbor | No selected task's gold patch in the mounted tree | `tasks/leakscan`, `anticheat_leakscan.py` |
 | During Harbor | Egress limited to the allowlist (`--allow-agent-host`) | `harbor_cmd.sh` |
-| During Harbor | Isolation canary: `CanaryAgent` with iCode's exact flags, mounts and env, no model. Probes source hosts (must be blocked), the model API (must answer), gold file names, writes to `/opt/icode-host`, git history, secret-looking env. A failure stops the build before any rollout. A question whose canary trial never starts hands the canary to the next one | `evaluate/canary`, `canary_verdict.py`, `pipeline/config/canary-v1.json` |
+| During Harbor | Isolation canary: `CanaryAgent` with the harness's exact flags, mounts and env, no model. Probes source hosts (must be blocked), the model API (must answer), gold file names, writes to the harness mount (`/opt/icode-host` or `/opt/jiuwenswarm-host`), git history, secret-looking env. The JiuwenSwarm canary also starts the bundle's Python and the headless runner in the task image. A failure stops the build before any rollout. A question whose canary trial never starts hands the canary to the next one | `evaluate/canary`, `canary_verdict.py`, `pipeline/config/canary-v1.json` |
 | After Harbor | Capture receipts: the graded patch is the agent's own work at the declared base commit | `anticheat/receipts`, `capture_receipt.py` |
 | After Harbor | Verdict per rollout from gold-patch similarity and a transcript scan; `rejected` scores as unresolved | `anticheat/verdict`, `anticheat_verdict.py`, `pipeline/config/anticheat-v1.json` |
 
@@ -314,7 +346,9 @@ Every scored run makes these binding: the canary runs once per shard (`CANARY_AL
 | `check_report.sh` | Validate a run's `artifact.json` |
 | `e1_reach_jenkins.sh` | This PC can reach the Jenkins login page |
 | `prewarm_task_images.sh` | The engine of `mac-k3d eval prepare`: `tasks/images` alone for each selected question, with no iCode and no model. On an arm64 host DeepSWE questions are built natively and checked once ([DeepSWE on Linux and macOS](#deepswe-on-linux-and-macos)); on x86-64 there is nothing to prepare. `BENCHMARK=lolbench` builds the LoLBench images |
-| `test_icode_input.sh`, `test_icode_build.sh` | Fixture tests for `icode_input.sh` and `tasks/icode` |
+| `prepare_harness.sh` | The engine of a dispatcher's `Prepare harness` stage: the harness for `HARNESS_BUNDLE_PLATFORM` (default `linux/amd64`), stored, and left as `harness/bundle.tar.gz`, `bundle.json`, `bundle.sha256` and `pin.txt` for Jenkins to archive |
+| `test_icode_input.sh`, `test_icode_build.sh` | Fixture tests for `icode_input.sh` and the iCode build in `tasks/harness` |
+| `test_harness_store.sh` | Fixture test for the harness store with fake `git`, `uv` and `docker`: a dispatcher prepares once, a shard on a new worker copies and stores, the next shard copies nothing, a damaged tree is replaced, another platform builds its own, and JiuwenSwarm's git and release inputs |
 | `test_env_check.sh` | Fixture test for DeepSWE in `tasks/images`, `prepare` included, with a fake `docker` and `harbor` |
 
 ## Old stage names
@@ -324,11 +358,12 @@ Every scored run makes these binding: the canary runs once per shard (`CANARY_AL
 | P0 `p0_prereqs.sh`, `ensure_compose.sh` | `env/host`, `env/compose`, `env/model_api` |
 | P1 `p1_pier.sh` | `env/harbor` |
 | P2 `p2_deepswe.sh` | `tasks/benchmark`, `tasks/select` |
-| P3 `p3_icode.sh` | `tasks/icode` |
+| P3 `p3_icode.sh` | `tasks/harness` |
 | P4 `p4_agent.sh` | `tasks/agent` |
-| P5 `p5_harness.sh` | `tasks/icode_sandbox`, `tasks/images`, `tasks/isolation`, `tasks/leakscan`, then `evaluate/slots`, `evaluate/canary`, `evaluate/harbor_run` |
+| P5 `p5_harness.sh` | `tasks/harness`, `tasks/images`, `tasks/isolation`, `tasks/leakscan`, then `evaluate/slots`, `evaluate/canary`, `evaluate/harbor_run` |
 | P5c `p5c_canary.sh` | `pipeline/tools/canary.sh` |
 | P6 `p6_baseline.sh` | `pipeline/tools/baseline.sh` (`eval --stage baseline`) |
 | P7 `p7_score.sh` | `anticheat/receipts`, `anticheat/verdict`, `score/score` |
 | P8 `p8_output.sh` | `report/render`, then `archive/analysis`, `archive/backup` |
+| `tasks/icode`, `tasks/icode_sandbox` | `tasks/harness` |
 | `MAC_K3D_P5_DRY_RUN=1` | `MAC_K3D_HARBOR_DRY_RUN=1` |

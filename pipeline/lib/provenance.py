@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import harness as harness_table
 from icode_sanitize import MANIFEST_NAME, runtime_sha256, tree_sha256
 from task_resources import cpu_count
 
@@ -275,7 +276,7 @@ def _cpu_model() -> str:
 
 
 def container_platform_facts(workdir: Path | None) -> dict:
-    """What `tasks/icode` recorded: the task containers' platform and whether Docker emulates it."""
+    """What `tasks/harness` recorded: the task containers' platform and whether Docker emulates it."""
     if workdir is None:
         return {}
     doc = _load_json(workdir / "container_platform.json")
@@ -365,14 +366,27 @@ def _env_int(*names: str) -> int:
     return 0
 
 
-def model_inputs() -> dict:
+def model_inputs(harness_name: str = "icode") -> dict:
+    if harness_name == "jiuwenswarm":
+        # JiuwenSwarm takes the endpoint, model and turn limit only
+        # (jiuwenswarm_harbor_agent.py); its reasoning and reply length are its own.
+        knobs = {
+            "provider": "OpenAI",
+            "reasoning_effort": "default",
+            "max_tokens": 0,
+            "max_iterations": _env_int("JIUWENSWARM_MAX_TURNS"),
+        }
+    else:
+        knobs = {
+            "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
+            "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
+            "max_tokens": _env_int("ICODE_MAX_TOKENS"),
+            "max_iterations": _env_int("ICODE_MAX_ITERATIONS"),
+        }
     return {
         "model": os.environ.get("ICODE_MODEL") or os.environ.get("DEEPSEEK_MODEL") or "",
         "api_base": os.environ.get("ICODE_API_BASE") or "https://api.deepseek.com/v1",
-        "provider": os.environ.get("ICODE_PROVIDER") or "DeepSeek",
-        "reasoning_effort": os.environ.get("ICODE_REASONING_EFFORT") or "high",
-        "max_tokens": _env_int("ICODE_MAX_TOKENS"),
-        "max_iterations": _env_int("ICODE_MAX_ITERATIONS"),
+        **knobs,
         "cpu_lock_qty": _env_int("CPU_LOCK_QTY"),
         "concurrency": _env_int("EVAL_SLOTS"),
         "cpus_each": cpu_count(os.environ.get("EVAL_CPUS_EACH")) or 0,
@@ -401,8 +415,44 @@ def _write_json(path: Path, doc: dict) -> None:
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
-def isolation_record(icode_root: Path | None, mounts: object) -> dict:
-    """The runtime the agent could read at /opt/icode-host, hashed now rather than trusted from the manifest."""
+HARNESS_FIELDS = (
+    "mode",
+    "source",
+    "platform",
+    "bundle_sha256",
+    "tree_sha256",
+    "bundle_platform",
+    "recipe",
+    "built_by",
+    "built_on",
+)
+
+
+def harness_protocol(workdir: Path | None) -> dict:
+    """eval_protocol.harness: the harness under test and the stored bundle it ran (tasks/harness's harness.json)."""
+    record = harness_table.load_record(workdir) if workdir is not None else None
+    row = harness_table.from_record(record) if record else harness_table.current()
+    out: dict = {"name": row.name, "display": row.display, "mount": row.mount}
+    for key in HARNESS_FIELDS:
+        value = (record or {}).get(key)
+        if value not in (None, ""):
+            out[key] = value
+    if row.name == "jiuwenswarm":
+        out["settings"] = {
+            "agent_mode": os.environ.get("JIUWENSWARM_AGENT_MODE") or "agent.code.normal",
+            "max_turns": _env_int("JIUWENSWARM_MAX_TURNS") or None,
+            "timeout_seconds": _env_int("JIUWENSWARM_TIMEOUT_SECONDS") or None,
+        }
+    return out
+
+
+def isolation_record(icode_root: Path | None, mounts: object, harness: dict | None = None) -> dict:
+    """The runtime the agent could read at its mount.
+
+    iCode's sanitized venv is hashed now rather than trusted from the manifest.
+    A JiuwenSwarm tree has no sanitizer; its digest is the harness store's,
+    which tasks/harness re-verified when this build took the tree.
+    """
     mount_list = mounts if isinstance(mounts, list) else []
     first = mount_list[0] if mount_list and isinstance(mount_list[0], dict) else {}
     record = {
@@ -419,6 +469,16 @@ def isolation_record(icode_root: Path | None, mounts: object) -> dict:
             "read_only": first.get("read_only") is True,
         },
     }
+    if isinstance(harness, dict) and harness.get("name") == "jiuwenswarm":
+        record.update(
+            {
+                "harness": "jiuwenswarm",
+                "mode": str(harness.get("mode") or "git"),
+                "tree_sha256": str(harness.get("tree_sha256") or ""),
+                "bundle_sha256": str(harness.get("bundle_sha256") or ""),
+            }
+        )
+        return record
     if icode_root is None or not (icode_root / ".venv" / "sandbox-cpython").is_dir():
         return record
     venv = icode_root / ".venv"
@@ -622,7 +682,8 @@ def write_protocol_inputs(
     images = {tid: prev_images[tid] for tid in selected if tid in prev_images}
     for tid in selected:
         merge_image(images, tid, inspect_task(tasks_dir / tid))
-    doc = model_inputs()
+    harness = harness_protocol(workdir)
+    doc = model_inputs(harness["name"])
     doc.update(
         {
             "harbor": {"version": read_harbor_version(workdir)},
@@ -632,7 +693,8 @@ def write_protocol_inputs(
             "worker": worker_facts(workdir),
             "requester": requester_facts(),
             "pipeline": pipeline_facts(pipeline_root),
-            "isolation": isolation_record(icode_root, mounts),
+            "harness": harness,
+            "isolation": isolation_record(icode_root, mounts, harness),
         }
     )
     env_check = env_check_record(workdir / "env_check.json", selected)
@@ -731,6 +793,23 @@ def isolation_view(isolation: object) -> dict | None:
         "egress_reason": str(egress.get("reason") or ""),
         "trial_network": trial_network_text(isolation.get("trial_network")),
     }
+
+
+def harness_line(harness: dict) -> str:
+    """One line naming the harness and the bundle it ran: `Harness: JiuwenSwarm (git) · bundle ... from store`."""
+    text = f"Harness: {harness.get('display') or harness.get('name') or '-'} ({_cell(harness.get('mode'))})"
+    if harness.get("bundle_sha256"):
+        text += f" · bundle sha256 `{harness['bundle_sha256']}` from {_cell(harness.get('source'))}"
+        if harness.get("built_on"):
+            text += f" (built on {harness['built_on']})"
+    else:
+        text += f" · prepared in this workspace ({_cell(harness.get('source'))}), not stored"
+    if harness.get("tree_sha256"):
+        text += f" · tree sha256 `{harness['tree_sha256']}`"
+    settings = harness.get("settings") if isinstance(harness.get("settings"), dict) else {}
+    if settings:
+        text += " · " + " ".join(f"{k} {_cell(v)}" for k, v in settings.items())
+    return text
 
 
 def isolation_lines(view: dict | None) -> list[str]:
@@ -1027,11 +1106,15 @@ def provenance_markdown(protocol: dict | None) -> list[str]:
         lines.append(f"- {view['transcripts']}")
     for line in isolation_lines(view["isolation"]):
         lines.append(f"- {line}")
+    harness = protocol.get("harness") if isinstance(protocol, dict) and isinstance(protocol.get("harness"), dict) else {}
+    display = str(harness.get("display") or "iCode")
+    if harness:
+        lines.append(f"- {harness_line(harness)}")
     icode = protocol.get("icode") if isinstance(protocol, dict) and isinstance(protocol.get("icode"), dict) else {}
     release = icode.get("release") if isinstance(icode.get("release"), dict) else None
     if icode.get("mode") == "release" and release and str(release.get("sha256") or ""):
         lines.append(
-            f"- iCode release: `{_cell(release.get('filename'))}` `{_cell(release.get('sha256'))}`"
+            f"- {display} release: `{_cell(release.get('filename'))}` `{_cell(release.get('sha256'))}`"
         )
     if view["tasks"]:
         lines.append("")
