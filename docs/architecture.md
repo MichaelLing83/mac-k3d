@@ -208,7 +208,7 @@ A dispatcher queues **one** `<suite>_one_task` build per question and rollout. I
 
 ### Executors and the core lock
 
-`jenkins_agent.cpu_cores` is the worker's CPU upper limit. Executors are `cpu_cores / cpus_per_executor` (default 2, so a 16-core cloud worker has 8 and a 4-core local worker has 2). Registration also adds `fits-<suite>` for each suite whose declared CPUs fit, and `executors-<n>` so a dispatcher can count capacity (`nodesByLabel` returns names, not executor counts).
+`jenkins_agent.cpu_cores` is the worker's CPU upper limit. Executors are `cpu_cores / cpus_per_executor` (default 2, so a 16-core cloud worker has 8 and a 4-core local worker has 2). Registration also adds `fits-<suite>` for each suite whose declared CPUs fit, and `executors-<n>`. A dispatcher reads that label from each online worker (`NODE_LABELS`) and sums it. `nodesByLabel` returns names, and a miss is a console line, so the count is not a probe of every `executors-<n>`.
 
 Each `<suite>_one_task` build is seven stages, one per pipeline phase — Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive — each running `run_all.sh` with its `MAC_K3D_PHASE`. Only `Evaluate` takes the lock, and only for the CPUs the task declares (`tasks/resources` writes `eval-runs/cpus_each.txt`):
 

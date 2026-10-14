@@ -1620,17 +1620,25 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
             }}
             error "No online worker has label ${{fits}}. Online {default_label} workers: ${{online ? online.join(', ') : 'none'}}."
           }}
-          // nodesByLabel returns names, not executor counts. Each worker's
-          // registration adds executors-<n>, so the sum is the online capacity.
+          // nodesByLabel returns names and logs every label that matches
+          // nothing. Each worker already carries executors-<n>, so read that
+          // label from the node instead of asking once per count.
           int totalExec = 0
           boolean countedOk = true
           List<String> execNotes = []
           try {{
-            for (int n = 1; n <= 64; n++) {{
-              def nodes = nodesByLabel(label: "${{fits}} && executors-${{n}}", offline: false)
-              if (nodes) {{
-                totalExec += n * nodes.size()
-                for (String node : nodes) {{ execNotes << "${{node}}:${{n}}" }}
+            for (String worker : workerNames) {{
+              node(worker) {{
+                int n = 0
+                for (String label : (env.NODE_LABELS ?: '').split(' ')) {{
+                  if (label.startsWith('executors-') && label.substring('executors-'.length()) ==~ /\d+/) {{
+                    n = label.substring('executors-'.length()) as Integer
+                  }}
+                }}
+                if (n >= 1) {{
+                  totalExec += n
+                  execNotes << "${{worker}}:${{n}}"
+                }}
               }}
             }}
           }} catch (Throwable t) {{
@@ -1666,7 +1674,6 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
               units << [index: i, offset: i, tasks: ids ? ids[i] : '', rollout: r, attempt: 1, preHarbor: false, label: '']
             }}
           }}
-          int inflight = 0
           int oomRetries = (params.OOM_RETRIES ?: '2') as Integer
           String queueLock = "mack3d-${{env.RUN_GROUP}}"
           Map<String, Integer> shardBuilds = [:]
@@ -1680,22 +1687,15 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
             branches[name] = {{
               while (true) {{
                 def unit = null
-                String action = 'stop'
                 lock(resource: queueLock) {{
                   if (units) {{
                     unit = units.remove(0)
-                    inflight++
-                    action = 'run'
-                  }} else if (inflight > 0) {{
-                    action = 'wait'
                   }}
                 }}
-                if (action == 'stop') {{ break }}
-                if (action == 'wait') {{
-                  // A build still running may OOM and put its unit back.
-                  sleep 5
-                  continue
-                }}
+                // A lane that finds the list empty exits. The lane that puts a
+                // failed unit back stays in this loop and takes it, so nobody
+                // polls the lock while other trials are still running.
+                if (unit == null) {{ break }}
                 String note = "rollout ${{unit.rollout}}/${{rollouts}} question ${{unit.index + 1}}/${{total}} attempt ${{unit.attempt}} of ${{env.JOB_NAME}} #${{env.BUILD_NUMBER}}"
                 List shardParams = [
 {forwarded}
@@ -1749,7 +1749,6 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
                 }}
                 String key = "${{unit.index}}-${{unit.rollout}}"
                 lock(resource: queueLock) {{
-                  inflight--
                   if (requeue) {{
                     units << unit
                   }} else {{
@@ -3097,7 +3096,10 @@ mod tests {
                 ));
                 assert!(jf.contains("echo \"WARNING: could not count workers for label"));
                 assert!(jf.contains("executors=${totalExec}"));
-                assert!(jf.contains("for (int n = 1; n <= 64; n++)"));
+                assert!(jf.contains("env.NODE_LABELS"));
+                assert!(jf.contains("label.startsWith('executors-')"));
+                assert!(!jf.contains("for (int n = 1; n <= 64; n++)"));
+                assert!(!jf.contains("sleep 5"));
                 assert!(jf.contains("cap = totalExec * 2"));
                 assert!(jf.contains("mode = 'fixed'"));
                 assert!(jf.contains("some executors will sit idle"));
