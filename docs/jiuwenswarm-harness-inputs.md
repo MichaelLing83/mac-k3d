@@ -26,7 +26,7 @@ The defaults are pull request 2 of `https://gitcode.com/michaelling/jiuwenswarm`
 
 ## Git (`JIUWENSWARM_MODE=git`)
 
-`JIUWENSWARM_GIT_REF_KIND` is `branch`, `tag`, `commit` or `pr`, with the same meaning as for iCode ([the kinds](icode-harness-inputs.md#2-git-clone-icode_modegit)). For `pr`, `JIUWENSWARM_GIT_REF` is the pull-request number; gitcode fetches `refs/merge-requests/<n>/head`. A private repo uses the controller's `gitcode-pat` or `github-pat` credential (or `GITCODE_TOKEN` / `GITHUB_TOKEN` in a worker's gitignored `.env`). Never put a token in the URL.
+`JIUWENSWARM_GIT_REF_KIND` is `branch`, `tag`, `commit` or `pr`, with the same meaning as for iCode ([the kinds](icode-harness-inputs.md#2-git-clone-icode_modegit)). For `pr`, `JIUWENSWARM_GIT_REF` is the pull-request number; gitcode fetches `refs/merge-requests/<n>/head`. For `commit`, checkout fetches that SHA when the server allows it; otherwise the one branch, tag, or pull-request tip that points at it. A private repo uses the controller's `gitcode-pat` or `github-pat` credential (or `GITCODE_TOKEN` / `GITHUB_TOKEN` in a worker's gitignored `.env`). Never put a token in the URL.
 
 The build:
 
@@ -109,8 +109,8 @@ After changing them, run `mac-k3d config --skip-secrets` on the controller to re
 `mac-k3d eval --harness jiuwenswarm` queues a git build. `--job one` queues `deepswe_one_task`; `--job some` and `--job full` queue `build_jiuwenswarm_headless`:
 
 ```bash
-mac-k3d eval --job one --harness jiuwenswarm --task ruff_1 --yes
-mac-k3d eval --job some --harness jiuwenswarm --tasks ruff_1,fastapi_1 --n-rollouts 2 \
+mac-k3d eval --job one --harness jiuwenswarm --task abs-module-cache-flags --yes
+mac-k3d eval --job some --harness jiuwenswarm --tasks abs-module-cache-flags,ytt-jsonpath-query-api --n-rollouts 2 \
   --jiuwenswarm-git-ref main --jiuwenswarm-git-ref-kind branch --yes
 mac-k3d eval --job full --harness jiuwenswarm --yes
 ```

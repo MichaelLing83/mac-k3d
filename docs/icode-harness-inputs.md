@@ -80,7 +80,7 @@ Clone `https://github.com/…` or `https://gitcode.com/…` (no tokens in the UR
 |------|---------|
 | `branch` | Tip of that branch (Jenkins/CLI default) |
 | `tag` | Detached tag (this is a “git release”, not GitHub Release assets) |
-| `commit` | Detached SHA, including a PR commit before merge |
+| `commit` | Detached SHA, including a PR commit before merge. Checkout fetches that SHA when the server allows it; otherwise the one branch, tag, or pull-request tip that points at it |
 | `pr` | Pull-request number in `ICODE_GIT_REF`. GitHub fetches `refs/pull/<n>/head`. GitCode fetches `refs/merge-requests/<n>/head` (then `refs/pull/<n>/head`). The recorded SHA is that tip, which is the full PR tree |
 
 Leftover `auto` (old queued builds) still maps: 7–40 hex → commit, else branch. Do not pick it on the Jenkins form.

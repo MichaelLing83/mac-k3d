@@ -7,6 +7,7 @@
 #   hgit_validate_url / hgit_validate_ref / hgit_normalize_ref_kind /
 #   hgit_validate_ref_for_kind      the https allowlist and the ref rules
 #   hgit_checkout DEST URL REF KIND  init + fetch of one ref, detached
+#                                    (commit: the SHA, else the tip that points at it)
 #   hgit_begin_auth URL / hgit_end_auth  the host's PAT through GIT_ASKPASS
 #   hgit_resolve_sha URL REF KIND   the commit a ref names (ls-remote, else a fetch)
 #   hgit_linux_run DEST CMD...      CMD in the Linux build image on the task platform
@@ -352,8 +353,65 @@ hgit_cmd() {
   fi
 }
 
+# From ls-remote lines on stdin, print the first tip ref whose commit equals
+# WANT (a 7–40 hex SHA). Prefer heads, then tags, then merge-request heads,
+# then pull heads. A short SHA that matches two different tips fails. Several
+# refs with the same tip are the same tree; the first in that order is enough.
+# Script is -c so stdin stays the piped listing (a heredoc would consume it).
+hgit_commit_matching_tip() {
+  local want="$1"
+  python3 -c '
+import sys
+
+want = sys.argv[1].lower()
+lines = sys.stdin.read().splitlines()
+heads, tags_peeled, tags_direct, mrs, pulls = [], {}, {}, [], []
+for line in lines:
+    parts = line.split()
+    if len(parts) < 2:
+        continue
+    sha, ref = parts[0].lower(), parts[1]
+    if ref.startswith("refs/heads/"):
+        heads.append((sha, ref))
+    elif ref.startswith("refs/merge-requests/") and ref.endswith("/head"):
+        mrs.append((sha, ref))
+    elif ref.startswith("refs/pull/") and ref.endswith("/head"):
+        pulls.append((sha, ref))
+    elif ref.startswith("refs/tags/"):
+        if ref.endswith("^{}"):
+            tags_peeled[ref[len("refs/tags/") : -3]] = sha
+        else:
+            tags_direct[ref[len("refs/tags/") :]] = sha
+tags = []
+for name, sha in tags_peeled.items():
+    tags.append((sha, "refs/tags/%s" % name))
+for name, sha in tags_direct.items():
+    if name not in tags_peeled:
+        tags.append((sha, "refs/tags/%s" % name))
+tips = heads + tags + mrs + pulls
+matches = []
+seen = set()
+for sha, ref in tips:
+    ok = sha == want if len(want) == 40 else sha.startswith(want)
+    if not ok or sha in seen:
+        continue
+    matches.append((sha, ref))
+    seen.add(sha)
+if not matches:
+    raise SystemExit(0)
+if len(want) < 40 and len(matches) > 1:
+    print(
+        "ERROR: commit %s matches more than one tip (%s); use a longer SHA"
+        % (want, ", ".join("%s…" % s[:12] for s, _ in matches)),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(matches[0][1])
+' "$want"
+}
+
 hgit_checkout() {
-  local dest="$1" url="$2" ref="$3" kind="$4" tok fetched spec
+  local dest="$1" url="$2" ref="$3" kind="$4" tok fetched spec listed head want
   local -a git_cmd
   tok="${MAC_K3D_GIT_TOKEN:-}"
   hgit_cmd
@@ -379,17 +437,28 @@ hgit_checkout() {
       hgit_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || hgit_clone_fail "$url" "$ref" "$tok"
       ;;
     commit)
-      fetched=0
-      if hgit_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \
-        || hgit_git "${git_cmd[@]}" -C "$dest" fetch origin "$ref" >/dev/null 2>&1 \
-        || hgit_git "${git_cmd[@]}" -C "$dest" fetch origin "+${ref}:refs/commits/${ref}" >/dev/null 2>&1; then
-        fetched=1
+      # One shallow fetch of the SHA when the server allows it (local remotes,
+      # GitHub). When it does not (GitCode often refuses a raw SHA that is only
+      # a merge-request tip), list tips and shallow-fetch the one that matches.
+      # Never download every branch and tag.
+      hgit_validate_ref_for_kind commit "$ref"
+      if ! hgit_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$ref"; then
+        listed="$(hgit_git "${git_cmd[@]}" ls-remote "$url" \
+          'refs/heads/*' 'refs/tags/*' 'refs/merge-requests/*/head' 'refs/pull/*/head' \
+          2>/dev/null </dev/null || true)"
+        spec="$(printf '%s\n' "$listed" | hgit_commit_matching_tip "$ref")" || hgit_clone_fail "$url" "$ref" "$tok"
+        [ -n "$spec" ] || die "$(hgit_label)_REF ${ref} is not a tip of any branch, tag, or pull request on ${url}, and the server did not return that commit"
+        hgit_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "$spec" || hgit_clone_fail "$url" "$ref" "$tok"
       fi
-      if [ "$fetched" -eq 0 ]; then
-        # Abbreviated SHA: fetch advertised heads/tags, then resolve the object locally.
-        hgit_git "${git_cmd[@]}" -C "$dest" fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' || hgit_clone_fail "$url" "$ref" "$tok"
-      fi
-      hgit_git "${git_cmd[@]}" -C "$dest" checkout --detach "$ref" || hgit_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD || hgit_clone_fail "$url" "$ref" "$tok"
+      hgit_git "${git_cmd[@]}" -C "$dest" checkout --detach FETCH_HEAD \
+        || hgit_git "${git_cmd[@]}" -C "$dest" checkout --detach "$ref" \
+        || hgit_clone_fail "$url" "$ref" "$tok"
+      head="$(git -C "$dest" rev-parse HEAD | tr '[:upper:]' '[:lower:]')"
+      want="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+      case "$head" in
+        "$want"*) ;;
+        *) die "$(hgit_label)_REF ${ref} checked out as ${head}" ;;
+      esac
       ;;
     tag)
       if ! hgit_git "${git_cmd[@]}" -C "$dest" fetch --depth 1 origin "refs/tags/${ref}:refs/tags/${ref}"; then

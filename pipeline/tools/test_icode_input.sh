@@ -98,6 +98,37 @@ icode_git_pr_refs "https://gitcode.com/org/icode.git" 12 | head -n 1 | grep -qx 
 SHORT="$(git -C "$ORIGIN" rev-parse --short=8 "$FEAT_SHA")"
 icode_git_checkout "$KIND_TMP/c-abbr" "$ORIGIN" "$SHORT" commit
 [ "$(git -C "$KIND_TMP/c-abbr" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "abbrev commit checkout sha"
+# GitCode-style: the SHA is only a merge-request tip (no branch/tag). Tip matching
+# must return that ref; a missing SHA must die without fetching every branch.
+BARE="$KIND_TMP/bare-mr.git"
+git clone -q --bare "$ORIGIN" "$BARE"
+git -C "$BARE" update-ref refs/merge-requests/2/head "$FEAT_SHA"
+git -C "$BARE" update-ref -d refs/heads/feature
+git -C "$BARE" update-ref -d refs/merge-requests/7/head 2>/dev/null || true
+MR_LISTED="$(git -c protocol.file.allow=always ls-remote "$BARE" \
+  'refs/heads/*' 'refs/tags/*' 'refs/merge-requests/*/head' 'refs/pull/*/head')"
+MR_SPEC="$(printf '%s\n' "$MR_LISTED" | hgit_commit_matching_tip "$FEAT_SHA")"
+[ "$MR_SPEC" = "refs/merge-requests/2/head" ] \
+  || fail "matching tip should be the merge-request (got ${MR_SPEC:-empty})"
+# Tip path alone (what GitCode needs when a raw SHA fetch is refused).
+mkdir -p "$KIND_TMP/c-mr-tip"
+git -c init.defaultBranch=main init -q "$KIND_TMP/c-mr-tip"
+git -C "$KIND_TMP/c-mr-tip" remote add origin "$BARE"
+git -c protocol.file.allow=always -C "$KIND_TMP/c-mr-tip" fetch --depth 1 origin "$MR_SPEC"
+git -c advice.detachedHead=false -C "$KIND_TMP/c-mr-tip" checkout --detach FETCH_HEAD
+[ "$(git -C "$KIND_TMP/c-mr-tip" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "commit via merge-request tip"
+icode_git_checkout "$KIND_TMP/c-mr-checkout" "$BARE" "$FEAT_SHA" commit
+[ "$(git -C "$KIND_TMP/c-mr-checkout" rev-parse HEAD)" = "$FEAT_SHA" ] || fail "commit checkout of MR-only SHA"
+MISSING=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+if ( icode_git_checkout "$KIND_TMP/c-missing" "$BARE" "$MISSING" commit ) 2>"$KIND_TMP/missing.err"; then
+  fail "missing commit should fail"
+fi
+grep -q 'is not a tip of any branch, tag, or pull request' "$KIND_TMP/missing.err" \
+  || fail "missing commit must name the SHA (got: $(tr '\n' ' ' <"$KIND_TMP/missing.err"))"
+if grep -qE 'fetch origin .*\+refs/heads' "$KIND_TMP/missing.err"; then
+  fail "missing commit must not fetch every branch"
+fi
+ok "commit via merge-request tip; missing tip fails fast"
 icode_record_git_meta "$KIND_TMP/c-commit" "https://github.com/org/icode.git" commit "$FEAT_SHA"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["kind"]=="commit" and d["sha"]==sys.argv[2]' "$WORKDIR/icode_git.json" "$FEAT_SHA" || fail "icode_git.json"
 ok "checkout branch/tag/commit + icode_git.json"
