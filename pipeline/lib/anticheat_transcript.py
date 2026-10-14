@@ -48,6 +48,7 @@ MOUNT = MOUNTS[0]
 BUNDLED_PATHS = (
     "/opt/icode-host/.venv/lib/python3.13/site-packages/",
     "/opt/jiuwenswarm-host/venv/lib/python3.11/site-packages/",
+    "/opt/jiuwenswarm-host/python/lib/python3.11/site-packages/",
 )
 BUNDLED = BUNDLED_PATHS[0]
 RETRIEVAL_TOOLS = {"web_search", "free_search", "web_free_search", "web_fetch", "web_fetch_webpage", "fetch_webpage"}

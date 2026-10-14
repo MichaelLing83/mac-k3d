@@ -1302,11 +1302,13 @@ done
             echo "OOM on attempt ${{attempt}}; not queueing again (OOM_RETRIES=${{cap}})"
           }}
         }}
-        // The dispatcher reads this through run.buildVariables: a shard that
-        // failed before its Harbor job dir existed spent no model tokens.
+        // The dispatcher reads these through run.buildVariables: a shard that
+        // failed before its Harbor job dir existed spent no model tokens, and
+        // is retried away from the worker it failed on.
         if (fileExists("eval-runs/harness/harbor_runs/jenkins-${{env.BUILD_NUMBER}}")) {{
           env.HARBOR_STARTED = '1'
         }}
+        env.SHARD_NODE = env.NODE_NAME ?: ''
       }}
     }}
   }}
@@ -1457,7 +1459,10 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
     let forwarded = FORWARDED_PARAMS
         .iter()
         .filter(|n| own.contains(n) && shard.contains(n))
-        .map(|n| format!("                  string(name: '{n}', value: params.{n}),"))
+        .map(|n| match *n {
+            "AGENT_LABEL" => "                  string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL),".to_string(),
+            _ => format!("                  string(name: '{n}', value: params.{n}),"),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     // The identity Prepare harness pinned, for each shard to find in its bundle.
@@ -1489,9 +1494,6 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
           def prepareOn = { String where ->
             node(where) {
               at.node = env.NODE_NAME
-              // #region agent log
-              echo "[debug 8643d4] H1 prepare attempt node=${env.NODE_NAME} label=${where}"
-              // #endregion
               deleteDir()
               String mode = (params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE) ?: 'git'
               String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
@@ -1559,9 +1561,6 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
               } catch (Throwable ignored) {
               }
             }
-            // #region agent log
-            echo "[debug 8643d4] H1 prepare failed node=${at.node} others=${others}"
-            // #endregion
             if (!others) {
               throw t
             }
@@ -1664,7 +1663,7 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
           List<Map> units = []
           for (int i = 0; i < total; i++) {{
             for (int r = 1; r <= rollouts; r++) {{
-              units << [index: i, offset: i, tasks: ids ? ids[i] : '', rollout: r, attempt: 1, preHarbor: false]
+              units << [index: i, offset: i, tasks: ids ? ids[i] : '', rollout: r, attempt: 1, preHarbor: false, label: '']
             }}
           }}
           int inflight = 0
@@ -1717,9 +1716,11 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
                 def run = build job: '{shard_job}', wait: true, propagate: false, quietPeriod: 0, parameters: shardParams
                 String started = ''
                 String oom = ''
+                String ranOn = ''
                 try {{
                   started = run.buildVariables?.HARBOR_STARTED ?: ''
                   oom = run.buildVariables?.TRIAL_OOM ?: ''
+                  ranOn = run.buildVariables?.SHARD_NODE ?: ''
                 }} catch (Throwable t) {{
                   started = 'unknown'
                   echo "WARNING: cannot read #${{run.number}}'s variables (${{t}}); not retrying it"
@@ -1731,8 +1732,17 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
                   requeue = true
                   retried << "build ${{run.number}} oom"
                 }} else if (run.result == 'FAILURE' && !started && !unit.preHarbor) {{
-                  // Failed before Harbor started: no model tokens spent. Once only.
-                  echo "Build ${{run.number}} failed before Harbor started; queueing it at the end"
+                  // Failed before Harbor started: no model tokens spent. Once only,
+                  // and on another worker when one is online: Jenkins places a job
+                  // on the same worker again, which failed it for a reason of its own.
+                  String elsewhere = ranOn ? "(${{params.AGENT_LABEL}}) && !\"${{ranOn}}\"" : ''
+                  List<String> others = []
+                  if (elsewhere) {{
+                    try {{ others = nodesByLabel(label: "${{elsewhere}} && fits-${{params.BENCHMARK}}", offline: false) }} catch (Throwable ignored) {{ }}
+                  }}
+                  unit.label = others ? elsewhere : ''
+                  String where = others ? " on another worker (${{others.join(', ')}})" : ''
+                  echo "Build ${{run.number}} failed before Harbor started on ${{ranOn ?: 'its worker'}}; queueing it at the end${{where}}"
                   unit.preHarbor = true
                   requeue = true
                   retried << "build ${{run.number}} before-harbor"
@@ -2791,19 +2801,13 @@ mod tests {
         assert!(jf.contains("archiveArtifacts artifacts: 'aggregate/**'"));
         let own: Vec<&str> = eval_params("deepswe", JobShape::Some_, &deepswe_opts(Vec::new())).iter().map(|p| p.name).collect();
         for name in FORWARDED_PARAMS {
-            let line = format!("string(name: '{name}', value: params.{name})");
+            let line = match *name {
+                "AGENT_LABEL" => "string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL)".to_string(),
+                _ => format!("string(name: '{name}', value: params.{name})"),
+            };
             assert_eq!(jf.contains(&line), own.contains(name), "{name}");
         }
     }
-
-    // #region agent log
-    #[test]
-    #[ignore]
-    fn debug_8643d4_dump_headless_jenkinsfile() {
-        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]));
-        std::fs::write("/tmp/mk3d-8643d4-headless.Jenkinsfile", jf).unwrap();
-    }
-    // #endregion
 
     #[test]
     fn every_dispatcher_prepares_the_harness_once_for_its_shards() {
@@ -2935,6 +2939,7 @@ mod tests {
             assert!(post.contains(
                 "if (fileExists(\"eval-runs/harness/harbor_runs/jenkins-${env.BUILD_NUMBER}\")) {\n          env.HARBOR_STARTED = '1'"
             ));
+            assert!(post.contains("env.SHARD_NODE = env.NODE_NAME ?: ''"), "{bench}");
             let warned = post.find("unscored_rollouts.txt").unwrap();
             assert!(post.find("last_output.txt").unwrap() < warned);
             assert!(post.find("harbor_runs/jenkins-").unwrap() < warned);
@@ -2954,6 +2959,12 @@ mod tests {
         assert!(some.contains("units << unit"));
         assert!(some.contains("started = run.buildVariables?.HARBOR_STARTED ?: ''"));
         assert!(some.contains("oom = run.buildVariables?.TRIAL_OOM ?: ''"));
+        // The retry leaves out the worker it failed on, when another one is online.
+        assert!(some.contains("ranOn = run.buildVariables?.SHARD_NODE ?: ''"));
+        assert!(some.contains("String elsewhere = ranOn ? \"(${params.AGENT_LABEL}) && !\\\"${ranOn}\\\"\" : ''"));
+        assert!(some.contains("others = nodesByLabel(label: \"${elsewhere} && fits-${params.BENCHMARK}\", offline: false)"));
+        assert!(some.contains("unit.label = others ? elsewhere : ''"));
+        assert!(some.contains("preHarbor: false, label: ''"));
         assert!(some.contains(
             "shardPlan[key] = \"${unit.index + 1}|${run.number}|${run.result}|${unit.offset}|1|${unit.tasks}|${unit.rollout}|${unit.attempt}\""
         ));
@@ -3206,10 +3217,11 @@ mod tests {
         for name in [
             "HARNESS", "BENCHMARK", "DEEPSEEK_MODEL", "JIUWENSWARM_MODE", "JIUWENSWARM_GIT_URL",
             "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND", "JIUWENSWARM_AGENT_MODE",
-            "JIUWENSWARM_MAX_TURNS", "AGENT_LABEL", "HARBOR_VERSION", "DEEPSWE_REF",
+            "JIUWENSWARM_MAX_TURNS", "HARBOR_VERSION", "DEEPSWE_REF",
         ] {
             assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
         }
+        assert!(jf.contains("string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL)"));
         for name in ["ICODE_MODE", "ICODE_GIT_URL", "ICODE_GIT_REF", "LOLBENCH_REF"] {
             assert!(!jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
         }

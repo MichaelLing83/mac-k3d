@@ -32,21 +32,23 @@ The build:
 
 1. Resolves the ref to one commit. A dispatcher resolves it once and passes the commit to every shard as `JIUWENSWARM_GIT_SHA`, so every rollout of a run evaluates the same commit even if the branch moves.
 2. Clones that commit under the eval workdir (`eval-runs/jiuwenswarm-src`). The commit must have a `uv.lock`.
-3. Runs `uv sync --frozen --no-dev --no-editable --python 3.11` inside `ICODE_LINUX_BUILD_IMAGE` (pinned in `pipeline/config/toolchain.env`) on the task containers' platform. Wheels are chosen for `manylinux_2_28` (`--python-platform <cpu>-manylinux_2_28`), so the runtime also starts in DeepSWE images older than the build image.
-4. Fetches JiuwenSwarm's own git dependencies, which its `pyproject.toml` pins to commits over `https://` on gitcode: `openjiuwen` (`openJiuwen/agent-core`) and `gateway-protocol` (`openJiuwen/agent-protocol`). The PAT of the JiuwenSwarm host reaches them by variable name. A dependency pinned as `ssh://git@<host>/` is rewritten to `https://` for this build only, as for iCode, so a worker needs no SSH key.
+3. Builds JiuwenSwarm's own Linux offline pack inside `ICODE_LINUX_BUILD_IMAGE` (pinned in `pipeline/config/toolchain.env`) on the task containers' platform, for that platform only: `OFFLINE_CI_PLATFORMS=linux-x86_64 make offline-tarballs-ci` (`linux-aarch64` for arm64 task images). The pack is a standalone CPython 3.11 with `workswarm` and every dependency from `uv.lock`, wheels for `manylinux_2_28`, so it also starts in DeepSWE images older than the build image (`docs/en/OfflineProcessBuild.md` in the JiuwenSwarm repo). The build unpacks `dist/offline/workswarm-process-linux-<cpu>-<version>.tar.gz` as the tree and compiles its bytecode, because the trial mounts the tree read-only. A commit whose `Makefile` has no `offline-tarballs-ci` target is built with `uv sync --frozen --no-dev --no-editable --python 3.11 --python-platform <cpu>-manylinux_2_28` instead, and the build says so.
+4. Fetches JiuwenSwarm's own git dependencies, which its `uv.lock` pins to commits over `https://` on gitcode: `openjiuwen` (`openJiuwen/agent-core`), `gateway-protocol` and `intelli-router` (`openJiuwen/agent-protocol`). The PAT of the JiuwenSwarm host reaches them by variable name. A dependency pinned as `ssh://git@<host>/` is rewritten to `https://` for this build only, as for iCode, so a worker needs no SSH key.
 
-The tree mounted at `/opt/jiuwenswarm-host` holds the runtime, not the checkout:
+The tree mounted at `/opt/jiuwenswarm-host` holds the runtime, not the checkout. From the offline pack:
 
 | Path | What it is |
 |------|------------|
-| `python/` | the uv-managed CPython 3.11, copied from this worker's uv cache |
-| `venv/` | `workswarm` and every dependency |
-| `bin/jiuwenswarm-run` | the launcher: `venv/bin/jiuwenswarm-process` |
-| `bin/jiuwenswarm-python` | the runtime's Python |
-| `runtime.json` | package version, Python version, wheel platform, CPU type |
-| `freeze.txt` | `uv pip freeze` of the venv |
+| `BUNDLE` | the pack's name, version, platform, Python and ripgrep versions |
+| `python/` | the pack's CPython 3.11, with `workswarm` and every dependency in its `site-packages` |
+| `bin/jiuwenswarm-process`, `bin/jiuwenswarm-python`, `bin/rg` | the pack's launchers (they run `python -I`) and ripgrep |
+| `bin/jiuwenswarm-run` | the launcher a trial runs: `bin/jiuwenswarm-process` |
+| `runtime.json` | package version, Python version, wheel platform, CPU type, `build` (`offline-tarballs-ci`) and the `BUNDLE` fields |
+| `freeze.txt` | `uv pip freeze` of the pack's Python |
 
-The build ends with two probes from an empty directory: `jiuwenswarm-run --help`, and an import of `jiuwenswarm.channels.process_cli.machine_entry`. It prints `OK JiuwenSwarm runtime <version> starts in /opt/jiuwenswarm-host`. uv's cache is kept per platform in `~/.local/share/mac-k3d/uv-cache-linux-<arch>`, so a second build of a commit downloads nothing.
+A `uv sync` build, a wheel and a wheelhouse have `python/` (uv-managed CPython 3.11, copied from this worker's uv cache) and `venv/` (`workswarm` and every dependency) instead, with `bin/jiuwenswarm-run` running `venv/bin/jiuwenswarm-process`; `runtime.json`'s `build` is `uv-sync`, `wheel` or `wheelhouse`.
+
+The build ends with two probes from an empty directory: `jiuwenswarm-run --help`, and an import of `jiuwenswarm.channels.process_cli.machine_entry`. It prints `OK JiuwenSwarm runtime <version> (<build>) starts in /opt/jiuwenswarm-host`. uv's cache, and the pack's CPython and ripgrep downloads, are kept per platform in `~/.local/share/mac-k3d/uv-cache-linux-<arch>`. The pack installs its wheels with `--no-cache`, so each new commit downloads them again; the harness store builds a commit once.
 
 A worker whose Docker bridge cannot reach PyPI (for example behind a VPN with a smaller MTU) can set `MAC_K3D_BUILD_NETWORK=host` in its environment. The build container then uses the host's network; trials keep their own network.
 

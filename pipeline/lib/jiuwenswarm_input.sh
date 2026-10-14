@@ -4,14 +4,17 @@
 # --run-json`. Either input becomes one tree, mounted read-only in the trial at
 # /opt/jiuwenswarm-host:
 #
-#   python/  uv-managed CPython        venv/  workswarm and its dependencies
+#   python/  CPython (with workswarm in its site-packages for an offline pack)
+#   venv/    workswarm and its dependencies (uv sync, wheel, wheelhouse)
 #   bin/jiuwenswarm-run, bin/jiuwenswarm-python   runtime.json  freeze.txt
 #
 # The tree is always built in ICODE_LINUX_BUILD_IMAGE on the task platform
 # with the tree mounted at /opt/jiuwenswarm-host (jiuwenswarm_build.sh).
 #
 #   git      JIUWENSWARM_GIT_URL / _REF / _REF_KIND, or the dispatcher's
-#            JIUWENSWARM_GIT_SHA; uv sync --frozen --no-dev --no-editable
+#            JIUWENSWARM_GIT_SHA; the commit's Linux offline pack
+#            (OFFLINE_CI_PLATFORMS=linux-<cpu> make offline-tarballs-ci), or
+#            uv sync --frozen --no-dev --no-editable when it has no such target
 #   release  JIUWENSWARM_RELEASE (a path or https URL; a Jenkins upload is
 #            JIUWENSWARM_RELEASE_FILE), told apart by its content:
 #              wheel       a workswarm-*.whl; dependencies come from PyPI
@@ -55,9 +58,14 @@ jiuwenswarm_python_platform() {
   printf '%s-manylinux_2_28\n' "$(hgit_platform_cpu "$(hgit_target_platform)")"
 }
 
+# The platform key of JiuwenSwarm's offline pack: only the task platform's Linux pack is built.
+jiuwenswarm_offline_platform() {
+  printf 'linux-%s\n' "$(hgit_platform_cpu "$(hgit_target_platform)")"
+}
+
 # Part of the store key: a change here builds a new tree.
 jiuwenswarm_recipe() {
-  printf 'jiuwenswarm-v1 python=%s wheels=%s image=%s\n' \
+  printf 'jiuwenswarm-v2 offline=%s python=%s wheels=%s image=%s\n' "$(jiuwenswarm_offline_platform)" \
     "$(jiuwenswarm_python)" "$(jiuwenswarm_python_platform)" "$(hgit_linux_image)"
 }
 
@@ -238,7 +246,9 @@ jiuwenswarm_container_build() {
   local -a HGIT_LINUX_EXTRA
   HGIT_LINUX_EXTRA=(-v "$tree:$JIUWENSWARM_TARGET" -v "$input:$input_target"
     -e "JIUWENSWARM_PYTHON=$(jiuwenswarm_python)"
-    -e "JIUWENSWARM_PYTHON_PLATFORM=$(jiuwenswarm_python_platform)")
+    -e "JIUWENSWARM_PYTHON_PLATFORM=$(jiuwenswarm_python_platform)"
+    -e "JIUWENSWARM_OFFLINE_PLATFORM=$(jiuwenswarm_offline_platform)"
+    -e "JIUWENSWARM_OFFLINE_CACHE=$HGIT_LINUX_UV/offline")
   echo "jiuwenswarm: building the runtime in $(hgit_linux_image) for $(hgit_target_platform) (python $(jiuwenswarm_python), wheels $(jiuwenswarm_python_platform))" >&2
   HGIT_LINUX_WORKDIR=/tmp hgit_linux_run "$tree" bash "$JIUWENSWARM_LIB/jiuwenswarm_build.sh" "$@" >&2
 }
@@ -256,7 +266,7 @@ jiuwenswarm_build_git() {
   jiuwenswarm_container_build "$tree" "$src" /mac-k3d-src git || {
     hgit_end_auth
     unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1
-    die "JiuwenSwarm build failed for ${JW_URL}@$(git -C "$src" rev-parse --short HEAD) (see the uv output above)"
+    die "JiuwenSwarm build failed for ${JW_URL}@$(git -C "$src" rev-parse --short HEAD) (see the build output above)"
   }
   hgit_end_auth
   unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1
@@ -283,7 +293,7 @@ jiuwenswarm_prepare_workspace() {
       fi
       hgit_end_auth
       [ "$(git -C "$src" rev-parse HEAD)" = "$sha" ] || die "JiuwenSwarm checkout HEAD is not $sha"
-      [ -f "$src/uv.lock" ] || die "JiuwenSwarm ${sha} has no uv.lock; uv sync --frozen needs one"
+      [ -f "$src/uv.lock" ] || die "JiuwenSwarm ${sha} has no uv.lock; its offline pack and uv sync --frozen both need one"
       jiuwenswarm_record_git "$src"
       jiuwenswarm_build_git "$tree" "$src"
       ;;

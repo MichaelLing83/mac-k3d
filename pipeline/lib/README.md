@@ -10,8 +10,8 @@ Used by `mac-k3d eval` and the Jenkins eval jobs (all Harbor). The phase and ste
 | `harness_git.sh` | Git and build-container helpers both harness inputs share: the https allowlist, ref kinds, `hgit_checkout`, the PAT through `GIT_ASKPASS`, `hgit_resolve_sha`, `hgit_linux_run`, and the Docker wipe of root-owned leftovers |
 | `icode_prepare.sh` | iCode's prepare: resolve the input, make the tree runnable at `/opt/icode-host` (sourceless sandbox stdlib), probe it, and name the tree to store |
 | `icode_input.sh` | iCode inputs: Jenkins upload / local `*-full-*`, or git clone and build |
-| `jiuwenswarm_input.sh` | JiuwenSwarm inputs ([jiuwenswarm-harness-inputs.md](../../docs/jiuwenswarm-harness-inputs.md)): git (`uv sync --frozen`), or a release told apart by content (wheel, wheelhouse, mac-k3d bundle) |
-| `jiuwenswarm_build.sh` | Runs in `ICODE_LINUX_BUILD_IMAGE`: builds the JiuwenSwarm runtime (its own CPython and venv) at `/opt/jiuwenswarm-host` |
+| `jiuwenswarm_input.sh` | JiuwenSwarm inputs ([jiuwenswarm-harness-inputs.md](../../docs/jiuwenswarm-harness-inputs.md)): git (the commit's Linux offline pack, `make offline-tarballs-ci`, else `uv sync --frozen`), or a release told apart by content (wheel, wheelhouse, mac-k3d bundle) |
+| `jiuwenswarm_build.sh` | Runs in `ICODE_LINUX_BUILD_IMAGE`: builds the JiuwenSwarm runtime (its own CPython and packages) at `/opt/jiuwenswarm-host` |
 | `jiuwenswarm_harbor_agent.py` | Harbor `JiuwenSwarmAgent` (DeepSWE): seeds the data dir, writes the run document, runs `jiuwenswarm-process --run-json` with the key as `API_KEY`, then the same capture as iCode. `JiuwenSwarmCanaryAgent` is the canary with its mounts and env |
 | `jiuwenswarm_trial.py` | Runs in the trial with the bundle's Python: `seed`, `rundoc`, `usage` |
 | `jiuwenswarm_usage.py` | Reads the `type: result` line ending `jiuwenswarm.jsonl` (status, exit code, tokens) for the report |

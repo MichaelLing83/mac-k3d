@@ -1,7 +1,7 @@
 """Harbor adapter: the worker's JiuwenSwarm runtime bind-mounted at /opt/jiuwenswarm-host.
 
 DeepSWE only. The runtime (tasks/harness, jiuwenswarm_build.sh) carries its own
-CPython and venv, so the task image needs only bash, git and coreutils. A
+CPython and packages, so the task image needs only bash, git and coreutils. A
 trial runs JiuwenSwarm's headless runner once:
 
   jiuwenswarm-process --run-json /tmp/jiuwenswarm_run.json > jiuwenswarm.jsonl

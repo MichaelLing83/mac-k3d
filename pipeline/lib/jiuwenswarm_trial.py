@@ -140,6 +140,9 @@ def rundoc(task: str, repo: str, out: str) -> int:
 
 
 def usage(log: str, out: str) -> int:
+    # An offline pack's jiuwenswarm-python runs `python -I`, which leaves this
+    # script's directory off sys.path.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import jiuwenswarm_usage
 
     result = jiuwenswarm_usage.read_result(Path(log))
