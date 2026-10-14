@@ -48,13 +48,30 @@ managed_python() {
 # bin/ (launchers that run python -I, and rg) and python/ (CPython with
 # workswarm and every locked dependency in its site-packages).
 offline_pack() {
-  local plat="${JIUWENSWARM_OFFLINE_PLATFORM:?}" pack tops
+  local plat="${JIUWENSWARM_OFFLINE_PLATFORM:?}" pack tops log status
   local -a packs
   cd /mac-k3d-src
   rm -rf dist/offline
   # The pack prunes __pycache__, so bytecode is compiled after unpacking.
+  # setuptools lists every file it copies into the wheel, three times. The
+  # Jenkins console keeps the pack's own [offline] lines, the tarball summary,
+  # and uv's one-line totals. The full log is shown only when the build fails.
+  log="$(mktemp)"
+  set +e
   env -u UV_COMPILE_BYTECODE OFFLINE_CI_PLATFORMS="$plat" OFFLINE_PYTHON_VERSION="$PY_VERSION" \
-    make offline-tarballs-ci
+    make offline-tarballs-ci 2>&1 \
+    | tee "$log" \
+    | grep -E --line-buffered \
+      '^\[offline\] |^  (bundle|tarball|sha256|sums):|^Successfully built |^(Resolved|Prepared|Installed|Uninstalled|Using Python) '
+  status=${PIPESTATUS[0]}
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "ERROR: make offline-tarballs-ci failed (exit ${status}); last 80 lines:" >&2
+    tail -n 80 "$log" >&2
+    rm -f "$log"
+    exit "$status"
+  fi
+  rm -f "$log"
   packs=(dist/offline/*-process-"$plat"-*.tar.gz)
   if [ "${#packs[@]}" != 1 ] || [ ! -f "${packs[0]}" ]; then
     echo "ERROR: make offline-tarballs-ci left no single dist/offline/*-process-$plat-*.tar.gz" >&2

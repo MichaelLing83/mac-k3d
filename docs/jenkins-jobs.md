@@ -34,7 +34,7 @@ The stage archives `eval-runs/harness/bundle.tar.gz` and `bundle.json`, prints `
 
 In its Tasks stage, a shard first asks its worker's store for that sha256. On a hit it copies nothing (`harness store: bundle <sha> is already on <node>; not copying it`); otherwise it copies the bundle from the dispatcher once, and `tasks/harness` checks the sha256 and stores it. So each worker copies and unpacks the bundle once per run, however many shards it runs. A bundle with another sha256 stops the shard.
 
-When the run ends, aborted or not, the dispatcher deletes the bundle and any JiuwenSwarm release from its build's artifacts, so the controller keeps them only while shards may need them. `bundle.json` stays, and the bundle's sha256 is in `summary.md` and `report.html`.
+The build page keeps `bundle.tar.gz`, `bundle.json`, and any JiuwenSwarm release upload. The bundle's sha256 is also in `summary.md` and `report.html`. Deleting an archived file from the pipeline needs a Jenkins script approval, so the job leaves them in place. Delete old builds by hand when the controller disk fills.
 
 ## What a `one_task` build runs
 

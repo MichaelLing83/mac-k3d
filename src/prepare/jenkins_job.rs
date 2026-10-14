@@ -1842,27 +1842,6 @@ set -euo pipefail
       }}
     }}
   }}
-
-  post {{
-    always {{
-      script {{
-        // No shard reads the bundle any more, even after an abort. Its sha256
-        // in summary.md and report.html is the record, so the build page keeps
-        // bundle.json but not the bundle or a JiuwenSwarm release.
-        // A sandbox refusal only warns; the eval result does not change.
-        try {{
-          File root = currentBuild.rawBuild.getRootDir()
-          File bundle = new File(root, "archive/eval-runs/harness/bundle.tar.gz")
-          File release = new File(root, "archive/jiuwenswarm-release")
-          if ((bundle.exists() && !bundle.delete()) || (release.isDirectory() && !release.deleteDir())) {{
-            echo "WARNING: could not remove the harness bundle from this build's artifacts. Its sha256 is in summary.md and report.html."
-          }}
-        }} catch (Throwable t) {{
-          echo "WARNING: could not remove the harness bundle from this build's artifacts (${{t}}). Its sha256 is in summary.md and report.html."
-        }}
-      }}
-    }}
-  }}
 }}
 "#,
         display_name = DISPLAY_NAME_GROOVY,
@@ -2786,7 +2765,10 @@ mod tests {
         assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
         assert!(jf.contains("archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'"));
         assert!(!jf.contains("sha256.txt"));
-        assert!(jf.contains("archive/eval-runs/harness/bundle.tar.gz"));
+        // The bundle stays on the build page. Deleting an artifact needs
+        // RunWrapper.getRawBuild, which the Jenkins sandbox rejects.
+        assert!(!jf.contains("getRawBuild"));
+        assert!(!jf.contains("could not remove the harness bundle"));
         assert!(jf.contains("#!/bin/bash"));
         assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
         assert!(jf.contains("unstable \"Shards that did not succeed"));
@@ -2841,11 +2823,10 @@ mod tests {
                     "archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'"
                 ));
                 assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
-                // After the run, aborted or not, the bundle leaves the build page; bundle.json stays.
-                let cleanup = jf.find("new File(root, \"archive/eval-runs/harness/bundle.tar.gz\")").unwrap();
-                let post = jf.rfind("\n  post {\n    always {").unwrap();
-                assert!(jf.find("stage('Aggregate')").unwrap() < post && post < cleanup, "{bench} {shape:?}");
-                assert_eq!(jf.matches("archive/eval-runs/harness/bundle.tar.gz").count(), 1);
+                // The bundle and bundle.json both stay. Removing them would call
+                // getRawBuild, which asks for a controller-wide script approval.
+                assert!(!jf.contains("getRawBuild"), "{bench} {shape:?}");
+                assert!(!jf.contains("could not remove the harness bundle"), "{bench} {shape:?}");
                 // JiuwenSwarm pins reach only a shard job that takes them.
                 assert_eq!(jf.contains("name: 'JIUWENSWARM_GIT_SHA'"), *bench == "deepswe", "{bench}");
             }
