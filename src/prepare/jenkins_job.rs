@@ -1480,21 +1480,29 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
     // bundle and no other; one of another task platform builds its own from the
     // same pinned commit or release.
     let prepare_stage = r#"    stage('Prepare harness') {
-      agent { label "${params.AGENT_LABEL}" }
       steps {
         script {
-          deleteDir()
-          String mode = (params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE) ?: 'git'
-          String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
-          if (mode == 'release') {
-            try {
-              unstash upload
-            } catch (Throwable t) {
-              error "release mode needs an uploaded ${upload} (${t})"
-            }
-          }
-        }
-__CRED_OPEN__        sh '''#!/bin/bash
+          // Jenkins places this job on the same worker every time, so a worker
+          // that cannot build the harness (its Docker store cannot run the build
+          // image) is left out and another AGENT_LABEL worker builds it, once.
+          Map at = [node: '']
+          def prepareOn = { String where ->
+            node(where) {
+              at.node = env.NODE_NAME
+              // #region agent log
+              echo "[debug 8643d4] H1 prepare attempt node=${env.NODE_NAME} label=${where}"
+              // #endregion
+              deleteDir()
+              String mode = (params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE) ?: 'git'
+              String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
+              if (mode == 'release') {
+                try {
+                  unstash upload
+                } catch (Throwable t) {
+                  error "release mode needs an uploaded ${upload} (${t})"
+                }
+              }
+__CRED_OPEN__              sh '''#!/bin/bash
 set -euo pipefail
 export PATH="${HOME}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${PATH}"
 command -v mac-k3d >/dev/null || { echo "mac-k3d is not on PATH on ${NODE_NAME:-this worker}. Run scripts/redeploy.sh." >&2; exit 1; }
@@ -1511,33 +1519,54 @@ for upload in ICODE_RELEASE JIUWENSWARM_RELEASE; do
 done
 bash "$MAC_K3D_ROOT/pipeline/tools/prepare_harness.sh"
 '''
-__CRED_CLOSE__        script {
-          String sha = readFile('eval-runs/harness/bundle.sha256').trim()
-          if (!(sha ==~ /[0-9a-f]{64}/)) {
-            error "Prepare harness left no bundle sha256 (got '${sha}')"
+__CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha256').trim()
+              if (!(sha ==~ /[0-9a-f]{64}/)) {
+                error "Prepare harness left no bundle sha256 (got '${sha}')"
+              }
+              List<String> pin = readFile('eval-runs/harness/pin.txt').trim().split(' ') as List<String>
+              if (pin.size() != 2 || !(pin[0] in ['git', 'release'])) {
+                error "Prepare harness left no identity pin (got '${pin.join(' ')}')"
+              }
+              env.HARNESS_BUNDLE_SHA256 = sha
+              if (params.HARNESS == 'jiuwenswarm') {
+                if (pin[0] == 'git') { env.JIUWENSWARM_GIT_SHA = pin[1] } else { env.JIUWENSWARM_RELEASE_SHA256 = pin[1] }
+              } else {
+                if (pin[0] == 'git') { env.ICODE_GIT_SHA = pin[1] } else { env.ICODE_RELEASE_SHA256 = pin[1] }
+              }
+              // A JiuwenSwarm wheel or wheelhouse goes to the shards too, for one whose
+              // task platform needs its own build. An uploaded bundle is the bundle itself.
+              if (params.HARNESS == 'jiuwenswarm' && pin[0] == 'release' && pin[1] != sha) {
+                sh 'mkdir -p jiuwenswarm-release && cp JIUWENSWARM_RELEASE_FILE jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
+                env.JIUWENSWARM_RELEASE_FROM = "${env.JOB_NAME}#${env.BUILD_NUMBER}"
+              }
+              echo "Every shard runs harness bundle ${sha} (${pin[0]} ${pin[1]})"
+              archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'
+              if (env.JIUWENSWARM_RELEASE_FROM) {
+                archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
+              }
+            }
           }
-          List<String> pin = readFile('eval-runs/harness/pin.txt').trim().split(' ') as List<String>
-          if (pin.size() != 2 || !(pin[0] in ['git', 'release'])) {
-            error "Prepare harness left no identity pin (got '${pin.join(' ')}')"
-          }
-          env.HARNESS_BUNDLE_SHA256 = sha
-          if (params.HARNESS == 'jiuwenswarm') {
-            if (pin[0] == 'git') { env.JIUWENSWARM_GIT_SHA = pin[1] } else { env.JIUWENSWARM_RELEASE_SHA256 = pin[1] }
-          } else {
-            if (pin[0] == 'git') { env.ICODE_GIT_SHA = pin[1] } else { env.ICODE_RELEASE_SHA256 = pin[1] }
-          }
-          // A JiuwenSwarm wheel or wheelhouse goes to the shards too, for one whose
-          // task platform needs its own build. An uploaded bundle is the bundle itself.
-          if (params.HARNESS == 'jiuwenswarm' && pin[0] == 'release' && pin[1] != sha) {
-            sh 'mkdir -p jiuwenswarm-release && cp JIUWENSWARM_RELEASE_FILE jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
-            env.JIUWENSWARM_RELEASE_FROM = "${env.JOB_NAME}#${env.BUILD_NUMBER}"
-          }
-          echo "Every shard runs harness bundle ${sha} (${pin[0]} ${pin[1]})"
-        }
-        archiveArtifacts artifacts: 'eval-runs/harness/bundle.tar.gz, eval-runs/harness/bundle.json'
-        script {
-          if (env.JIUWENSWARM_RELEASE_FROM) {
-            archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'
+          try {
+            prepareOn(params.AGENT_LABEL)
+          } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+            throw e
+          } catch (Throwable t) {
+            String elsewhere = "(${params.AGENT_LABEL}) && !\"${at.node}\""
+            List<String> others = []
+            if (at.node) {
+              try {
+                others = nodesByLabel(label: elsewhere, offline: false)
+              } catch (Throwable ignored) {
+              }
+            }
+            // #region agent log
+            echo "[debug 8643d4] H1 prepare failed node=${at.node} others=${others}"
+            // #endregion
+            if (!others) {
+              throw t
+            }
+            echo "Prepare harness failed on ${at.node} (${t}); building it once more on another ${params.AGENT_LABEL} worker: ${others.join(', ')}"
+            prepareOn(elsewhere)
           }
         }
       }
@@ -2767,6 +2796,15 @@ mod tests {
         }
     }
 
+    // #region agent log
+    #[test]
+    #[ignore]
+    fn debug_8643d4_dump_headless_jenkinsfile() {
+        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]));
+        std::fs::write("/tmp/mk3d-8643d4-headless.Jenkinsfile", jf).unwrap();
+    }
+    // #endregion
+
     #[test]
     fn every_dispatcher_prepares_the_harness_once_for_its_shards() {
         let opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
@@ -2777,7 +2815,14 @@ mod tests {
                 let shards = jf.find("stage('Shards')").unwrap();
                 assert!(prep < shards, "{bench} {shape:?}");
                 let stage = &jf[prep..shards];
-                assert!(stage.contains("agent { label \"${params.AGENT_LABEL}\" }"));
+                // A worker that cannot build it is left out, and another builds it once.
+                assert!(!stage.contains("agent { label"), "{bench} {shape:?}");
+                assert!(stage.contains("prepareOn(params.AGENT_LABEL)"));
+                assert!(stage.contains("String elsewhere = \"(${params.AGENT_LABEL}) && !\\\"${at.node}\\\"\""));
+                assert!(stage.contains("others = nodesByLabel(label: elsewhere, offline: false)"));
+                assert_eq!(stage.matches("prepareOn(elsewhere)").count(), 1, "{bench} {shape:?}");
+                let abort = stage.find("catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {\n            throw e").unwrap();
+                assert!(abort < stage.find("catch (Throwable t) {\n            String elsewhere").unwrap());
                 // Git mode prepares too: there is no release-only condition.
                 assert!(!stage.contains("when {"), "{bench} {shape:?}");
                 // The PAT reaches a private clone; no LLM key reaches the build.
