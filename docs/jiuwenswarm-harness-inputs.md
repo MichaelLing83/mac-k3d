@@ -2,14 +2,23 @@
 
 JiuwenSwarm (the Python package `workswarm`) can be evaluated in place of iCode on **DeepSWE only**. Each rollout runs JiuwenSwarm's headless runner, `jiuwenswarm-process --run-json`, inside the DeepSWE task container. The grader, the anti-cheat checks and the report are the same as for iCode.
 
-Two jobs run it:
+Every DeepSWE job runs it with `HARNESS=jiuwenswarm`:
 
 | Job | What it runs |
 |-----|--------------|
-| `build_jiuwenswarm_headless` | A list of questions (`TASKS`), or else the first `N_TASKS` (all 113 by default), each question × `N_ROLLOUTS`. It prepares JiuwenSwarm once, then queues one `deepswe_one_task` build per question and rollout, and merges them into one report |
-| `deepswe_one_task` with `HARNESS=jiuwenswarm` | One question, one rollout. Its JiuwenSwarm fields are on the developer page; on the user page they keep their defaults |
+| `deepswe_one_task` | One question, one rollout |
+| `deepswe_some_task` | A list of questions (`TASKS`), or else the first `N_TASKS`, each question × `N_ROLLOUTS`. It prepares JiuwenSwarm once, then queues one `deepswe_one_task` build per question and rollout with `HARNESS=jiuwenswarm`, and merges them into one report |
+| `deepswe_full_suite_task` | The same for all 113 questions |
 
-`mac-k3d config` writes `build_jiuwenswarm_headless` on the controller with the other eval jobs, so a hand-made job of that name is replaced. Every job and its page: [jenkins-jobs.md](jenkins-jobs.md).
+The LoLBench and SWE-bench Pro jobs offer iCode only. `mac-k3d config` deletes `build_jiuwenswarm_headless`, the separate JiuwenSwarm dispatcher of earlier versions; its runs are `deepswe_some_task` and `deepswe_full_suite_task` builds now. Every job and its page: [jenkins-jobs.md](jenkins-jobs.md).
+
+## The job page
+
+The DeepSWE pages carry both harnesses' fields, and show the ones of the `HARNESS` you pick. With `HARNESS=jiuwenswarm`, the `JIUWENSWARM_*` text and choice fields are drawn with their help, and each `ICODE_*` one says `Not used with this HARNESS`; picking `icode` swaps them. The Active Choices plugin (`uno-choice`) redraws them. `mac-k3d start` installs it, and `mac-k3d config` pre-approves the fields' scripts on **Manage Jenkins > In-process Script Approval**. When `config` cannot pre-approve them it prints a warning. Until an administrator approves them there, those fields show `Could not draw this field. The build uses its default.`
+
+Jenkins cannot hide a file field, so `ICODE_RELEASE_FILE` and `JIUWENSWARM_RELEASE_FILE` stay on the page, labelled `iCode only (HARNESS=icode).` and `JiuwenSwarm only (HARNESS=jiuwenswarm).`. On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each labelled the same way.
+
+A field left out of a remote trigger (`buildWithParameters`) or of a dispatcher's call keeps the job's default, as a field left untouched on the page does.
 
 ## Two inputs
 
@@ -102,11 +111,11 @@ The page defaults come from `jenkins_job` in the controller's `config.yaml`:
 | `default_jiuwenswarm_git_ref` | `2` | `JIUWENSWARM_GIT_REF` |
 | `default_jiuwenswarm_git_ref_kind` | `pr` | `JIUWENSWARM_GIT_REF_KIND` |
 
-After changing them, run `mac-k3d config --skip-secrets` on the controller to rewrite the jobs, or use `scripts/push_controller_job_defaults.sh`. `mac-k3d set --harness jiuwenswarm` makes JiuwenSwarm the default `HARNESS` of `deepswe_one_task` only; every other job keeps iCode.
+After changing them, run `mac-k3d config --skip-secrets` on the controller to rewrite the jobs, or use `scripts/push_controller_job_defaults.sh`. `mac-k3d set --harness jiuwenswarm` makes JiuwenSwarm the default `HARNESS` of the three DeepSWE jobs; the LoLBench and SWE-bench Pro jobs keep iCode.
 
 ## From the CLI
 
-`mac-k3d eval --harness jiuwenswarm` queues a git build. `--job one` queues `deepswe_one_task`; `--job some` and `--job full` queue `build_jiuwenswarm_headless`:
+`mac-k3d eval --harness jiuwenswarm` queues a git build with `HARNESS=jiuwenswarm`. `--job one`, `--job some` and `--job full` queue `deepswe_one_task`, `deepswe_some_task` and `deepswe_full_suite_task`:
 
 ```bash
 mac-k3d eval --job one --harness jiuwenswarm --task abs-module-cache-flags --yes
@@ -115,7 +124,7 @@ mac-k3d eval --job some --harness jiuwenswarm --tasks abs-module-cache-flags,ytt
 mac-k3d eval --job full --harness jiuwenswarm --yes
 ```
 
-`--job some` needs `--tasks` or `--n-tasks`, because the page runs all 113 questions when both are empty; for that, use `--job full`. Each harness takes only its own flags: `--icode-git-*` with `--harness jiuwenswarm` is refused, and so is `--jiuwenswarm-git-*` without it. Every flag: [commands.md](commands.md#mac-k3d-eval).
+Without `--tasks`, `--job some` runs the first `N_TASKS` questions, as the page does. Each harness takes only its own flags: `--icode-git-*` with `--harness jiuwenswarm` is refused, and so is `--jiuwenswarm-git-*` without it. Every flag: [commands.md](commands.md#mac-k3d-eval).
 
 `mac-k3d eval --local` evaluates iCode only. To build and store JiuwenSwarm on a worker without a rollout, run the dispatcher's prepare step from an extracted pipeline:
 

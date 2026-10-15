@@ -96,14 +96,7 @@ pub enum JobShape {
     Some_,
     /// Dispatcher over the whole suite.
     FullSuite,
-    /// `build_jiuwenswarm_headless`: the JiuwenSwarm dispatcher on DeepSWE,
-    /// over a list (TASKS) or the first N (N_TASKS, all by default). Its
-    /// shards are `deepswe_one_task` builds with HARNESS=jiuwenswarm.
-    Headless,
 }
-
-/// The JiuwenSwarm entry job, written by `mac-k3d config` like the suite jobs.
-pub const JIUWENSWARM_HEADLESS: &str = "build_jiuwenswarm_headless";
 
 impl JobShape {
     fn suffix(self) -> &'static str {
@@ -111,7 +104,6 @@ impl JobShape {
             JobShape::One => "one_task",
             JobShape::Some_ => "some_task",
             JobShape::FullSuite => "full_suite_task",
-            JobShape::Headless => "headless",
         }
     }
 
@@ -149,12 +141,8 @@ impl UiProfile {
 }
 
 /// `deepswe_one_task`, `lolbench_some_task`, `swebenchpro_full_suite_task`, …
-/// and `build_jiuwenswarm_headless`.
 pub fn eval_job_name(job_benchmark: &str, shape: JobShape) -> String {
-    match shape {
-        JobShape::Headless => JIUWENSWARM_HEADLESS.into(),
-        _ => format!("{job_benchmark}_{}", shape.suffix()),
-    }
+    format!("{job_benchmark}_{}", shape.suffix())
 }
 
 fn benchmark_label(job_benchmark: &str) -> &'static str {
@@ -174,20 +162,27 @@ fn job_description(job_benchmark: &str) -> String {
     } else {
         ""
     };
-    let harness = if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
-        "a harness (HARNESS: iCode or JiuwenSwarm)"
-    } else {
-        "the iCode harness"
-    };
+    let harness = harness_phrase(job_benchmark);
     format!(
         "Evaluate {harness} with an LLM call on one {label} task. Harbor runs the harness plus the DeepSeek catalog model, then the same model with no harness.{extra} See docs/user-guide.md."
     )
+}
+
+/// What a job of this suite evaluates, for its blurb.
+fn harness_phrase(job_benchmark: &str) -> &'static str {
+    if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
+        "a harness (HARNESS: iCode or JiuwenSwarm)"
+    } else {
+        "the iCode harness"
+    }
 }
 
 fn shape_description(job_benchmark: &str, shape: JobShape) -> String {
     let label = benchmark_label(job_benchmark);
     let size = full_suite_size(job_benchmark);
     let shard_job = eval_job_name(job_benchmark, JobShape::One);
+    let harness = harness_phrase(job_benchmark);
+    let prepare = "Prepare harness builds the harness once and every shard runs that build.";
     match shape {
         JobShape::One => {
             let readers = shard_readers(job_benchmark);
@@ -199,13 +194,10 @@ fn shape_description(job_benchmark: &str, shape: JobShape) -> String {
             )
         }
         JobShape::Some_ => format!(
-            "Evaluate the iCode harness on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/user-guide.md."
+            "Evaluate {harness} on a list of {label} questions (TASKS) or the first N (N_TASKS) at the full rollout count. {prepare} Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/user-guide.md."
         ),
         JobShape::FullSuite => format!(
-            "Run the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/harbor-delegation-multiworker/README.md."
-        ),
-        JobShape::Headless => format!(
-            "Evaluate the JiuwenSwarm harness on {label}: a list of questions (TASKS), or else the first N_TASKS (all {size} by default), at N_ROLLOUTS attempts each. Prepare harness builds JiuwenSwarm once from JIUWENSWARM_MODE (a git ref, or an uploaded .whl, wheelhouse .tar.gz or mac-k3d bundle); each question and rollout is one {shard_job} build that runs that bundle. This build merges them into one report. See docs/jiuwenswarm-harness-inputs.md."
+            "Evaluate {harness} on the whole {label} suite ({size} questions) at N_ROLLOUTS attempts each. {prepare} Each question and rollout is one {shard_job} build; Jenkins places it. This build merges them into one report. See docs/harbor-delegation-multiworker/README.md."
         ),
     }
 }
@@ -241,9 +233,6 @@ fn n_tasks_param_description(job_benchmark: &str, shape: JobShape) -> String {
         JobShape::FullSuite => format!(
             "How many questions of the suite to run, lowest ids first. The full suite is {size}; lower it for a rehearsal."
         ),
-        JobShape::Headless => format!(
-            "Used only when TASKS is empty: the first N sorted question ids. The default, {size}, is the whole suite."
-        ),
         _ => format!(
             "Used only when TASKS is empty: the first N sorted question ids. Full suite is {size}; use the full_suite_task job for all of them."
         ),
@@ -257,34 +246,30 @@ fn benchmark_param_description(job_benchmark: &str) -> String {
     )
 }
 
-fn harness_param_description(choices: &[&str], shape: JobShape) -> String {
+fn harness_param_description(choices: &[&str]) -> String {
     if choices.len() > 1 {
         return format!(
-            "The harness this build evaluates: {}. The first is the controller's default (mac-k3d set --harness). A dispatcher's shards always run its own harness.",
+            "The harness this build evaluates: {}. The first is the controller's default (mac-k3d set --harness). The page shows the inputs of the harness you pick; a dispatcher's shards run the same harness.",
             choices.join(" or ")
         );
     }
-    match shape {
-        JobShape::Headless => "The harness this job evaluates: JiuwenSwarm, on DeepSWE. For iCode use deepswe_some_task.".into(),
-        JobShape::Some_ | JobShape::FullSuite if eval_catalog::HARNESSES.len() > 1 => format!(
-            "The harness this job evaluates: iCode. For JiuwenSwarm on DeepSWE use {JIUWENSWARM_HEADLESS}."
-        ),
-        _ => "The harness this job evaluates. Fixed so every build names what it tested.".into(),
-    }
+    "The harness this job evaluates. Fixed so every build names what it tested.".into()
 }
 
-/// HARNESS on this job's page: a choice on a `one_task` whose benchmark more
-/// than one harness runs on, with the controller's default first when the
-/// benchmark runs it. Fixed on a dispatcher, whose page has that harness's
-/// inputs: the suite dispatchers iCode's, `build_jiuwenswarm_headless` JiuwenSwarm's.
-fn harness_choices<'a>(job_benchmark: &str, shape: JobShape, opts: &'a JobOpts) -> Vec<&'a str> {
-    match shape {
-        JobShape::One => eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness)
-            .into_iter()
-            .filter(|h| eval_catalog::harness_supports(h, job_benchmark))
-            .collect(),
-        JobShape::Headless => vec!["jiuwenswarm"],
-        JobShape::Some_ | JobShape::FullSuite => vec!["icode"],
+/// HARNESS on every job of a benchmark: the harnesses that run on it, with the
+/// controller's default first when the benchmark runs it.
+fn harness_choices<'a>(job_benchmark: &str, opts: &'a JobOpts) -> Vec<&'a str> {
+    eval_catalog::choices_preferred_first(eval_catalog::HARNESSES, &opts.default_harness)
+        .into_iter()
+        .filter(|h| eval_catalog::harness_supports(h, job_benchmark))
+        .collect()
+}
+
+/// The harness label a page shows next to that harness's inputs.
+fn harness_label(harness: &str) -> &'static str {
+    match harness {
+        "jiuwenswarm" => "JiuwenSwarm",
+        _ => "iCode",
     }
 }
 
@@ -322,6 +307,10 @@ pub struct JobOpts {
     pub credential_ids: Vec<String>,
     /// Non-empty value ticks "Trigger builds remotely" on every eval job.
     pub remote_trigger_token: String,
+    /// The controller has Active Choices (`uno-choice`), so a page with more
+    /// than one harness shows only the chosen harness's inputs. Without it the
+    /// page shows every input, each labelled with its harness.
+    pub active_choices: bool,
 }
 
 impl JobOpts {
@@ -414,6 +403,7 @@ impl JobOpts {
             ui_profile: UiProfile::parse(&config.jenkins_job.ui_profile),
             credential_ids,
             remote_trigger_token: config.jenkins.remote_trigger_token.trim().to_string(),
+            active_choices: true,
         }
     }
 }
@@ -725,7 +715,7 @@ fn shape_defaults(opts: &JobOpts, job_benchmark: &str, shape: JobShape) -> (Stri
             (task, 1, String::new(), 1)
         }
         JobShape::Some_ => (String::new(), n_tasks.max(2), tasks, rollouts),
-        JobShape::FullSuite | JobShape::Headless => (
+        JobShape::FullSuite => (
             String::new(),
             full_suite_size(job_benchmark),
             String::new(),
@@ -776,6 +766,10 @@ struct ParamSpec {
     kind: ParamKind,
     description: String,
     show: Show,
+    /// Set on a harness's own input when HARNESS offers more than one harness.
+    /// A choice or text field then renders as an Active Choices field that
+    /// shows its control only while HARNESS is this harness.
+    harness: Option<&'static str>,
 }
 
 impl ParamSpec {
@@ -794,6 +788,15 @@ impl ParamSpec {
             ParamKind::StashedFile => String::new(),
         }
     }
+
+    /// The harness whose selection shows this field, when it renders reactive.
+    fn reactive(&self, profile: UiProfile) -> Option<&'static str> {
+        match self.kind {
+            ParamKind::StashedFile => None,
+            _ if !self.visible(profile) => None,
+            _ => self.harness,
+        }
+    }
 }
 
 fn choice_param(name: &'static str, choices: &[&str], description: &str, show: Show) -> ParamSpec {
@@ -802,6 +805,7 @@ fn choice_param(name: &'static str, choices: &[&str], description: &str, show: S
         kind: ParamKind::Choice(choices.iter().map(|s| s.to_string()).collect()),
         description: description.to_string(),
         show,
+        harness: None,
     }
 }
 
@@ -811,24 +815,48 @@ fn text_param(name: &'static str, default: impl ToString, description: &str, sho
         kind: ParamKind::Text(default.to_string()),
         description: description.to_string(),
         show,
+        harness: None,
     }
 }
 
+fn file_param(name: &'static str, description: &str, show: Show) -> ParamSpec {
+    ParamSpec {
+        name,
+        kind: ParamKind::StashedFile,
+        description: description.to_string(),
+        show,
+        harness: None,
+    }
+}
+
+/// iCode's inputs: mode, release upload, git URL / ref / kind.
+fn icode_params(opts: &JobOpts, shape: JobShape) -> Vec<ParamSpec> {
+    let modes = eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts));
+    let kinds = eval_catalog::choices_preferred_first(
+        eval_catalog::ICODE_GIT_REF_KINDS,
+        &opts.default_icode_git_ref_kind,
+    );
+    let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
+    vec![
+        choice_param("ICODE_MODE", &modes, DESC_ICODE_MODE, Show::Always),
+        file_param("ICODE_RELEASE_FILE", DESC_ICODE_RELEASE_FILE, Show::Always),
+        text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Show::Always),
+        text_param("ICODE_GIT_REF", &opts.default_icode_git_ref, DESC_ICODE_GIT_REF, Show::Always),
+        choice_param("ICODE_GIT_REF_KIND", &kinds, DESC_ICODE_GIT_REF_KIND, Show::Always),
+    ]
+}
+
 /// JiuwenSwarm's inputs (mode, release upload, git URL / ref / kind) and its
-/// run settings (agent mode, max turns), each shown as `show` says.
-fn jiuwenswarm_params(opts: &JobOpts, show: Show) -> (Vec<ParamSpec>, Vec<ParamSpec>) {
+/// run settings (agent mode, max turns).
+fn jiuwenswarm_params(opts: &JobOpts) -> (Vec<ParamSpec>, Vec<ParamSpec>) {
+    let show = Show::Always;
     let kinds = eval_catalog::choices_preferred_first(
         eval_catalog::ICODE_GIT_REF_KINDS,
         &opts.default_jiuwenswarm_git_ref_kind,
     );
     let inputs = vec![
         choice_param("JIUWENSWARM_MODE", eval_catalog::JIUWENSWARM_MODES, DESC_JIUWENSWARM_MODE, show),
-        ParamSpec {
-            name: "JIUWENSWARM_RELEASE_FILE",
-            kind: ParamKind::StashedFile,
-            description: DESC_JIUWENSWARM_RELEASE_FILE.into(),
-            show,
-        },
+        file_param("JIUWENSWARM_RELEASE_FILE", DESC_JIUWENSWARM_RELEASE_FILE, show),
         text_param("JIUWENSWARM_GIT_URL", opts.default_jiuwenswarm_git_url.trim(), DESC_JIUWENSWARM_GIT_URL, show),
         text_param("JIUWENSWARM_GIT_REF", &opts.default_jiuwenswarm_git_ref, DESC_JIUWENSWARM_GIT_REF, show),
         choice_param("JIUWENSWARM_GIT_REF_KIND", &kinds, DESC_JIUWENSWARM_GIT_REF_KIND, show),
@@ -845,6 +873,31 @@ fn jiuwenswarm_params(opts: &JobOpts, show: Show) -> (Vec<ParamSpec>, Vec<ParamS
     (inputs, settings)
 }
 
+/// Ties `specs` to `harness` on a page that offers more than one. With
+/// `reactive` the choice and text fields render as Active Choices fields; a
+/// field that stays static (an upload always does) says in its help which
+/// harness reads it.
+fn for_harness(specs: Vec<ParamSpec>, harness: &'static str, multi: bool, reactive: bool) -> Vec<ParamSpec> {
+    if !multi {
+        return specs;
+    }
+    specs
+        .into_iter()
+        .map(|mut spec| {
+            if reactive && !matches!(spec.kind, ParamKind::StashedFile) {
+                spec.harness = Some(harness);
+            } else {
+                spec.description = format!(
+                    "{} only (HARNESS={harness}). {}",
+                    harness_label(harness),
+                    spec.description
+                );
+            }
+            spec
+        })
+        .collect()
+}
+
 /// Every parameter of one job, in display order. HARNESS / LLM / BENCHMARK come
 /// first on every shape and profile so a build always says what it evaluates.
 fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<ParamSpec> {
@@ -852,38 +905,21 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
     let (task, n_tasks, tasks, n_rollouts) = shape_defaults(opts, job_benchmark, shape);
     let model_choices =
         eval_catalog::choices_preferred_first(eval_catalog::MODELS, &opts.default_deepseek_model);
-    let git_kind_choices = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_icode_git_ref_kind,
-    );
-    let harnesses = harness_choices(job_benchmark, shape, opts);
+    let harnesses = harness_choices(job_benchmark, opts);
+    let multi = harnesses.len() > 1;
     let mut p = vec![
-        choice_param("HARNESS", &harnesses, &harness_param_description(&harnesses, shape), Always),
+        choice_param("HARNESS", &harnesses, &harness_param_description(&harnesses), Always),
         choice_param("LLM", &[opts.default_llm.as_str()], llm_param_description(), Always),
         choice_param("BENCHMARK", &[job_benchmark], &benchmark_param_description(job_benchmark), Always),
     ];
-    // The JiuwenSwarm job has its inputs in place of iCode's.
-    let icode_inputs = shape != JobShape::Headless;
     match shape {
         JobShape::One => {
             p.push(text_param("TASK", task, &task_param_description(job_benchmark), Always));
             // One build is one rollout. Several rollouts of one question go
             // through some_task with TASKS set to that id.
             p.push(text_param("N_ROLLOUTS", 1, "Fixed: one rollout. Use some_task for more.", Never));
-            p.push(choice_param(
-                "ICODE_MODE",
-                &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
-                DESC_ICODE_MODE,
-                Always,
-            ));
-            p.push(ParamSpec {
-                name: "ICODE_RELEASE_FILE",
-                kind: ParamKind::StashedFile,
-                description: DESC_ICODE_RELEASE_FILE.into(),
-                show: Always,
-            });
         }
-        JobShape::Some_ | JobShape::Headless => {
+        JobShape::Some_ => {
             p.push(text_param("TASKS", tasks, DESC_TASKS, Always));
             p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Always));
         }
@@ -897,39 +933,17 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             Always,
         ));
     }
-    if shape.is_dispatcher() && icode_inputs {
-        p.push(choice_param(
-            "ICODE_MODE",
-            &eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts)),
-            DESC_ICODE_MODE,
-            Always,
-        ));
-        p.push(ParamSpec {
-            name: "ICODE_RELEASE_FILE",
-            kind: ParamKind::StashedFile,
-            description: DESC_ICODE_RELEASE_FILE.into(),
-            show: Always,
-        });
-    }
-    if icode_inputs {
-        let git_url_desc = if shape.is_dispatcher() { DESC_DISPATCH_ICODE_GIT_URL } else { DESC_ICODE_GIT_URL };
-        p.push(text_param("ICODE_GIT_URL", opts.default_icode_git_url.trim(), git_url_desc, Always));
-        p.push(text_param("ICODE_GIT_REF", &opts.default_icode_git_ref, DESC_ICODE_GIT_REF, Always));
-        p.push(choice_param("ICODE_GIT_REF_KIND", &git_kind_choices, DESC_ICODE_GIT_REF_KIND, Always));
-    }
-    let headless_fields = (shape == JobShape::Headless).then(|| jiuwenswarm_params(opts, Always));
-    if let Some((inputs, _)) = &headless_fields {
-        p.extend(inputs.iter().cloned());
+    let reactive = opts.active_choices;
+    p.extend(for_harness(icode_params(opts, shape), "icode", multi, reactive));
+    let jiuwenswarm = harnesses
+        .contains(&"jiuwenswarm")
+        .then(|| jiuwenswarm_params(opts));
+    if let Some((inputs, _)) = &jiuwenswarm {
+        p.extend(for_harness(inputs.clone(), "jiuwenswarm", multi, reactive));
     }
     p.push(choice_param("DEEPSEEK_MODEL", &model_choices, DESC_DEEPSEEK_MODEL, Always));
-    if let Some((_, settings)) = headless_fields {
-        p.extend(settings);
-    }
-    // For a direct JiuwenSwarm build of deepswe_one_task: developer page only.
-    if shape == JobShape::One && eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
-        let (inputs, settings) = jiuwenswarm_params(opts, Developer);
-        p.extend(inputs);
-        p.extend(settings);
+    if let Some((_, settings)) = jiuwenswarm {
+        p.extend(for_harness(settings, "jiuwenswarm", multi, reactive));
     }
 
     match shape {
@@ -953,7 +967,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             p.push(text_param("ATTEMPT", 1, DESC_ATTEMPT, Never));
             p.push(text_param("OOM_RETRIES", opts.oom_retries, DESC_OOM_RETRIES, Never));
         }
-        JobShape::Some_ | JobShape::Headless => {}
+        JobShape::Some_ => {}
         JobShape::FullSuite => {
             p.push(text_param("N_TASKS", n_tasks, &n_tasks_param_description(job_benchmark, shape), Developer));
         }
@@ -976,10 +990,8 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
             Developer,
         ),
         text_param("DEEPSWE_REF", "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea", "DeepSWE commit pinned by P2.", Developer),
+        text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer),
     ]);
-    if shape != JobShape::Headless {
-        p.push(text_param("LOLBENCH_REF", "1b10d10bb4a10cea54374ac34b8f76b69dc8ce75", "LoLBench commit pinned by P2.", Developer));
-    }
     for spec in &mut p {
         if spec.show == Developer {
             spec.description = format!("{DEVELOPER_PREFIX}{}", spec.description);
@@ -1012,7 +1024,71 @@ pub fn job_params(job_benchmark: &str, shape: JobShape) -> Vec<JobParam> {
         .collect()
 }
 
-fn groovy_params(params: &[ParamSpec], profile: UiProfile) -> String {
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// The help Jenkins shows under a reactive field whatever HARNESS is. Its full
+/// help is part of the control, so only the chosen harness's help is shown.
+fn reactive_description(harness: &str) -> String {
+    format!("{} input. Shown while HARNESS is {harness}.", harness_label(harness))
+}
+
+/// Groovy that Active Choices runs to draw a reactive field, one line. While
+/// HARNESS is `harness` it returns the control, named `value` so its value is
+/// the parameter's; otherwise a hidden `value` that keeps the default. Runs
+/// outside the sandbox, which would strip the controls; the text is fixed per
+/// field, so `mac-k3d config` pre-approves exactly these scripts.
+fn reactive_script(spec: &ParamSpec, harness: &str) -> String {
+    let default = spec.default_value();
+    let help = format!(r#"<div class="jenkins-form-description">{}</div>"#, html_escape(&spec.description));
+    let control = match &spec.kind {
+        ParamKind::Choice(choices) => {
+            let options: String = choices
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let selected = if i == 0 { " selected" } else { "" };
+                    format!(r#"<option value="{0}"{selected}>{0}</option>"#, html_escape(c))
+                })
+                .collect();
+            format!(
+                r#"<div class="jenkins-select"><select name="value" class="jenkins-select__input">{options}</select></div>"#
+            )
+        }
+        _ => format!(
+            r#"<input name="value" type="text" class="jenkins-input setting-input" value="{}">"#,
+            html_escape(&default)
+        ),
+    };
+    let shown = format!("{control}{help}");
+    let kept = format!(
+        r#"<input name="value" type="hidden" value="{}"><div class="jenkins-form-description">Not used with this HARNESS. Pick HARNESS={harness} to set it.</div>"#,
+        html_escape(&default)
+    );
+    format!(
+        "def h = binding.hasVariable('HARNESS') ? HARNESS : ''; if (h == '{}') {{ return '{}' }}; return '{}'",
+        groovy_escape(harness),
+        groovy_escape(&shown),
+        groovy_escape(&kept)
+    )
+}
+
+/// What a reactive field shows when its script cannot run. Sandboxed, so it
+/// needs no approval; the build then reads the field's default.
+const REACTIVE_FALLBACK_SCRIPT: &str = "return 'Could not draw this field. The build uses its default.'";
+
+/// Active Choices finds a field's job by this id when it has no other way,
+/// so it is unique across jobs.
+fn reactive_random_name(job: &str, name: &str) -> String {
+    format!("choice-parameter-{job}-{name}").to_ascii_lowercase()
+}
+
+fn groovy_params(params: &[ParamSpec], profile: UiProfile, job: &str) -> String {
     params
         .iter()
         .map(|p| {
@@ -1021,6 +1097,15 @@ fn groovy_params(params: &[ParamSpec], profile: UiProfile) -> String {
             if !p.visible(profile) {
                 let default = groovy_escape(&p.default_value());
                 return format!("    hidden(name: '{name}', defaultValue: '{default}', description: '{desc}')");
+            }
+            if let Some(harness) = p.reactive(profile) {
+                return format!(
+                    "    activeChoiceHtml(name: '{name}', description: '{}', randomName: '{}', referencedParameters: 'HARNESS', choiceType: 'ET_FORMATTED_HTML', omitValueField: true, script: [$class: 'GroovyScript', script: [classpath: [], sandbox: false, script: '{}'], fallbackScript: [classpath: [], sandbox: true, script: '{}']])",
+                    groovy_escape(&reactive_description(harness)),
+                    reactive_random_name(job, name),
+                    groovy_escape(&reactive_script(p, harness)),
+                    groovy_escape(REACTIVE_FALLBACK_SCRIPT),
+                );
             }
             match &p.kind {
                 ParamKind::Choice(choices) => {
@@ -1041,7 +1126,7 @@ fn groovy_params(params: &[ParamSpec], profile: UiProfile) -> String {
         .join("\n")
 }
 
-fn xml_params(params: &[ParamSpec], profile: UiProfile) -> String {
+fn xml_params(params: &[ParamSpec], profile: UiProfile, job: &str) -> String {
     params
         .iter()
         .map(|p| {
@@ -1055,6 +1140,34 @@ fn xml_params(params: &[ParamSpec], profile: UiProfile) -> String {
           <defaultValue>{}</defaultValue>
         </com.wangyin.parameter.WHideParameterDefinition>"#,
                     xml_escape(&p.default_value())
+                );
+            }
+            if let Some(harness) = p.reactive(profile) {
+                return format!(
+                    r#"        <org.biouno.unochoice.DynamicReferenceParameter plugin="uno-choice">
+          <name>{name}</name>
+          <description>{}</description>
+          <randomName>{}</randomName>
+          <visibleItemCount>1</visibleItemCount>
+          <script class="org.biouno.unochoice.model.GroovyScript">
+            <secureScript plugin="script-security">
+              <script>{}</script>
+              <sandbox>false</sandbox>
+            </secureScript>
+            <secureFallbackScript plugin="script-security">
+              <script>{}</script>
+              <sandbox>true</sandbox>
+            </secureFallbackScript>
+          </script>
+          <parameters class="linked-hash-map"/>
+          <referencedParameters>HARNESS</referencedParameters>
+          <choiceType>ET_FORMATTED_HTML</choiceType>
+          <omitValueField>true</omitValueField>
+        </org.biouno.unochoice.DynamicReferenceParameter>"#,
+                    xml_escape(&reactive_description(harness)),
+                    xml_escape(&reactive_random_name(job, p.name)),
+                    xml_escape(&reactive_script(p, harness)),
+                    xml_escape(REACTIVE_FALLBACK_SCRIPT),
                 );
             }
             match &p.kind {
@@ -1104,12 +1217,30 @@ fn shard_readers(job_benchmark: &str) -> Vec<String> {
 }
 
 /// The dispatchers that queue this suite's one_task builds.
-fn dispatchers(job_benchmark: &str) -> Vec<JobShape> {
-    let mut shapes = vec![JobShape::Some_, JobShape::FullSuite];
-    if eval_catalog::harness_supports("jiuwenswarm", job_benchmark) {
-        shapes.push(JobShape::Headless);
+fn dispatchers(_job_benchmark: &str) -> Vec<JobShape> {
+    vec![JobShape::Some_, JobShape::FullSuite]
+}
+
+/// A reactive field left out of an API trigger, a `build job:` call or a
+/// re-queue gets no dependable value from Active Choices. Every build reads
+/// these fields through this block: the value sent when it is one, else the
+/// job's default.
+fn reactive_env_block(params: &[ParamSpec], profile: UiProfile) -> String {
+    let lines: Vec<String> = params
+        .iter()
+        .filter(|p| p.reactive(profile).is_some())
+        .map(|p| {
+            let n = p.name;
+            format!(
+                "    {n} = \"${{(params.{n} ?: '').trim() && !(params.{n} ?: '').contains('<') ? params.{n}.trim() : '{}'}}\"",
+                groovy_escape(&p.default_value())
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
     }
-    shapes
+    format!("  environment {{\n{}\n  }}\n\n", lines.join("\n"))
 }
 
 const DISPLAY_NAME_GROOVY: &str =
@@ -1199,7 +1330,9 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
     if shape.is_dispatcher() {
         return dispatcher_jenkinsfile(job_benchmark, shape, opts);
     }
-    let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
+    let specs = eval_params(job_benchmark, shape, opts);
+    let params = groovy_params(&specs, opts.ui_profile, &eval_job_name(job_benchmark, shape));
+    let environment = reactive_env_block(&specs, opts.ui_profile);
     let readers = groovy_escape(&shard_readers(job_benchmark).join(","));
     let bootstrap = eval_bootstrap_sh(job_benchmark, opts, 12);
     let stages = EVAL_STAGES
@@ -1217,7 +1350,7 @@ fn eval_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Str
     copyArtifactPermission('{readers}')
   }}
 
-  parameters {{
+{environment}  parameters {{
 {params}
   }}
 
@@ -1446,21 +1579,26 @@ set -euo pipefail
 /// runs on `agent none` until the merge, so it never holds a worker executor
 /// while its own shards wait for one.
 fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> String {
-    let params = groovy_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
+    let specs = eval_params(job_benchmark, shape, opts);
+    let params = groovy_params(&specs, opts.ui_profile, &eval_job_name(job_benchmark, shape));
+    let environment = reactive_env_block(&specs, opts.ui_profile);
     let shard_job = groovy_escape(&eval_job_name(job_benchmark, JobShape::One));
-    let ids_from_tasks = if matches!(shape, JobShape::Some_ | JobShape::Headless) {
+    let ids_from_tasks = if shape == JobShape::Some_ {
         "          if (params.TASKS?.trim()) {\n            ids = params.TASKS.split(',').collect { it.trim() }.findAll { it }\n          }\n"
     } else {
         ""
     };
     // Only what both this job and its shard job have.
-    let own: Vec<&str> = eval_params(job_benchmark, shape, opts).iter().map(|p| p.name).collect();
+    let own: Vec<&str> = specs.iter().map(|p| p.name).collect();
+    let reactive: Vec<&str> = specs.iter().filter(|p| p.reactive(opts.ui_profile).is_some()).map(|p| p.name).collect();
     let shard: Vec<&str> = eval_params(job_benchmark, JobShape::One, opts).iter().map(|p| p.name).collect();
     let forwarded = FORWARDED_PARAMS
         .iter()
         .filter(|n| own.contains(n) && shard.contains(n))
         .map(|n| match *n {
             "AGENT_LABEL" => "                  string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL),".to_string(),
+            // The environment block holds the value this build runs with.
+            _ if reactive.contains(n) => format!("                  string(name: '{n}', value: env.{n}),"),
             _ => format!("                  string(name: '{n}', value: params.{n}),"),
         })
         .collect::<Vec<_>>()
@@ -1495,7 +1633,7 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             node(where) {
               at.node = env.NODE_NAME
               deleteDir()
-              String mode = (params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE) ?: 'git'
+              String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'
               String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
               if (mode == 'release') {
                 try {
@@ -1583,7 +1721,7 @@ __CRED_CLOSE__              String sha = readFile('eval-runs/harness/bundle.sha2
     copyArtifactPermission('{shard_job}')
   }}
 
-  parameters {{
+{environment}  parameters {{
 {params}
   }}
 
@@ -1962,7 +2100,11 @@ fn eval_job_xml(
     opts: &JobOpts,
 ) -> String {
     let script = eval_jenkinsfile(job_benchmark, shape, opts);
-    let params = xml_params(&eval_params(job_benchmark, shape, opts), opts.ui_profile);
+    let params = xml_params(
+        &eval_params(job_benchmark, shape, opts),
+        opts.ui_profile,
+        &eval_job_name(job_benchmark, shape),
+    );
     let desc_xml = xml_escape(description);
     let readers: Vec<String> = if shape == JobShape::One {
         shard_readers(job_benchmark)
@@ -2029,39 +2171,135 @@ pub const SWEBENCHPRO_ONE_TASK: &str = "swebenchpro_one_task";
 /// Every suite the job generator knows about.
 pub const EVAL_BENCHMARKS: &[&str] = &["deepswe", "lolbench", "swebenchpro"];
 pub const EVAL_SHAPES: &[JobShape] = &[JobShape::One, JobShape::Some_, JobShape::FullSuite];
+/// The JiuwenSwarm dispatcher an older mac-k3d wrote. `deepswe_some_task` and
+/// `deepswe_full_suite_task` take HARNESS=jiuwenswarm instead.
+pub const RETIRED_JIUWENSWARM_HEADLESS: &str = "build_jiuwenswarm_headless";
 /// Jobs an older mac-k3d created that the current shapes replace.
-const RETIRED_JOBS: &[&str] = &["eval_aggregate"];
+const RETIRED_JOBS: &[&str] = &["eval_aggregate", RETIRED_JIUWENSWARM_HEADLESS];
+/// The plugin that draws a harness's inputs only while HARNESS picks it.
+const ACTIVE_CHOICES_PLUGIN: &str = "uno-choice";
 
-/// Every eval job `mac-k3d config` writes: one / some / full-suite per suite,
-/// then `build_jiuwenswarm_headless` on DeepSWE.
+/// Every eval job `mac-k3d config` writes: one / some / full-suite per suite.
 pub fn eval_jobs() -> Vec<(&'static str, JobShape)> {
-    let mut jobs: Vec<(&'static str, JobShape)> = EVAL_BENCHMARKS
+    EVAL_BENCHMARKS
         .iter()
         .flat_map(|b| EVAL_SHAPES.iter().map(move |s| (*b, *s)))
-        .collect();
-    jobs.push(("deepswe", JobShape::Headless));
-    jobs
+        .collect()
 }
 
 /// Create or update every eval job, and delete retired ones. Jobs that already
 /// exist are rewritten, so running it again after an upgrade is how a
-/// controller picks up a new shape. A `build_jiuwenswarm_headless` made by
-/// hand is replaced the same way.
+/// controller picks up a new shape.
 pub fn ensure_eval_jobs(
     jenkins_url: &str,
     api_user: &str,
     api_token_or_password: &str,
     opts: &JobOpts,
 ) -> Result<()> {
+    let base = jenkins_url.trim_end_matches('/');
+    wait_for_jenkins(base, api_user, api_token_or_password, Duration::from_secs(90))?;
+    let session = Session::open(base, api_user, api_token_or_password)?;
+    let mut opts = opts.clone();
+    opts.active_choices = opts.active_choices && plugin_active(&session, ACTIVE_CHOICES_PLUGIN);
+    if opts.active_choices {
+        preapprove_reactive_scripts(&session, &opts);
+    } else {
+        println!(
+            "Note: Jenkins has no active '{ACTIVE_CHOICES_PLUGIN}' plugin, so the DeepSWE pages show the inputs of \
+             every harness, each labelled with its harness. Run `mac-k3d start` on the controller to install it."
+        );
+    }
     for (bench, shape) in eval_jobs() {
         let name = eval_job_name(bench, shape);
-        let xml = eval_job_xml(bench, shape, &shape_description(bench, shape), opts);
+        let xml = eval_job_xml(bench, shape, &shape_description(bench, shape), &opts);
         ensure_named_one_task_xml(&name, &xml, jenkins_url, api_user, api_token_or_password)?;
     }
     for name in RETIRED_JOBS {
         delete_job_if_present(name, jenkins_url, api_user, api_token_or_password)?;
     }
     Ok(())
+}
+
+/// Whether `short_name` is installed and active on the controller.
+fn plugin_active(session: &Session, short_name: &str) -> bool {
+    let Some(body) = session.get("/pluginManager/api/json?depth=1&tree=plugins%5BshortName,active%5D") else {
+        return false;
+    };
+    plugin_listed_active(&body, short_name)
+}
+
+fn plugin_listed_active(body: &str, short_name: &str) -> bool {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    json["plugins"].as_array().is_some_and(|plugins| {
+        plugins
+            .iter()
+            .any(|p| p["shortName"].as_str() == Some(short_name) && p["active"].as_bool() == Some(true))
+    })
+}
+
+/// Every unsandboxed Active Choices script the eval jobs render, once each.
+fn reactive_scripts(opts: &JobOpts) -> Vec<String> {
+    let mut scripts: Vec<String> = Vec::new();
+    for (bench, shape) in eval_jobs() {
+        for spec in eval_params(bench, shape, opts) {
+            if let Some(harness) = spec.reactive(opts.ui_profile) {
+                let script = reactive_script(&spec, harness);
+                if !scripts.contains(&script) {
+                    scripts.push(script);
+                }
+            }
+        }
+    }
+    scripts
+}
+
+/// Groovy for `/scriptText` that approves `scripts` ahead of use, so the
+/// harness fields draw without an administrator approving them by hand.
+fn preapprove_groovy(scripts: &[String]) -> String {
+    let encoded = scripts
+        .iter()
+        .map(|s| format!("'{}'", base64_encode(s.as_bytes())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"import org.jenkinsci.plugins.scriptsecurity.scripts.ScriptApproval
+import org.jenkinsci.plugins.scriptsecurity.scripts.languages.GroovyLanguage
+import java.util.Base64
+def approval = ScriptApproval.get()
+int n = 0
+for (String b64 : [{encoded}]) {{
+  approval.preapprove(new String(Base64.decoder.decode(b64), 'UTF-8'), GroovyLanguage.get())
+  n++
+}}
+println("preapproved " + n)
+"#
+    )
+}
+
+/// A failure only warns: the jobs still work once an administrator approves
+/// the scripts on Manage Jenkins > In-process Script Approval.
+fn preapprove_reactive_scripts(session: &Session, opts: &JobOpts) {
+    let scripts = reactive_scripts(opts);
+    if scripts.is_empty() {
+        return;
+    }
+    let want = format!("preapproved {}", scripts.len());
+    match session.script_text(&preapprove_groovy(&scripts)) {
+        Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&want) => {
+            println!("Approved the {} harness field scripts of the DeepSWE jobs.", scripts.len());
+        }
+        Ok(out) => println!(
+            "Warning: could not approve the harness field scripts ({}). Approve them on \
+             Manage Jenkins > In-process Script Approval, or the DeepSWE pages cannot draw the harness inputs.",
+            truncate(String::from_utf8_lossy(&out.stdout).trim(), 200)
+        ),
+        Err(err) => println!(
+            "Warning: could not approve the harness field scripts ({err}). Approve them on \
+             Manage Jenkins > In-process Script Approval, or the DeepSWE pages cannot draw the harness inputs."
+        ),
+    }
 }
 
 fn delete_job_if_present(
@@ -2261,6 +2499,7 @@ mod tests {
             ui_profile: UiProfile::Developer,
             credential_ids: vec!["deepseek-api-key".into(), "gitcode-pat".into()],
             remote_trigger_token: String::new(),
+            active_choices: true,
         }
     }
 
@@ -2289,6 +2528,7 @@ mod tests {
             ui_profile: UiProfile::User,
             credential_ids,
             remote_trigger_token: String::new(),
+            active_choices: true,
         }
     }
 
@@ -2369,6 +2609,56 @@ mod tests {
             .collect()
     }
 
+    fn param_line<'a>(jf: &'a str, name: &str) -> &'a str {
+        let needle = format!("(name: '{name}'");
+        params_block(jf)
+            .lines()
+            .find(|l| l.contains(&needle))
+            .unwrap_or_else(|| panic!("no {name} on the page"))
+    }
+
+    /// The single-quoted Groovy string that starts after `marker`, unescaped.
+    fn groovy_literal_after(line: &str, marker: &str) -> String {
+        let start = line.find(marker).unwrap_or_else(|| panic!("no {marker}")) + marker.len();
+        let mut out = String::new();
+        let mut chars = line[start..].chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => out.push(chars.next().expect("escaped char")),
+                '\'' => return out,
+                _ => out.push(c),
+            }
+        }
+        panic!("unterminated string after {marker}");
+    }
+
+    fn xml_reactive_script(xml: &str, name: &str) -> String {
+        let rest = &xml[xml.find(&format!("<name>{name}</name>")).unwrap_or_else(|| panic!("no {name}"))..];
+        let open = "<secureScript plugin=\"script-security\">\n              <script>";
+        let start = rest.find(open).expect("main script") + open.len();
+        let end = start + rest[start..].find("</script>").expect("end of script");
+        rest[start..end]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
+    }
+
+    /// The DeepSWE fields that redraw when HARNESS changes.
+    const DEEPSWE_REACTIVE_FIELDS: [&str; 10] = [
+        "ICODE_MODE",
+        "ICODE_GIT_URL",
+        "ICODE_GIT_REF",
+        "ICODE_GIT_REF_KIND",
+        "JIUWENSWARM_MODE",
+        "JIUWENSWARM_GIT_URL",
+        "JIUWENSWARM_GIT_REF",
+        "JIUWENSWARM_GIT_REF_KIND",
+        "JIUWENSWARM_AGENT_MODE",
+        "JIUWENSWARM_MAX_TURNS",
+    ];
+
     #[test]
     fn lolbench_one_task_uses_shared_pipeline() {
         let jf = jenkinsfile(&sample_opts());
@@ -2445,58 +2735,64 @@ mod tests {
                 "swebenchpro_full_suite_task",
             ]
         );
-        // The merge happens inside the dispatcher build; no separate job.
-        assert_eq!(RETIRED_JOBS, &["eval_aggregate"]);
+        // The merge happens inside the dispatcher build; no separate job. The
+        // DeepSWE dispatchers take HARNESS=jiuwenswarm, so its own dispatcher goes too.
+        assert_eq!(RETIRED_JOBS, &["eval_aggregate", "build_jiuwenswarm_headless"]);
+        assert_eq!(eval_jobs().len(), 9);
         let opts = deepswe_opts(Vec::new());
         for bench in EVAL_BENCHMARKS {
             for shape in EVAL_SHAPES {
                 let xml = eval_job_xml(bench, *shape, "d", &opts);
                 assert!(!xml.contains("eval_aggregate"), "{bench} {shape:?}");
+                assert!(!xml.contains("build_jiuwenswarm_headless"), "{bench} {shape:?}");
             }
         }
     }
 
+    /// The harness fields every DeepSWE page shows to users, in page order.
+    const DEEPSWE_HARNESS_FIELDS: [&str; 13] = [
+        "ICODE_MODE",
+        "ICODE_RELEASE_FILE",
+        "ICODE_GIT_URL",
+        "ICODE_GIT_REF",
+        "ICODE_GIT_REF_KIND",
+        "JIUWENSWARM_MODE",
+        "JIUWENSWARM_RELEASE_FILE",
+        "JIUWENSWARM_GIT_URL",
+        "JIUWENSWARM_GIT_REF",
+        "JIUWENSWARM_GIT_REF_KIND",
+        "DEEPSEEK_MODEL",
+        "JIUWENSWARM_AGENT_MODE",
+        "JIUWENSWARM_MAX_TURNS",
+    ];
+
     #[test]
     fn each_shape_shows_only_its_params() {
         let opts = deepswe_opts(Vec::new());
+        let page = |head: &[&'static str]| -> Vec<&'static str> {
+            head.iter().copied().chain(DEEPSWE_HARNESS_FIELDS).collect()
+        };
         assert_eq!(
             visible_names("deepswe", JobShape::One, &opts),
-            vec![
-                "HARNESS",
-                "LLM",
-                "BENCHMARK",
-                "TASK",
-                "ICODE_MODE",
-                "ICODE_RELEASE_FILE",
-                "ICODE_GIT_URL",
-                "ICODE_GIT_REF",
-                "ICODE_GIT_REF_KIND",
-                "DEEPSEEK_MODEL",
-            ]
+            page(&["HARNESS", "LLM", "BENCHMARK", "TASK"])
         );
         assert_eq!(
             visible_names("deepswe", JobShape::Some_, &opts),
+            page(&["HARNESS", "LLM", "BENCHMARK", "TASKS", "N_TASKS", "N_ROLLOUTS"])
+        );
+        assert_eq!(
+            visible_names("deepswe", JobShape::FullSuite, &opts),
+            page(&["HARNESS", "LLM", "BENCHMARK", "N_ROLLOUTS"])
+        );
+        // A suite JiuwenSwarm does not run keeps iCode's inputs only.
+        assert_eq!(
+            visible_names("lolbench", JobShape::Some_, &opts),
             vec![
                 "HARNESS",
                 "LLM",
                 "BENCHMARK",
                 "TASKS",
                 "N_TASKS",
-                "N_ROLLOUTS",
-                "ICODE_MODE",
-                "ICODE_RELEASE_FILE",
-                "ICODE_GIT_URL",
-                "ICODE_GIT_REF",
-                "ICODE_GIT_REF_KIND",
-                "DEEPSEEK_MODEL",
-            ]
-        );
-        assert_eq!(
-            visible_names("deepswe", JobShape::FullSuite, &opts),
-            vec![
-                "HARNESS",
-                "LLM",
-                "BENCHMARK",
                 "N_ROLLOUTS",
                 "ICODE_MODE",
                 "ICODE_RELEASE_FILE",
@@ -2608,7 +2904,7 @@ mod tests {
                 for shape in EVAL_SHAPES {
                     let jf = eval_jenkinsfile(bench, *shape, &opts);
                     let first: Vec<&str> = params_block(&jf).lines().take(3).collect();
-                    let harnesses = if *bench == "deepswe" && *shape == JobShape::One {
+                    let harnesses = if *bench == "deepswe" {
                         "['icode', 'jiuwenswarm']"
                     } else {
                         "['icode']"
@@ -2748,7 +3044,7 @@ mod tests {
         assert!(jf.contains("string(name: 'ROLLOUT', value: \"${unit.rollout}\")"));
         assert!(jf.contains("quietPeriod: 0"));
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
-        assert!(jf.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
+        assert!(jf.contains("string(name: 'ICODE_MODE', value: env.ICODE_MODE)"));
         // One Prepare harness stage pins the harness and its bundle for every shard.
         assert!(!jf.contains("stage('iCode release')"));
         assert!(!jf.contains("stage('Pin iCode')"));
@@ -2780,10 +3076,13 @@ mod tests {
         assert!(jf.contains("env.SHARD_BUILDS = shardBuilds.values().join(',')"));
         assert!(jf.contains("aggregate_runs.py"));
         assert!(jf.contains("archiveArtifacts artifacts: 'aggregate/**'"));
-        let own: Vec<&str> = eval_params("deepswe", JobShape::Some_, &deepswe_opts(Vec::new())).iter().map(|p| p.name).collect();
+        let specs = eval_params("deepswe", JobShape::Some_, &deepswe_opts(Vec::new()));
+        let own: Vec<&str> = specs.iter().map(|p| p.name).collect();
         for name in FORWARDED_PARAMS {
+            let reactive = specs.iter().any(|p| p.name == *name && p.harness.is_some());
             let line = match *name {
                 "AGENT_LABEL" => "string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL)".to_string(),
+                _ if reactive => format!("string(name: '{name}', value: env.{name})"),
                 _ => format!("string(name: '{name}', value: params.{name})"),
             };
             assert_eq!(jf.contains(&line), own.contains(name), "{name}");
@@ -2855,7 +3154,7 @@ mod tests {
     }
 
     #[test]
-    fn deepswe_one_task_offers_both_harnesses_and_the_rest_stay_fixed() {
+    fn every_deepswe_job_offers_both_harnesses_and_the_rest_stay_fixed() {
         fn choices(bench: &str, shape: JobShape, opts: &JobOpts) -> Vec<String> {
             match &eval_params(bench, shape, opts)[0] {
                 ParamSpec { name: "HARNESS", kind: ParamKind::Choice(c), .. } => c.clone(),
@@ -2863,17 +3162,18 @@ mod tests {
             }
         }
         let mut opts = deepswe_opts(Vec::new());
-        assert_eq!(choices("deepswe", JobShape::One, &opts), ["icode", "jiuwenswarm"]);
-        assert_eq!(choices("deepswe", JobShape::Some_, &opts), ["icode"]);
-        assert_eq!(choices("lolbench", JobShape::One, &opts), ["icode"]);
-        assert_eq!(choices("deepswe", JobShape::Headless, &opts), ["jiuwenswarm"]);
+        for shape in EVAL_SHAPES {
+            assert_eq!(choices("deepswe", *shape, &opts), ["icode", "jiuwenswarm"], "{shape:?}");
+            assert_eq!(choices("lolbench", *shape, &opts), ["icode"], "{shape:?}");
+        }
+        // mac-k3d set --harness puts the controller's default first on every DeepSWE job.
         opts.default_harness = "jiuwenswarm".into();
-        assert_eq!(choices("deepswe", JobShape::One, &opts), ["jiuwenswarm", "icode"]);
-        // A suite dispatcher's page has iCode's inputs; JiuwenSwarm's dispatcher is build_jiuwenswarm_headless.
-        assert_eq!(choices("deepswe", JobShape::FullSuite, &opts), ["icode"]);
-        // A benchmark JiuwenSwarm does not run keeps iCode.
-        assert_eq!(choices("lolbench", JobShape::One, &opts), ["icode"]);
-        let jf = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        for shape in EVAL_SHAPES {
+            assert_eq!(choices("deepswe", *shape, &opts), ["jiuwenswarm", "icode"], "{shape:?}");
+            // A benchmark JiuwenSwarm does not run keeps iCode.
+            assert_eq!(choices("swebenchpro", *shape, &opts), ["icode"], "{shape:?}");
+        }
+        let jf = eval_jenkinsfile("deepswe", JobShape::FullSuite, &deepswe_opts(Vec::new()));
         assert!(params_block(&jf).contains("choice(name: 'HARNESS', choices: ['icode', 'jiuwenswarm']"));
     }
 
@@ -3129,127 +3429,219 @@ mod tests {
     }
 
     #[test]
-    fn config_writes_build_jiuwenswarm_headless_after_the_suite_jobs() {
-        let jobs = eval_jobs();
-        assert_eq!(jobs.len(), EVAL_BENCHMARKS.len() * EVAL_SHAPES.len() + 1);
-        assert_eq!(jobs.last(), Some(&("deepswe", JobShape::Headless)));
-        assert_eq!(eval_job_name("deepswe", JobShape::Headless), "build_jiuwenswarm_headless");
-        let names: Vec<String> = jobs.iter().map(|(b, s)| eval_job_name(b, *s)).collect();
-        assert_eq!(names.iter().filter(|n| *n == JIUWENSWARM_HEADLESS).count(), 1);
-    }
-
-    #[test]
-    fn build_jiuwenswarm_headless_page_has_jiuwenswarm_inputs_only() {
-        let mut opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
-        assert_eq!(
-            visible_names("deepswe", JobShape::Headless, &opts),
-            [
-                "HARNESS", "LLM", "BENCHMARK", "TASKS", "N_TASKS", "N_ROLLOUTS",
-                "JIUWENSWARM_MODE", "JIUWENSWARM_RELEASE_FILE", "JIUWENSWARM_GIT_URL",
-                "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND", "DEEPSEEK_MODEL",
-                "JIUWENSWARM_AGENT_MODE", "JIUWENSWARM_MAX_TURNS",
-            ]
-        );
-        opts.ui_profile = UiProfile::Developer;
-        let developer: Vec<&str> = eval_params("deepswe", JobShape::Headless, &opts)
-            .into_iter()
-            .filter(|p| p.show == Show::Developer)
-            .map(|p| p.name)
-            .collect();
-        assert_eq!(
-            developer,
-            [
-                "MAX_IN_FLIGHT", "OOM_RETRIES", "TEST_MEMORY_MB", "TEST_MEMORY_ATTEMPTS",
-                "AGENT_LABEL", "AGGREGATE_LABEL", "HARBOR_VERSION", "DEEPSWE_REF",
-            ]
-        );
-        let all: Vec<&str> = eval_params("deepswe", JobShape::Headless, &opts).iter().map(|p| p.name).collect();
-        assert!(!all.iter().any(|n| n.starts_with("ICODE_") || *n == "LOLBENCH_REF"), "{all:?}");
-
-        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &opts);
-        let block = params_block(&jf);
-        assert!(block.contains("choice(name: 'HARNESS', choices: ['jiuwenswarm']"));
-        assert!(block.contains("choice(name: 'BENCHMARK', choices: ['deepswe']"));
-        // Empty TASKS runs every question.
-        assert!(block.contains("string(name: 'TASKS', defaultValue: ''"));
-        assert!(block.contains("string(name: 'N_TASKS', defaultValue: '113'"));
-        assert!(block.contains("choice(name: 'JIUWENSWARM_MODE', choices: ['git', 'release']"));
-        assert!(block.contains("stashedFile(name: 'JIUWENSWARM_RELEASE_FILE'"));
-        assert!(block.contains(
-            "string(name: 'JIUWENSWARM_GIT_URL', defaultValue: 'https://gitcode.com/michaelling/jiuwenswarm'"
-        ));
-        assert!(block.contains("string(name: 'JIUWENSWARM_GIT_REF', defaultValue: '2'"));
-        assert!(block.contains("choice(name: 'JIUWENSWARM_GIT_REF_KIND', choices: ['pr', 'branch', 'tag', 'commit']"));
-        assert!(block.contains("choice(name: 'JIUWENSWARM_AGENT_MODE', choices: ['agent.code.normal', 'agent.code.plan']"));
-        assert!(block.contains("string(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500'"));
-        let desc = shape_description("deepswe", JobShape::Headless);
-        assert!(desc.starts_with("Evaluate the JiuwenSwarm harness on DeepSWE"), "{desc}");
-        assert!(desc.contains("all 113 by default") && desc.contains("deepswe_one_task"), "{desc}");
-    }
-
-    #[test]
-    fn build_jiuwenswarm_headless_queues_deepswe_one_task_with_its_inputs() {
+    fn deepswe_dispatchers_queue_either_harness_on_one_task() {
         let opts = deepswe_opts(vec!["deepseek-api-key".into(), "gitcode-pat".into()]);
-        let jf = eval_jenkinsfile("deepswe", JobShape::Headless, &opts);
-        assert!(jf.contains("build job: 'deepswe_one_task'"), "the shard job");
-        assert!(jf.contains("copyArtifactPermission('deepswe_one_task')"));
-        assert!(jf.contains("stage('Prepare harness')"));
-        assert!(jf.contains("params.HARNESS == 'jiuwenswarm' ? params.JIUWENSWARM_MODE : params.ICODE_MODE"));
-        // A list of ids, as some_task reads it.
-        assert!(jf.contains("ids = params.TASKS.split(',')"));
-        for name in [
-            "HARNESS", "BENCHMARK", "DEEPSEEK_MODEL", "JIUWENSWARM_MODE", "JIUWENSWARM_GIT_URL",
-            "JIUWENSWARM_GIT_REF", "JIUWENSWARM_GIT_REF_KIND", "JIUWENSWARM_AGENT_MODE",
-            "JIUWENSWARM_MAX_TURNS", "HARBOR_VERSION", "DEEPSWE_REF",
-        ] {
-            assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
+        for shape in dispatchers("deepswe") {
+            let jf = eval_jenkinsfile("deepswe", shape, &opts);
+            assert!(jf.contains("build job: 'deepswe_one_task'"), "{shape:?}");
+            assert!(jf.contains("stage('Prepare harness')"), "{shape:?}");
+            // The mode of the harness this build runs, as its page or trigger set it.
+            assert!(
+                jf.contains("String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'"),
+                "{shape:?}"
+            );
+            for name in ["HARNESS", "BENCHMARK", "DEEPSEEK_MODEL", "HARBOR_VERSION", "DEEPSWE_REF", "LOLBENCH_REF"] {
+                assert!(jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{shape:?} {name}");
+            }
+            for name in DEEPSWE_REACTIVE_FIELDS {
+                assert!(jf.contains(&format!("string(name: '{name}', value: env.{name})")), "{shape:?} {name}");
+            }
+            assert!(jf.contains("string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL)"));
+            for pin in ["JIUWENSWARM_GIT_SHA", "JIUWENSWARM_RELEASE_FROM", "JIUWENSWARM_RELEASE_SHA256"] {
+                assert!(jf.contains(&format!("string(name: '{pin}', value: env.{pin} ?: '')")), "{shape:?} {pin}");
+            }
+            assert!(jf.contains("archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'"));
         }
-        assert!(jf.contains("string(name: 'AGENT_LABEL', value: unit.label ?: params.AGENT_LABEL)"));
-        for name in ["ICODE_MODE", "ICODE_GIT_URL", "ICODE_GIT_REF", "LOLBENCH_REF"] {
-            assert!(!jf.contains(&format!("string(name: '{name}', value: params.{name})")), "{name}");
-        }
-        for pin in ["JIUWENSWARM_GIT_SHA", "JIUWENSWARM_RELEASE_FROM", "JIUWENSWARM_RELEASE_SHA256"] {
-            assert!(jf.contains(&format!("string(name: '{pin}', value: env.{pin} ?: '')")), "{pin}");
-        }
-        assert!(jf.contains("string(name: 'HARNESS_BUNDLE_SHA256', value: env.HARNESS_BUNDLE_SHA256)"));
-        assert!(jf.contains("archiveArtifacts artifacts: 'jiuwenswarm-release/JIUWENSWARM_RELEASE_FILE'"));
-        assert!(jf.contains("copyArtifacts projectName: 'deepswe_one_task'"), "the Aggregate");
+        // Only some_task reads a list of ids.
+        assert!(eval_jenkinsfile("deepswe", JobShape::Some_, &opts).contains("ids = params.TASKS.split(',')"));
+        assert!(!eval_jenkinsfile("deepswe", JobShape::FullSuite, &opts).contains("params.TASKS"));
 
-        // deepswe_one_task lets it copy the shards' artifacts, and runs its harness.
-        let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
-        assert!(xml.contains("<string>build_jiuwenswarm_headless</string>"));
-        assert!(eval_jenkinsfile("deepswe", JobShape::One, &opts)
-            .contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task,build_jiuwenswarm_headless')"));
+        let some = shape_description("deepswe", JobShape::Some_);
+        assert!(some.starts_with("Evaluate a harness (HARNESS: iCode or JiuwenSwarm) on "), "{some}");
+        assert!(some.contains("Prepare harness builds the harness once"), "{some}");
+        let full = shape_description("deepswe", JobShape::FullSuite);
+        assert!(full.starts_with("Evaluate a harness (HARNESS: iCode or JiuwenSwarm) on "), "{full}");
+        let lol = shape_description("lolbench", JobShape::Some_);
+        assert!(lol.starts_with("Evaluate the iCode harness on "), "{lol}");
         assert!(shape_description("deepswe", JobShape::One)
-            .contains("each shard of deepswe_some_task, deepswe_full_suite_task and build_jiuwenswarm_headless"));
-        assert!(shape_description("lolbench", JobShape::One)
-            .contains("each shard of lolbench_some_task and lolbench_full_suite_task;"));
-        let lol = eval_job_xml("lolbench", JobShape::One, "d", &opts);
-        assert!(!lol.contains("build_jiuwenswarm_headless"));
+            .contains("each shard of deepswe_some_task and deepswe_full_suite_task;"));
     }
 
     #[test]
-    fn deepswe_one_task_takes_jiuwenswarm_inputs_on_the_developer_page() {
-        let mut opts = deepswe_opts(Vec::new());
-        let user = eval_jenkinsfile("deepswe", JobShape::One, &opts);
-        assert!(params_block(&user).contains("hidden(name: 'JIUWENSWARM_MODE', defaultValue: 'git'"));
-        assert!(params_block(&user).contains("hidden(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500'"));
-        opts.ui_profile = UiProfile::Developer;
-        let names = visible_names("deepswe", JobShape::One, &opts);
-        for name in [
-            "JIUWENSWARM_MODE", "JIUWENSWARM_RELEASE_FILE", "JIUWENSWARM_GIT_URL", "JIUWENSWARM_GIT_REF",
-            "JIUWENSWARM_GIT_REF_KIND", "JIUWENSWARM_AGENT_MODE", "JIUWENSWARM_MAX_TURNS",
-        ] {
-            assert!(names.contains(&name), "{name}");
+    fn deepswe_pages_draw_only_the_chosen_harness_inputs() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(Vec::new());
+            opts.ui_profile = profile;
+            for shape in EVAL_SHAPES {
+                let job = eval_job_name("deepswe", *shape);
+                let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+                let xml = eval_job_xml("deepswe", *shape, "d", &opts);
+                for name in DEEPSWE_REACTIVE_FIELDS {
+                    let line = param_line(&jf, name);
+                    let harness = if name.starts_with("ICODE_") { "icode" } else { "jiuwenswarm" };
+                    assert!(line.starts_with(&format!("    activeChoiceHtml(name: '{name}', ")), "{line}");
+                    assert!(line.contains(&format!("description: '{}'", reactive_description(harness))), "{line}");
+                    assert!(line.contains(&format!(
+                        "randomName: 'choice-parameter-{job}-{}'",
+                        name.to_ascii_lowercase()
+                    )));
+                    assert!(line.contains(
+                        "referencedParameters: 'HARNESS', choiceType: 'ET_FORMATTED_HTML', omitValueField: true"
+                    ));
+                    assert!(line.contains("script: [classpath: [], sandbox: false, script: 'def h = "), "{line}");
+                    assert!(line.contains("fallbackScript: [classpath: [], sandbox: true, script: 'return "), "{line}");
+                    // Every build reads it through the environment block.
+                    assert!(jf.contains(&format!("    {name} = \"${{(params.{name} ?: '').trim()")), "{name}");
+                }
+                assert_eq!(params_block(&jf).matches("activeChoiceHtml(").count(), DEEPSWE_REACTIVE_FIELDS.len());
+                assert_eq!(
+                    xml.matches("<org.biouno.unochoice.DynamicReferenceParameter plugin=\"uno-choice\">").count(),
+                    DEEPSWE_REACTIVE_FIELDS.len()
+                );
+                assert!(jf.find("  environment {\n").unwrap() < jf.find("  parameters {\n").unwrap());
+                // A file input cannot redraw, so it names its harness.
+                assert!(param_line(&jf, "ICODE_RELEASE_FILE")
+                    .starts_with("    stashedFile(name: 'ICODE_RELEASE_FILE', description: 'iCode only (HARNESS=icode). "));
+                assert!(param_line(&jf, "JIUWENSWARM_RELEASE_FILE").starts_with(
+                    "    stashedFile(name: 'JIUWENSWARM_RELEASE_FILE', description: 'JiuwenSwarm only (HARNESS=jiuwenswarm). "
+                ));
+                for name in ["HARNESS", "DEEPSEEK_MODEL"] {
+                    assert!(param_line(&jf, name).starts_with("    choice("), "{name}");
+                }
+            }
         }
-        let dev = eval_jenkinsfile("deepswe", JobShape::One, &opts);
-        assert!(params_block(&dev).contains(&format!("description: '{DEVELOPER_PREFIX}Choose git (clone URL + ref")));
+        // An omitted field gets the job's default.
+        let one = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        assert!(one.contains(
+            "    JIUWENSWARM_MAX_TURNS = \"${(params.JIUWENSWARM_MAX_TURNS ?: '').trim() && !(params.JIUWENSWARM_MAX_TURNS ?: '').contains('<') ? params.JIUWENSWARM_MAX_TURNS.trim() : '500'}\""
+        ));
+        assert!(one.contains(": 'https://gitcode.com/michaelling/jiuwenswarm'}\""));
+        // A suite with one harness keeps plain fields.
+        let opts = deepswe_opts(Vec::new());
         for bench in ["lolbench", "swebenchpro"] {
-            let names = visible_names(bench, JobShape::One, &opts);
-            assert!(!names.iter().any(|n| n.starts_with("JIUWENSWARM_")), "{bench}");
+            for shape in EVAL_SHAPES {
+                let jf = eval_jenkinsfile(bench, *shape, &opts);
+                assert!(!jf.contains("activeChoiceHtml("), "{bench} {shape:?}");
+                assert!(!jf.contains("  environment {\n"), "{bench} {shape:?}");
+                assert!(!eval_job_xml(bench, *shape, "d", &opts).contains("unochoice"), "{bench} {shape:?}");
+                assert!(param_line(&jf, "ICODE_MODE").starts_with("    choice(name: 'ICODE_MODE', choices: ['release', 'git'], description: 'Choose"));
+            }
         }
-        // The shard announces which harness and input it runs.
-        assert!(dev.contains("HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}"));
+    }
+
+    #[test]
+    fn reactive_script_shows_the_control_only_for_its_harness() {
+        let specs = eval_params("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
+        let spec = |n: &str| specs.iter().find(|p| p.name == n).unwrap();
+        let url = reactive_script(spec("JIUWENSWARM_GIT_URL"), "jiuwenswarm");
+        assert!(!url.contains('\n'));
+        assert!(url.starts_with(
+            "def h = binding.hasVariable('HARNESS') ? HARNESS : ''; if (h == 'jiuwenswarm') { return '<input name=\"value\" type=\"text\" class=\"jenkins-input setting-input\" value=\"https://gitcode.com/michaelling/jiuwenswarm\"><div class=\"jenkins-form-description\">Git: JiuwenSwarm https URL"
+        ), "{url}");
+        // The help's apostrophe is HTML, so it cannot end the Groovy string.
+        assert!(url.contains("the controller&#39;s gitcode-pat credential"));
+        assert!(url.ends_with(
+            "}; return '<input name=\"value\" type=\"hidden\" value=\"https://gitcode.com/michaelling/jiuwenswarm\"><div class=\"jenkins-form-description\">Not used with this HARNESS. Pick HARNESS=jiuwenswarm to set it.</div>'"
+        ), "{url}");
+        let kind = reactive_script(spec("ICODE_GIT_REF_KIND"), "icode");
+        assert!(kind.contains("if (h == 'icode')"));
+        assert!(kind.contains(
+            "<div class=\"jenkins-select\"><select name=\"value\" class=\"jenkins-select__input\"><option value=\"branch\" selected>branch</option><option value=\"tag\">tag</option>"
+        ), "{kind}");
+        assert!(kind.contains("<input name=\"value\" type=\"hidden\" value=\"branch\">"), "{kind}");
+        // Quotes only around HARNESS, '', the harness and the two returns.
+        for name in DEEPSWE_REACTIVE_FIELDS {
+            let harness = if name.starts_with("ICODE_") { "icode" } else { "jiuwenswarm" };
+            assert_eq!(reactive_script(spec(name), harness).matches('\'').count(), 10, "{name}");
+        }
+    }
+
+    #[test]
+    fn groovy_and_xml_embed_the_same_reactive_script() {
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            let mut opts = deepswe_opts(Vec::new());
+            opts.ui_profile = profile;
+            let approved = reactive_scripts(&opts);
+            for shape in EVAL_SHAPES {
+                let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+                let xml = eval_job_xml("deepswe", *shape, "d", &opts);
+                for spec in eval_params("deepswe", *shape, &opts) {
+                    let Some(harness) = spec.reactive(profile) else { continue };
+                    let want = reactive_script(&spec, harness);
+                    let line = param_line(&jf, spec.name);
+                    assert_eq!(groovy_literal_after(line, "sandbox: false, script: '"), want, "{shape:?} {}", spec.name);
+                    assert_eq!(groovy_literal_after(line, "sandbox: true, script: '"), REACTIVE_FALLBACK_SCRIPT);
+                    assert_eq!(xml_reactive_script(&xml, spec.name), want, "{shape:?} {}", spec.name);
+                    assert!(approved.contains(&want), "{shape:?} {} is not pre-approved", spec.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn without_active_choices_every_harness_input_is_labelled() {
+        let mut opts = deepswe_opts(Vec::new());
+        opts.active_choices = false;
+        for shape in EVAL_SHAPES {
+            let jf = eval_jenkinsfile("deepswe", *shape, &opts);
+            assert!(!jf.contains("activeChoiceHtml("), "{shape:?}");
+            assert!(!jf.contains("  environment {\n"), "{shape:?}");
+            assert!(!eval_job_xml("deepswe", *shape, "d", &opts).contains("unochoice"), "{shape:?}");
+            assert!(param_line(&jf, "ICODE_GIT_REF").contains("description: 'iCode only (HARNESS=icode). "));
+            assert!(param_line(&jf, "JIUWENSWARM_MAX_TURNS").starts_with(
+                "    string(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500', description: 'JiuwenSwarm only (HARNESS=jiuwenswarm). "
+            ));
+            assert_eq!(
+                visible_names("deepswe", *shape, &opts),
+                visible_names("deepswe", *shape, &deepswe_opts(Vec::new())),
+                "{shape:?}"
+            );
+        }
+        let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
+        assert!(some.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
+        assert!(some.contains("String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'"));
+        assert!(reactive_scripts(&opts).is_empty());
+    }
+
+    #[test]
+    fn config_preapproves_each_reactive_script_once() {
+        let scripts = reactive_scripts(&deepswe_opts(Vec::new()));
+        // Ten fields; ICODE_GIT_URL's help differs on the dispatchers.
+        assert_eq!(scripts.len(), DEEPSWE_REACTIVE_FIELDS.len() + 1);
+        let groovy = preapprove_groovy(&scripts);
+        assert!(groovy.contains("ScriptApproval.get()"));
+        assert!(groovy.contains("preapprove(new String(Base64.decoder.decode(b64), 'UTF-8'), GroovyLanguage.get())"));
+        assert!(groovy.contains("println(\"preapproved \" + n)"), "{groovy}");
+        for script in &scripts {
+            assert!(groovy.contains(&format!("'{}'", base64_encode(script.as_bytes()))));
+        }
+        assert!(!groovy.contains("<input"));
+
+        let listed = r#"{"plugins":[{"shortName":"hidden-parameter","active":true},{"shortName":"uno-choice","active":true}]}"#;
+        assert!(plugin_listed_active(listed, "uno-choice"));
+        assert!(!plugin_listed_active(r#"{"plugins":[{"shortName":"uno-choice","active":false}]}"#, "uno-choice"));
+        assert!(!plugin_listed_active(r#"{"plugins":[]}"#, "uno-choice"));
+        assert!(!plugin_listed_active("<html>Sign in</html>", "uno-choice"));
+    }
+
+    #[test]
+    fn deepswe_one_task_shows_jiuwenswarm_inputs_to_users() {
+        let mut opts = deepswe_opts(Vec::new());
+        for profile in [UiProfile::User, UiProfile::Developer] {
+            opts.ui_profile = profile;
+            let names = visible_names("deepswe", JobShape::One, &opts);
+            for name in DEEPSWE_HARNESS_FIELDS {
+                assert!(names.contains(&name), "{profile:?} {name}");
+            }
+            let jf = eval_jenkinsfile("deepswe", JobShape::One, &opts);
+            assert!(!params_block(&jf).contains("hidden(name: 'JIUWENSWARM_MODE'"), "{profile:?}");
+            for bench in ["lolbench", "swebenchpro"] {
+                let names = visible_names(bench, JobShape::One, &opts);
+                assert!(!names.iter().any(|n| n.starts_with("JIUWENSWARM_")), "{bench}");
+            }
+            // The shard announces which harness and input it runs.
+            assert!(jf.contains("HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}"));
+        }
     }
 
     #[test]
@@ -3275,7 +3667,7 @@ mod tests {
         assert!(cause < set && set < jf.find("sh '''").unwrap());
         assert!(jf.contains("} catch (Throwable t) {\n              echo \"WARNING: could not read who started this build (${t})\""));
         // Copy Artifact refuses cross-job copies unless the source job allows them.
-        assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task,build_jiuwenswarm_headless')"));
+        assert!(jf.contains("copyArtifactPermission('deepswe_some_task,deepswe_full_suite_task')"));
         let xml = eval_job_xml("deepswe", JobShape::One, "d", &opts);
         assert!(xml.contains("CopyArtifactPermissionProperty"));
         assert!(xml.contains("<string>deepswe_full_suite_task</string>"));

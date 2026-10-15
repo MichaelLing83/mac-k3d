@@ -316,7 +316,7 @@ What a good apply looks like:
 
 - Import says `write only; Docker/k3d/Jenkins were not started`, then prints `setup` and `start`. Those lines are the generic hint. On a controller that is already running, do **not** run `setup` or `start`. The next command is `config --skip-secrets`, which is what the block above does.
 - `config` prints `Keeping existing Jenkins credential binds (N id(s))`. The DeepSeek key stayed in Jenkins.
-- All ten jobs print `Updated job '…'`.
+- All nine jobs print `Updated job '…'`.
 - The command ends with `Config complete`.
 
 **Check in the UI:** `deepswe_one_task` → Build with Parameters. The first `DEEPSEEK_MODEL` is `deepseek-flash`. `TASK` is `vulture-persistent-analysis-cache`. Leave those fields as they are for the check. The task default applies to the DeepSWE jobs. The model default is on every suite. `--skip-secrets` rewrites job XML. It does not mean the YAML contained the DeepSeek key.

@@ -145,6 +145,7 @@ controller:
     - copyartifact            # dispatcher Aggregate stage pulls each rollout build's trials
     - pipeline-utility-steps  # nodesByLabel: online workers and executors for MAX_IN_FLIGHT
     - hidden-parameter        # ui_profile=user hides developer params
+    - uno-choice              # Active Choices: DeepSWE pages show only the chosen HARNESS's inputs
 ```
 
 Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code. `mac-k3d config` does not change this list; re-run **controller** `mac-k3d start` after a binary that added a plugin.
@@ -247,7 +248,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 
 `jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys. A worker's YAML always has both keys; `''` means not filled in yet, and `config` then prints which keys to fill in. `mac-k3d export` writes `api_token: ''`.
 
-`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the ten eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
+`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the nine eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
 
 ### `jenkins_job` (controller)
 
@@ -262,7 +263,7 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `default_jiuwenswarm_git_ref` | `2` | Default `JIUWENSWARM_GIT_REF`; empty means `2` |
 | `default_jiuwenswarm_git_ref_kind` | `pr` | Default `JIUWENSWARM_GIT_REF_KIND`: `branch`, `tag`, `commit` or `pr` |
 | `default_icode_args` | *(empty)* | Argv after `./icode` |
-| `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`): the first `HARNESS` choice of `deepswe_one_task`. Every other job's harness is fixed |
+| `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`): the first `HARNESS` choice of the three DeepSWE jobs. The LoLBench and SWE-bench Pro jobs' harness is fixed to `icode` |
 | `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
 | `default_deepseek_model` | *(empty → `deepseek-flash`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-v4-pro`) |
 | `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |

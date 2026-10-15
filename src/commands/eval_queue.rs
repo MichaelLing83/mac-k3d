@@ -1,8 +1,8 @@
 //! `mac-k3d eval --job one|some|full`: queue one of the Jenkins eval jobs with
 //! the fields of its Build with Parameters page. Only the fields given on the
 //! command line are sent; every other field keeps the job's default, which is
-//! what pressing Build with the form untouched does. `--harness jiuwenswarm`
-//! queues `deepswe_one_task` for one, else `build_jiuwenswarm_headless`.
+//! what pressing Build with the form untouched does. `--harness` sets HARNESS
+//! on any of the three jobs.
 
 use std::time::Duration;
 
@@ -68,18 +68,8 @@ impl QueueRequest {
         self.harness.as_deref() == Some("jiuwenswarm")
     }
 
-    /// The page this request fills: JiuwenSwarm's dispatcher for its some and
-    /// full runs, else the suite's job of that shape.
-    fn page_shape(&self) -> JobShape {
-        if self.jiuwenswarm() && self.shape != JobShape::One {
-            JobShape::Headless
-        } else {
-            self.shape
-        }
-    }
-
     fn job(&self) -> String {
-        jenkins_job::eval_job_name(&self.benchmark, self.page_shape())
+        jenkins_job::eval_job_name(&self.benchmark, self.shape)
     }
 }
 
@@ -170,7 +160,7 @@ fn at_least_one(flag: &str, n: u32) -> Result<String> {
 /// field for, rather than letting Jenkins ignore it.
 fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
     let job = req.job();
-    let page = jenkins_job::job_params(&req.benchmark, req.page_shape());
+    let page = jenkins_job::job_params(&req.benchmark, req.shape);
     let mut set: Vec<(&'static str, String, &'static str)> = Vec::new();
     let nonblank = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
 
@@ -197,6 +187,9 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
         return Err(Error::Config(format!("{flag} needs --harness jiuwenswarm")));
     }
 
+    if let Some(harness) = &req.harness {
+        set.push(("HARNESS", harness.clone(), "--harness"));
+    }
     match req.shape {
         JobShape::One => {
             if nonblank(&req.tasks).is_some() {
@@ -209,15 +202,11 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
                     "{job} runs one question: use --job some --n-tasks N for several"
                 )));
             }
-            // A dispatcher's harness is its job; only a one_task page has the choice.
-            if let Some(harness) = &req.harness {
-                set.push(("HARNESS", harness.clone(), "--harness"));
-            }
             if let Some(task) = nonblank(&req.task) {
                 set.push(("TASK", task, "--task"));
             }
         }
-        JobShape::Some_ | JobShape::FullSuite | JobShape::Headless => {
+        JobShape::Some_ | JobShape::FullSuite => {
             if nonblank(&req.task).is_some() {
                 return Err(Error::Config(format!(
                     "{job} takes a list: use --tasks a,b,c (--task is for --job one)"
@@ -237,17 +226,6 @@ fn request_fields(req: &QueueRequest) -> Result<Vec<(&'static str, String)>> {
             }
             if let Some(n) = req.n_tasks {
                 set.push(("N_TASKS", at_least_one("--n-tasks", n)?, "--n-tasks"));
-            }
-            // Its page runs every question when both are left alone; that is --job full.
-            if req.page_shape() == JobShape::Headless
-                && req.shape != JobShape::FullSuite
-                && !set.iter().any(|(n, _, _)| matches!(*n, "TASKS" | "N_TASKS"))
-            {
-                return Err(Error::Config(format!(
-                    "{job} runs all {} DeepSWE questions by default: give --tasks a,b,c or --n-tasks N, \
-                     or use --job full",
-                    jenkins_job::full_suite_size(&req.benchmark)
-                )));
             }
         }
     }
@@ -633,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn jiuwenswarm_queues_deepswe_one_task_or_build_jiuwenswarm_headless() {
+    fn harness_picks_the_harness_on_every_deepswe_job() {
         let one = jiuwen(JobShape::One, |r| r.task = Some("wazero-multi-module-snapshots".into()));
         assert_eq!(one.job(), "deepswe_one_task");
         assert_eq!(
@@ -647,10 +625,11 @@ mod tests {
             r.jiuwenswarm_git_ref_kind = Some("branch".into());
             r.params = vec!["jiuwenswarm_agent_mode=Agent.Code.Plan".into(), "JIUWENSWARM_MAX_TURNS=40".into()];
         });
-        assert_eq!(list.job(), "build_jiuwenswarm_headless");
+        assert_eq!(list.job(), "deepswe_some_task");
         assert_eq!(
             names(&request_fields(&list).unwrap()),
             [
+                "HARNESS=jiuwenswarm",
                 "TASKS=a,b",
                 "N_ROLLOUTS=1",
                 "JIUWENSWARM_GIT_REF=main",
@@ -659,19 +638,18 @@ mod tests {
                 "JIUWENSWARM_MAX_TURNS=40",
             ]
         );
-        // Its page already runs the whole suite.
         let full = jiuwen(JobShape::FullSuite, |_| {});
-        assert_eq!(full.job(), "build_jiuwenswarm_headless");
-        assert!(request_fields(&full).unwrap().is_empty());
-        let err = request_fields(&jiuwen(JobShape::Some_, |_| {})).unwrap_err().to_string();
-        assert!(err.contains("runs all 113 DeepSWE questions by default"), "{err}");
+        assert_eq!(full.job(), "deepswe_full_suite_task");
+        assert_eq!(names(&request_fields(&full).unwrap()), ["HARNESS=jiuwenswarm"]);
+        // some_task has its own N_TASKS default, so no list is needed.
+        let bare = jiuwen(JobShape::Some_, |_| {});
+        assert_eq!(names(&request_fields(&bare).unwrap()), ["HARNESS=jiuwenswarm"]);
         let few = jiuwen(JobShape::Some_, |r| r.n_tasks = Some(3));
-        assert_eq!(names(&request_fields(&few).unwrap()), ["N_TASKS=3"]);
-        // iCode keeps its own jobs, and names its harness only on a one_task page.
+        assert_eq!(names(&request_fields(&few).unwrap()), ["HARNESS=jiuwenswarm", "N_TASKS=3"]);
         let mut icode = some("a");
         icode.harness = Some("icode".into());
         assert_eq!(icode.job(), "deepswe_some_task");
-        assert_eq!(names(&request_fields(&icode).unwrap()), ["TASKS=a"]);
+        assert_eq!(names(&request_fields(&icode).unwrap()), ["HARNESS=icode", "TASKS=a"]);
     }
 
     #[test]
@@ -701,8 +679,17 @@ mod tests {
         assert!(param("JIUWENSWARM_MAX_TURNS=2000").contains("1 to 1000"));
         assert!(param("JIUWENSWARM_AGENT_MODE=team").contains("unknown JiuwenSwarm agent mode"));
         assert!(param("JIUWENSWARM_GIT_REF=2").contains("use --jiuwenswarm-git-ref"));
-        assert!(param("ICODE_GIT_REF=2").contains("has no field ICODE_GIT_REF"));
+        assert!(param("ICODE_GIT_REF=2").contains("use --icode-git-ref"));
         assert!(param("HARNESS=icode").contains("use --harness"));
+        // LoLBench has no JiuwenSwarm field to set.
+        let lol = QueueRequest {
+            benchmark: "lolbench".into(),
+            shape: JobShape::Some_,
+            tasks: Some("ruff_1".into()),
+            params: vec!["JIUWENSWARM_MAX_TURNS=40".into()],
+            ..Default::default()
+        };
+        assert!(err(lol).contains("has no field JIUWENSWARM_MAX_TURNS"));
 
         let args = EvalArgs {
             benchmark: Some("lolbench".into()),

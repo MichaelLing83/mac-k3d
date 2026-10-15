@@ -81,6 +81,6 @@ echo
 echo "Done. In Jenkins UI confirm Build with Parameters on lolbench_one_task / deepswe_one_task:"
 echo "  TASK/TASKS empty, N_TASKS=1, N_ROLLOUTS=4, ICODE_MODE=git,"
 echo "  URL=https://gitcode.com/michaelling/jiuwenicode, REF=2, KIND=pr"
-echo "and on build_jiuwenswarm_headless: JIUWENSWARM_MODE=git,"
+echo "and with HARNESS=jiuwenswarm on the deepswe_* jobs: JIUWENSWARM_MODE=git,"
 echo "  URL=https://gitcode.com/michaelling/jiuwenswarm, REF=2, KIND=pr"
 echo "Jenkins: http://43.107.42.252:17070"

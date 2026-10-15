@@ -15,11 +15,11 @@ Eval jobs cover three benchmarks, all Harbor + iCode + DeepSeek catalog model (d
 - **LoLBench** via **Harbor** (same agent; bind-mounts the same worker drop). Hub `smartdub26/lolbench` tags are arm64-only; on x86_64, the `tasks` phase builds or retags a local image (do not use Harbor `--force-build`).
 - **SWE-bench Pro** via **Harbor**. The `tasks` phase writes a task whose image is `jefzda/sweap-images:…`. The verifier scores `FAIL_TO_PASS` / `PASS_TO_PASS` into `reward.json`. Images are 1–3 GB each; first live job should set **one** `TASK` (`instance_id`).
 
-Each benchmark has three job shapes. A tenth job, `build_jiuwenswarm_headless`, runs DeepSWE questions with the JiuwenSwarm harness instead of iCode ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)).
+Each benchmark has three job shapes. On the three DeepSWE jobs, `HARNESS` picks iCode or JiuwenSwarm, and the page shows the inputs of the one you pick ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md#the-job-page)).
 
 ```mermaid
 flowchart LR
-  controller["controller: ten jobs"] --> one["one_task: 1 question, 1 rollout"]
+  controller["controller: nine jobs"] --> one["one_task: 1 question, 1 rollout"]
   controller --> some["some_task: a list or the first N"]
   controller --> full["full_suite_task: the whole suite"]
   some --> one

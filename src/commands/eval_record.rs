@@ -161,7 +161,7 @@ fn pick_artifact(paths: &[String]) -> Option<&str> {
 }
 
 fn job_benchmark(job: &str) -> &str {
-    if job == crate::prepare::jenkins_job::JIUWENSWARM_HEADLESS {
+    if job == crate::prepare::jenkins_job::RETIRED_JIUWENSWARM_HEADLESS {
         return "deepswe";
     }
     let head = job.split('_').next().unwrap_or("");

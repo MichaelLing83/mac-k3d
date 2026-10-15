@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cloud worker investigation: step by step</title>
+<style>
+  body { font: 15px/1.55 -apple-system, "Segoe UI", Ubuntu, sans-serif; color: #1f2328; margin: 0; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 32px 80px; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.6em 0 0.6em; }
+  h1 { font-size: 2em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h3 { font-size: 1.2em; }
+  a { color: #0969da; }
+  code { font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; background: #eff1f3; padding: .15em .35em; border-radius: 4px; }
+  .code { position: relative; margin: 12px 0 16px; }
+  .code pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 14px 16px; padding-right: 90px; overflow-x: auto; margin: 0; }
+  .code pre code { background: none; padding: 0; white-space: pre; }
+  .copy { position: absolute; top: 8px; right: 8px; font: 13px sans-serif; padding: 4px 12px; border: 1px solid #d1d9e0;
+           border-radius: 6px; background: #fff; cursor: pointer; }
+  .copy:hover { background: #f3f4f6; }
+  .copy.done { background: #dafbe1; border-color: #4ac26b; }
+  table { border-collapse: collapse; margin: 12px 0 16px; display: block; overflow-x: auto; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 12px; vertical-align: top; }
+  th { background: #f6f8fa; }
+  nav { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 8px 20px; margin: 16px 0; }
+  nav ul { margin: 4px 0; padding-left: 20px; }
+  nav li.h3 { margin-left: 20px; font-size: 14px; }
+  .note { color: #59636e; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<p class="note">Generated from <code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
+<h1>Cloud worker investigation: step by step</h1>
+<nav><ul><li class="h2"><a href="#before-you-start">Before you start</a></li><li class="h3"><a href="#how-each-step-is-written">How each step is written</a></li><li class="h3"><a href="#ground-rules">Ground rules</a></li><li class="h3"><a href="#know-where-you-are">Know where you are</a></li><li class="h3"><a href="#what-you-are-looking-at-the-store-in-five-points">What you are looking at: the store in five points</a></li><li class="h2"><a href="#step-0-make-root-pem-safe-and-test-it-your-pc-5-minutes">Step 0: make root.pem safe, and test it (your PC, 5 minutes)</a></li><li class="h3"><a href="#0-1-move-the-key-to-ssh-and-make-it-private">0.1 Move the key to ~/.ssh and make it private</a></li><li class="h3"><a href="#0-2-show-the-key-s-fingerprint">0.2 Show the key&#x27;s fingerprint</a></li><li class="h3"><a href="#0-3-test-the-key-without-opening-a-shell">0.3 Test the key without opening a shell</a></li><li class="h2"><a href="#step-1-install-the-investigation-only-sudo-rule-root-on-the-worker-10-minutes">Step 1: install the investigation-only sudo rule (root on the worker, 10 minutes)</a></li><li class="h3"><a href="#1-1-open-a-root-shell">1.1 Open a root shell</a></li><li class="h3"><a href="#1-2-give-toby-a-password">1.2 Give toby a password</a></li><li class="h3"><a href="#1-3-write-the-rule-to-a-temporary-file">1.3 Write the rule to a temporary file</a></li><li class="h3"><a href="#1-4-check-the-rule-and-install-it-only-if-the-check-passes">1.4 Check the rule, and install it only if the check passes</a></li><li class="h3"><a href="#1-5-remove-the-temporary-file">1.5 Remove the temporary file</a></li><li class="h3"><a href="#1-6-show-what-toby-may-now-run">1.6 Show what toby may now run</a></li><li class="h3"><a href="#1-7-remove-the-rule-automatically-after-3-days">1.7 Remove the rule automatically after 3 days</a></li><li class="h3"><a href="#1-8-leave-the-root-shell">1.8 Leave the root shell</a></li><li class="h2"><a href="#step-2-start-work-as-toby-5-minutes">Step 2: start work as toby (5 minutes)</a></li><li class="h3"><a href="#2-1-log-in-as-toby">2.1 Log in as toby</a></li><li class="h3"><a href="#2-2-check-your-groups-and-your-sudo-rule">2.2 Check your groups and your sudo rule</a></li><li class="h3"><a href="#2-3-create-your-folders-and-start-recording-the-session">2.3 Create your folders, and start recording the session</a></li><li class="h3"><a href="#2-4-save-the-two-scripts">2.4 Save the two scripts</a></li><li class="h2"><a href="#step-3-start-the-long-jobs-first-15-minutes">Step 3: start the long jobs first (15 minutes)</a></li><li class="h3"><a href="#3-1-copy-the-logs-before-the-weekly-rotation-deletes-the-oldest-week">3.1 Copy the logs before the weekly rotation deletes the oldest week</a></li><li class="h3"><a href="#3-2-start-the-two-slow-log-scans-in-the-background">3.2 Start the two slow log scans in the background</a></li><li class="h3"><a href="#3-3-list-the-images-and-start-the-start-test">3.3 List the images, and start the start test</a></li><li class="h2"><a href="#step-4-the-logs-30-minutes-no-sudo">Step 4: the logs (30 minutes, no sudo)</a></li><li class="h3"><a href="#4-1-the-boots-and-the-order-of-data-and-containerd-q1-q5">4.1 The boots, and the order of /data and containerd (Q1, Q5)</a></li><li class="h3"><a href="#4-2-out-of-memory-stuck-processes-and-disk-messages-q9">4.2 Out of memory, stuck processes and disk messages (Q9)</a></li><li class="h3"><a href="#4-3-logins-and-sudo-commands-since-13-sep-q2-q8-q11">4.3 Logins and sudo commands since 13 Sep (Q2, Q8, Q11)</a></li><li class="h3"><a href="#4-4-12-oct-in-detail-q4">4.4 12 Oct in detail (Q4)</a></li><li class="h3"><a href="#4-5-containerd-s-restarts-on-14-oct-q11">4.5 containerd&#x27;s restarts on 14 Oct (Q11)</a></li><li class="h3"><a href="#4-6-your-own-scheduled-jobs-q8">4.6 Your own scheduled jobs (Q8)</a></li><li class="h2"><a href="#step-5-containerd-s-records-against-the-disk-20-minutes-sudo">Step 5: containerd&#x27;s records against the disk (20 minutes, sudo)</a></li><li class="h3"><a href="#5-1-save-containerd-s-lists-and-the-files-on-disk">5.1 Save containerd&#x27;s lists, and the files on disk</a></li><li class="h3"><a href="#5-2-records-against-disk-and-the-ages-of-the-missing-files-q7">5.2 Records against disk, and the ages of the missing files (Q7)</a></li><li class="h3"><a href="#5-3-folders-from-a-second-numbering-q5">5.3 Folders from a second numbering (Q5)</a></li><li class="h2"><a href="#step-6-what-only-root-can-read-20-minutes-sudo">Step 6: what only root can read (20 minutes, sudo)</a></li><li class="h3"><a href="#6-1-whose-keys-may-log-in-as-root-q2">6.1 Whose keys may log in as root (Q2)</a></li><li class="h3"><a href="#6-2-root-s-shell-history-q2-q8">6.2 Root&#x27;s shell history (Q2, Q8)</a></li><li class="h3"><a href="#6-3-every-crontab-and-the-other-users-timers-q8">6.3 Every crontab, and the other users&#x27; timers (Q8)</a></li><li class="h3"><a href="#6-4-the-empty-store-hidden-under-data-q3">6.4 The empty store hidden under /data (Q3)</a></li><li class="h3"><a href="#6-5-the-two-containers-from-the-split-brain-q12">6.5 The two containers from the split brain (Q12)</a></li><li class="h2"><a href="#step-7-results-of-the-long-jobs">Step 7: results of the long jobs</a></li><li class="h3"><a href="#7-1-the-slow-log-scans-q6-q10">7.1 The slow log scans (Q6, Q10)</a></li><li class="h3"><a href="#7-2-the-start-test-impact">7.2 The start test (impact)</a></li><li class="h2"><a href="#step-8-finish">Step 8: finish</a></li><li class="h3"><a href="#8-1-stop-recording">8.1 Stop recording</a></li><li class="h3"><a href="#8-2-copy-the-evidence-to-your-pc-optional">8.2 Copy the evidence to your PC (optional)</a></li><li class="h3"><a href="#8-3-when-the-investigation-is-over-root-removes-the-access">8.3 When the investigation is over: root removes the access</a></li><li class="h2"><a href="#if-something-goes-wrong">If something goes wrong</a></li></ul></nav>
+<ul>
+<li><strong>For:</strong> Toby, on the cloud worker <code>iZt4ndd2dff7gqjta7mppaZ</code> (<code>47.84.16.18</code>).</li>
+<li><strong>Goal for today:</strong> collect the evidence that answers Q1 to Q12 in <code>CLOUD_WORKER_DOCKER_REPORT.md</code>, without changing anything in the Docker store.</li>
+<li><strong>Record:</strong> after each step, fill in its row in the report's investigation log (<code>CLOUD_WORKER_DOCKER_REPORT.md</code>, section 6), and paste the step's &quot;Send me&quot; output into the chat. The next steps are adjusted from what comes back.</li>
+</ul>
+<p>Nothing in this guide repairs, removes or restarts anything. The only changes to the server are:</p>
+<ul>
+<li>step 1: a password for <code>toby</code> and one sudo rule;</li>
+<li>step 6.4: an empty folder and a temporary read-only view.</li>
+</ul>
+<p>All of them are small and can be undone.</p>
+<h2 id="before-you-start">Before you start</h2>
+<h3 id="how-each-step-is-written">How each step is written</h3>
+<ul>
+<li><strong>Where:</strong> the terminal to use: your PC, root on the worker, or <code>toby</code> on the worker.</li>
+<li><strong>Why:</strong> what the step tells us, and how it fits the investigation.</li>
+<li><strong>Risk:</strong>
+<ul>
+<li><strong>none:</strong> it only reads, and writes only to your own folder <code>~/snapshot-audit/</code>;</li>
+<li><strong>low:</strong> a small change that removes no data and can be undone;</li>
+<li><strong>high:</strong> no limits. Only step 1.1 is high, and only because it opens a root shell.</li>
+</ul>
+</li>
+<li><strong>Command:</strong> copy the whole grey block and paste it into the terminal. Lines that start with <code>#</code>, and text after <code>#</code> at the end of a line, are comments; the shell ignores them.</li>
+<li><strong>Expected:</strong> what you should see.</li>
+<li><strong>Send me:</strong> what to paste back into the chat.</li>
+</ul>
+<h3 id="ground-rules">Ground rules</h3>
+<ol>
+<li>Copy the commands exactly. Don't edit them, and don't add <code>sudo</code> where there is none.</li>
+<li>Wait for the prompt to come back before pasting the next block.</li>
+<li>If the output differs from <strong>Expected</strong>, stop and send me the output. Don't try a fix.</li>
+<li>Never paste a password, or the contents of <code>root.pem</code>, into the chat or anywhere else. Fingerprints (<code>SHA256:…</code>) aren't secret and are fine to share.</li>
+<li>sudo asks for <code>toby</code>'s password. Nothing appears while you type it; that is normal.</li>
+</ol>
+<h3 id="know-where-you-are">Know where you are</h3>
+<p>The prompt shows which machine you are on, and as which user:</p>
+<table>
+<thead>
+<tr>
+<th>Prompt ends with</th>
+<th>Where you are</th>
+<th>Care</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Toby@&lt;your PC&gt;:~$</code></td>
+<td>Your own PC</td>
+<td>Normal</td>
+</tr>
+<tr>
+<td><code>toby@iZt4ndd2dff7gqjta7mppaZ:~$</code></td>
+<td>The worker, as <code>toby</code></td>
+<td>Normal. sudo allows only the 17 commands of step 1</td>
+</tr>
+<tr>
+<td><code>root@iZt4ndd2dff7gqjta7mppaZ:~#</code></td>
+<td>The worker, as root</td>
+<td>No limits. Type only the commands of step 1, then <code>exit</code></td>
+</tr>
+</tbody>
+</table>
+<p>Use two terminals on your PC:</p>
+<ul>
+<li><strong>Terminal 1:</strong> the worker as <code>toby</code>, from step 2 onwards, for most of the work.</li>
+<li><strong>Terminal 2:</strong> your PC, for steps 0 and 1, and to check on long jobs.</li>
+</ul>
+<h3 id="what-you-are-looking-at-the-store-in-five-points">What you are looking at: the store in five points</h3>
+<ol>
+<li><strong>Where it lives.</strong> Docker on this host keeps its images through containerd, in <code>/data/containerd</code>. An image is a stack of layers.</li>
+<li><strong>Each layer exists twice:</strong>
+<ul>
+<li><strong>Downloaded file (a &quot;blob&quot;):</strong> the compressed layer as pulled from the registry, in <code>/data/containerd/io.containerd.content.v1.content/blobs/sha256/&lt;digest&gt;</code>.</li>
+<li><strong>Unpacked folder (a &quot;snapshot&quot;):</strong> the same layer unpacked, so that a container can use it, in <code>/data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/&lt;number&gt;/fs</code>.</li>
+</ul>
+</li>
+<li><strong>containerd keeps records of both, in two databases:</strong>
+<ul>
+<li><code>io.containerd.metadata.v1.bolt/meta.db</code> for images and downloaded files;</li>
+<li><code>io.containerd.snapshotter.v1.overlayfs/metadata.db</code> for unpacked folders.</li>
+</ul>
+</li>
+<li><strong>The damage on this host always has the same shape: a record whose data is gone.</strong> There are three kinds:
+<ul>
+<li>a downloaded file is missing (<code>blob not found</code>);</li>
+<li>an unpacked folder is missing (<code>no such file or directory</code>);</li>
+<li>a record has no usable data behind it (<code>already exists</code>, <code>missing parent</code>).</li>
+</ul>
+</li>
+<li><strong>containerd's cleanup deletes data that no record points to.</strong> That is safe while the records are right. On 12 Oct, containerd ran for a while with an empty database, and its cleanup deleted the real folders.</li>
+</ol>
+<p>The investigation asks when, and by what, data disappeared while its records stayed. The evidence comes from three places:</p>
+<ul>
+<li>the logs: who logged in, what restarted, when the host ran out of memory;</li>
+<li>containerd's records, compared with what is on disk;</li>
+<li>the ages of the missing files.</li>
+</ul>
+<h2 id="step-0-make-root-pem-safe-and-test-it-your-pc-5-minutes">Step 0: make <code>root.pem</code> safe, and test it (your PC, 5 minutes)</h2>
+<h3 id="0-1-move-the-key-to-ssh-and-make-it-private">0.1 Move the key to <code>~/.ssh</code> and make it private</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC.</li>
+<li><strong>Why:</strong> <code>root.pem</code> is in <code>~/Downloads</code>, and every account on your PC can read it (<code>-rw-rw-r--</code>). Whoever has it can log in as root on the worker. <code>ssh</code> also refuses a key that others can read.</li>
+<li><strong>Risk:</strong> none. It moves one file on your PC and changes its permissions.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>mkdir -p ~/.ssh &amp;&amp; chmod 700 ~/.ssh                       # your private SSH folder
+mv ~/Downloads/root.pem ~/.ssh/cloud-worker-root.pem      # out of Downloads, with a clear name
+chmod 600 ~/.ssh/cloud-worker-root.pem                    # readable by you only
+ls -l ~/.ssh/cloud-worker-root.pem
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>-rw------- 1 Toby Toby … /home/Toby/.ssh/cloud-worker-root.pem</code>.</li>
+<li><strong>Send me:</strong> the <code>ls</code> line.</li>
+</ul>
+<h3 id="0-2-show-the-key-s-fingerprint">0.2 Show the key's fingerprint</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC.</li>
+<li><strong>Why:</strong> the fingerprint identifies the key without revealing it. Root can confirm it's the key he gave you, and step 6.1 later shows which root logins used it.</li>
+<li><strong>Risk:</strong> none. It reads the key and prints only its fingerprint.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh-keygen -lf ~/.ssh/cloud-worker-root.pem
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> one line like <code>2048 SHA256:… (RSA)</code>. If it asks for a passphrase, root has to give it to you.</li>
+<li><strong>Send me:</strong> that line.</li>
+</ul>
+<h3 id="0-3-test-the-key-without-opening-a-shell">0.3 Test the key without opening a shell</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC.</li>
+<li><strong>Why:</strong> check that the key logs in as root on this worker, before you rely on it in step 1.</li>
+<li><strong>Risk:</strong> none. It logs in as root, runs three commands that only print, and logs out. <code>IdentitiesOnly=yes</code> makes ssh offer this key only.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh -i ~/.ssh/cloud-worker-root.pem -o IdentitiesOnly=yes root@47.84.16.18 &#x27;whoami; hostname; date&#x27;
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>root</code>, <code>iZt4ndd2dff7gqjta7mppaZ</code> and the current date.
+<ul>
+<li>If you see <code>Permission denied (publickey)</code>, the key isn't accepted for root on this host. Stop, and give root the fingerprint from 0.2.</li>
+<li>If you see <code>UNPROTECTED PRIVATE KEY FILE</code>, run 0.1 again.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h2 id="step-1-install-the-investigation-only-sudo-rule-root-on-the-worker-10-minutes">Step 1: install the investigation-only sudo rule (root on the worker, 10 minutes)</h2>
+<p>The rule lets <code>toby</code> run 17 exact commands as root, each with fixed arguments, and nothing else. It needs <code>toby</code>'s password, so Jenkins jobs (which also run as <code>toby</code>) can't use it. After this step you don't need <code>root.pem</code> again for the investigation.</p>
+<p><strong>First, message root</strong> and wait for an OK:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>I&#x27;ll use root.pem once now to install the investigation-only sudo rule from
+CLOUD_WORKER_DOCKER_REPORT.md section 4.2 (17 read-only commands, password required,
+removed automatically after 3 days). I&#x27;ll set a password for toby, run nothing else
+as root, and log out. You can check it with: sudo -l -U toby
+</code></pre></div>
+<h3 id="1-1-open-a-root-shell">1.1 Open a root shell</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2.</li>
+<li><strong>Why:</strong> installing a sudo rule needs root.</li>
+<li><strong>Risk:</strong> <strong>high.</strong> A root shell has no limits. Type only steps 1.2 to 1.7, then step 1.8 (<code>exit</code>).</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh -i ~/.ssh/cloud-worker-root.pem -o IdentitiesOnly=yes root@47.84.16.18
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the prompt <code>root@iZt4ndd2dff7gqjta7mppaZ:~#</code>.</li>
+</ul>
+<h3 id="1-2-give-toby-a-password">1.2 Give <code>toby</code> a password</h3>
+<ul>
+<li><strong>Why:</strong> sudo asks for it; <code>toby</code>'s password is locked now.</li>
+<li><strong>Risk:</strong> low. It changes only <code>toby</code>'s password. Password logins over SSH are off for every account, so it opens no new way in. It can be undone with <code>passwd -l toby</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>passwd toby
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> it asks for the new password twice, without showing it, then prints <code>passwd: password updated successfully</code>. Choose a password you can type often; sudo asks for it every 15 minutes.</li>
+</ul>
+<h3 id="1-3-write-the-rule-to-a-temporary-file">1.3 Write the rule to a temporary file</h3>
+<ul>
+<li><strong>Why:</strong> prepare the rule, so that it can be checked before it is installed. Each line is one command <code>toby</code> may run. Section 4.2 of the report explains each one.</li>
+<li><strong>Risk:</strong> none. It writes one file in <code>/tmp</code>, which nothing reads yet.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cat &gt; /tmp/90-toby-investigate &lt;&lt;&#x27;EOF&#x27;
+# Investigation of the Docker store: exact, read-only commands only
+Cmnd_Alias MK3D_INVESTIGATE = \
+    /usr/bin/ctr -n moby images check, \
+    /usr/bin/ctr -n moby images ls -q, \
+    /usr/bin/ctr -n moby snapshots ls, \
+    /usr/bin/ctr -n moby content ls, \
+    /usr/bin/ctr -n moby content active, \
+    /usr/bin/ls -l --full-time /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots, \
+    /usr/bin/ls -U /data/containerd/io.containerd.content.v1.content/blobs/sha256, \
+    /usr/bin/ls -ld --full-time /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/37 /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/54, \
+    /usr/bin/ssh-keygen -lf /root/.ssh/authorized_keys, \
+    /usr/bin/cat /root/.bash_history, \
+    /usr/bin/grep -rH . /var/spool/cron/crontabs, \
+    /usr/bin/ls -laR /home/naiyu/.config/systemd/user /home/yun/.config/systemd/user /home/zihan/.config/systemd/user, \
+    /usr/bin/mkdir -p /mnt/rootfs, \
+    /usr/bin/mount -o bind\,ro / /mnt/rootfs, \
+    /usr/bin/ls -la --full-time /mnt/rootfs/data /mnt/rootfs/data/containerd /mnt/rootfs/data/containerd/io.containerd.metadata.v1.bolt, \
+    /usr/bin/du -sh /mnt/rootfs/data, \
+    /usr/bin/umount /mnt/rootfs
+toby ALL=(root) MK3D_INVESTIGATE
+EOF
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> no output; the prompt comes back.</li>
+</ul>
+<h3 id="1-4-check-the-rule-and-install-it-only-if-the-check-passes">1.4 Check the rule, and install it only if the check passes</h3>
+<ul>
+<li><strong>Why:</strong> a broken sudoers file could stop sudo working for everyone. <code>visudo -c</code> checks the file, and <code>&amp;&amp;</code> installs it only if the check passed.</li>
+<li><strong>Risk:</strong> low. It adds one file to <code>/etc/sudoers.d/</code>, which <code>rm -f /etc/sudoers.d/90-toby-investigate</code> removes again.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>visudo -c -f /tmp/90-toby-investigate &amp;&amp; install -m 0440 -o root -g root /tmp/90-toby-investigate /etc/sudoers.d/90-toby-investigate
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>/tmp/90-toby-investigate: parsed OK</code>. If it prints anything else, stop: nothing was installed. Send me the output.</li>
+</ul>
+<h3 id="1-5-remove-the-temporary-file">1.5 Remove the temporary file</h3>
+<ul>
+<li><strong>Risk:</strong> none. It removes only the file from 1.3.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>rm -f /tmp/90-toby-investigate
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> no output.</li>
+</ul>
+<h3 id="1-6-show-what-toby-may-now-run">1.6 Show what <code>toby</code> may now run</h3>
+<ul>
+<li><strong>Why:</strong> confirm that the rule is active, and that it's the only one.</li>
+<li><strong>Risk:</strong> none. It only reads.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>sudo -l -U toby
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the 17 commands of 1.3, run as <code>(root)</code>, and nothing else.</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h3 id="1-7-remove-the-rule-automatically-after-3-days">1.7 Remove the rule automatically after 3 days</h3>
+<ul>
+<li><strong>Why:</strong> a backstop, in case removing it by hand (step 8.3) is forgotten.</li>
+<li><strong>Risk:</strong> low. In 3 days it deletes only the file from 1.4.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>systemd-run --on-active=3d --unit=toby-investigate-expire /usr/bin/rm -f /etc/sudoers.d/90-toby-investigate
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>Running timer as unit: toby-investigate-expire.timer</code>.</li>
+</ul>
+<h3 id="1-8-leave-the-root-shell">1.8 Leave the root shell</h3>
+<ul>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>exit
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the prompt of your PC again. Don't use <code>root.pem</code> again for the investigation. Keep it in <code>~/.ssh</code>, and don't delete it until root says so.</li>
+</ul>
+<p><strong>Then message root:</strong> &quot;Done at <time>: rule <code>/etc/sudoers.d/90-toby-investigate</code> installed, timer <code>toby-investigate-expire</code> set for 3 days. Nothing else changed.&quot;</p>
+<h2 id="step-2-start-work-as-toby-5-minutes">Step 2: start work as <code>toby</code> (5 minutes)</h2>
+<h3 id="2-1-log-in-as-toby">2.1 Log in as <code>toby</code></h3>
+<ul>
+<li><strong>Where:</strong> terminal 1.</li>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>ssh toby@47.84.16.18
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the prompt <code>toby@iZt4ndd2dff7gqjta7mppaZ:~$</code>.</li>
+</ul>
+<h3 id="2-2-check-your-groups-and-your-sudo-rule">2.2 Check your groups and your sudo rule</h3>
+<ul>
+<li><strong>Why:</strong>
+<ul>
+<li><code>adm</code> lets you read <code>/var/log</code>; <code>systemd-journal</code> lets you read the journal; <code>docker</code> lets you run containers.</li>
+<li><code>sudo -l</code> shows the rule from step 1.</li>
+<li><code>sudo true</code> shows that anything outside the rule is refused.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. <code>sudo true</code> is refused, and <code>true</code> does nothing anyway.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>id
+sudo -l
+sudo true
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><code>id</code> lists <code>adm</code>, <code>docker</code> and <code>systemd-journal</code>.</li>
+<li><code>sudo -l</code> asks for the password from 1.2 and lists the 17 commands.</li>
+<li><code>sudo true</code> is refused with a message that <code>toby</code> may not run it.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output, without the password; it isn't shown anyway.</li>
+</ul>
+<h3 id="2-3-create-your-folders-and-start-recording-the-session">2.3 Create your folders, and start recording the session</h3>
+<ul>
+<li><strong>Why:</strong> all evidence goes into <code>~/snapshot-audit/</code>. <code>script</code> records everything that appears on screen into <code>sessions/</code>, so root and the mentor can check what was run. Passwords aren't shown, so they aren't recorded.</li>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>mkdir -p ~/snapshot-audit/logs ~/snapshot-audit/inventory ~/snapshot-audit/logcopy ~/snapshot-audit/sessions
+cd ~/snapshot-audit/logs
+script -q -a ~/snapshot-audit/sessions/&quot;$(date +%F_%H%M)&quot;.log
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> no output; a new prompt. Everything is recorded until step 8.1.</li>
+<li><strong>If the connection drops later:</strong> log in again, run this block again, and carry on. The background jobs of step 3 keep running.</li>
+</ul>
+<h3 id="2-4-save-the-two-scripts">2.4 Save the two scripts</h3>
+<ul>
+<li>
+<p><strong>Why:</strong></p>
+<ul>
+<li><code>long_scans.sh</code> does the two slow log scans: Q6, when each error first appeared, and Q10, what filled syslog on 4 to 11 Oct.</li>
+<li><code>layer_test.sh</code> starts every image once, to sort the broken ones by type of damage.</li>
+</ul>
+<p>Neither uses sudo, and neither removes anything.</p>
+</li>
+<li>
+<p><strong>Risk:</strong> none. It writes two files in your folder, and <code>bash -n</code> checks them without running them.</p>
+</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cat &gt; ~/snapshot-audit/long_scans.sh &lt;&lt;&#x27;EOF&#x27;
+#!/bin/bash
+# The two slow log scans: Q6 (first appearance of each error) and Q10 (what filled syslog on 4-11 Oct).
+# Reads the logs and writes only into ~/snapshot-audit/logs. Run before the weekly rotation on Sunday 18 Oct.
+cd ~/snapshot-audit/logs || exit 1
+echo &quot;start $(date -Is)&quot;
+zgrep -hiE &#x27;(containerd|dockerd)\[[0-9]+\]: .*(blob not found|failed to stat parent|snapshot.*already exists|missing parent|no space left)&#x27; \
+  /var/log/syslog.4.gz /var/log/syslog.3.gz /var/log/syslog.2.gz /var/log/syslog.1 /var/log/syslog &gt; damage_errors.txt
+for k in &#x27;blob not found&#x27; &#x27;failed to stat parent&#x27; &#x27;already exists&#x27; &#x27;missing parent&#x27; &#x27;no space left&#x27;; do
+  l=$(grep -m 1 -i &quot;$k&quot; damage_errors.txt)
+  printf &#x27;== %s: %s\n&#x27; &quot;$k&quot; &quot;${l:-never}&quot; | cut -c1-250
+done &gt; damage_first_seen.txt
+echo &quot;Q6 done $(date -Is)&quot;
+awk &#x27;{d = substr($1, 1, 10); b[d] += length($0) + 1; p = $3; sub(/\[.*/, &quot;&quot;, p); sub(/:$/, &quot;&quot;, p); n[p]++}
+     END {for (d in b) printf &quot;day %s %d MB\n&quot;, d, b[d] / 1048576; for (p in n) printf &quot;prog %d %s\n&quot;, n[p], p}&#x27; \
+  /var/log/syslog.1 &gt; syslog_volume.txt
+echo &quot;Q10 done $(date -Is)&quot;
+EOF
+cat &gt; ~/snapshot-audit/layer_test.sh &lt;&lt;&#x27;EOF&#x27;
+#!/bin/bash
+# Start each image once, with no network and no pull, and record whether its layers mount.
+# Usage: layer_test.sh &lt;image list&gt; &lt;output .tsv&gt;. Needs no sudo, and never removes an image.
+in=${1:?image list}
+out=${2:?output file}
+grep -vE &#x27;^(sha256:|moby-dangling@)&#x27; &quot;$in&quot; | while read -r img; do
+  msg=$(timeout 120 docker run --rm --pull never --network none --entrypoint true &quot;$img&quot; 2&gt;&amp;1 &lt; /dev/null)
+  case $msg in
+    &quot;&quot;) s=ok ;;
+    *&quot;failed to stat parent&quot;*|*&quot;lowerdir=&quot;*|*&quot;overlayfs/snapshots/&quot;*) s=layers_missing ;;
+    *&quot;blob not found&quot;*) s=blob_missing ;;
+    *&quot;already exists&quot;*|*&quot;missing parent&quot;*) s=stale_record ;;
+    *&quot;executable file not found&quot;*) s=ok ;;   # the layers mounted; the image just has no &quot;true&quot;
+    *) s=other ;;
+  esac
+  printf &#x27;%s\t%s\t%s\n&#x27; &quot;$s&quot; &quot;$img&quot; &quot;$(printf &#x27;%s&#x27; &quot;$msg&quot; | tr &#x27;\n\t&#x27; &#x27;  &#x27; | cut -c1-200)&quot;
+done &gt; &quot;$out&quot;
+EOF
+bash -n ~/snapshot-audit/long_scans.sh &amp;&amp; bash -n ~/snapshot-audit/layer_test.sh &amp;&amp; echo &quot;scripts OK&quot;
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>scripts OK</code>.</li>
+</ul>
+<h2 id="step-3-start-the-long-jobs-first-15-minutes">Step 3: start the long jobs first (15 minutes)</h2>
+<p>The slow jobs start now, so they run while you do steps 4 to 6.</p>
+<h3 id="3-1-copy-the-logs-before-the-weekly-rotation-deletes-the-oldest-week">3.1 Copy the logs before the weekly rotation deletes the oldest week</h3>
+<ul>
+<li><strong>Why:</strong> the logs are the evidence. On Sunday 18 Oct, the weekly rotation deletes 13 to 20 Sep from <code>/var/log</code>. The journal is capped at 3.9 GB, so containerd's entries from 10 Oct will go too, eventually.</li>
+<li><strong>Risk:</strong> none. It reads the logs, and writes about 4 GB into your home on the system disk, which has 165 GB free. <code>df</code> shows the space first.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>df -h /home                                      # free space; needs more than 10 GB
+cp -p /var/log/syslog.*.gz /var/log/auth.log.*.gz /var/log/kern.log.*.gz /var/log/auth.log.1 /var/log/kern.log.1 ~/snapshot-audit/logcopy/
+nice journalctl -u containerd -u docker -u data.mount -o short-iso --no-pager | gzip &gt; ~/snapshot-audit/logcopy/journal_containerd_docker.txt.gz
+ls -lh ~/snapshot-audit/logcopy/
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><code>df</code> shows about 165 GB available.</li>
+<li>After 1 to 3 minutes, <code>ls</code> lists 12 files: nine <code>.gz</code> logs (about 3 GB together), <code>auth.log.1</code> (150 MB), <code>kern.log.1</code> (27 MB), and the journal export.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the <code>df</code> line and the <code>ls</code> output.</li>
+</ul>
+<h3 id="3-2-start-the-two-slow-log-scans-in-the-background">3.2 Start the two slow log scans in the background</h3>
+<ul>
+<li><strong>Why:</strong> they read about 20 GB of syslog, which takes 10 to 20 minutes. <code>nohup … &amp;</code> runs them in the background, and they keep running if the connection drops. <code>nice</code> gives other users' work priority.</li>
+<li><strong>Risk:</strong> none. No sudo; they read logs and write three files in <code>~/snapshot-audit/logs/</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+nohup nice bash ~/snapshot-audit/long_scans.sh &gt; long_scans.log 2&gt;&amp;1 &amp;
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> a job number and a process ID, for example <code>[1] 123456</code>. Check progress at any time with <code>cat ~/snapshot-audit/logs/long_scans.log</code>. You get the results in step 7.1.</li>
+</ul>
+<h3 id="3-3-list-the-images-and-start-the-start-test">3.3 List the images, and start the start test</h3>
+<ul>
+<li><strong>Why:</strong>
+<ul>
+<li><strong>The image list.</strong> <code>ctr images ls -q</code> asks containerd for every image name. <code>docker image ls</code> can't be used, because it fails on this host (report, section 2.3).</li>
+<li><strong>The start test.</strong> It starts each image once, with no network and no pull, and sorts the failures by type of damage. That gives the full list of broken images, and it takes 2 to 4 hours.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong>
+<ul>
+<li><strong><code>ctr images ls</code>: none.</strong> It is a list command from your rule; sudo asks for your password.</li>
+<li><strong>The start test: low.</strong> Each test container runs <code>true</code> and is removed at once (<code>--rm</code>), so it touches no other container, and it never removes an image. Like any <code>docker run</code>, it may unpack an image that wasn't unpacked yet. That adds files and changes nothing that exists.</li>
+</ul>
+</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
+sudo ctr -n moby images ls -q &gt; images_list.txt                       # every image name
+wc -l &lt; images_list.txt
+nohup nice bash ~/snapshot-audit/layer_test.sh images_list.txt layer_test.tsv &gt; layer_test.log 2&gt;&amp;1 &amp;
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> about <code>7089</code>, then a job number and a process ID. <code>wc -l &lt; ~/snapshot-audit/inventory/layer_test.tsv</code> grows as it runs; it is finished when <code>pgrep -f layer_test.sh</code> prints nothing. You get the results in step 7.2.</li>
+<li><strong>Send me:</strong> the image count.</li>
+</ul>
+<h2 id="step-4-the-logs-30-minutes-no-sudo">Step 4: the logs (30 minutes, no sudo)</h2>
+<h3 id="4-1-the-boots-and-the-order-of-data-and-containerd-q1-q5">4.1 The boots, and the order of <code>/data</code> and containerd (Q1, Q5)</h3>
+<ul>
+<li><strong>Why:</strong> this is the heart of the 12 Oct event. If containerd started before <code>/data</code> was mounted, it worked on the empty folder of the system disk. <code>systemd[1]</code> lines are systemd starting and stopping services and mounts; the filter keeps only those.</li>
+<li><strong>Risk:</strong> none. It reads the journal.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+journalctl --list-boots --no-pager &gt; boots.txt                         # every boot the journal knows
+for b in -1 0; do                                                       # -1 is the 11 Sep boot, 0 is the 12 Oct boot
+  echo &quot;===== boot $b: systemd starting and stopping data.mount, containerd and docker&quot;
+  journalctl -b &quot;$b&quot; -o short-iso --no-pager -u data.mount -u containerd.service -u docker.service | grep -m 12 -E &#x27;systemd\[1\]: .*(Mount|Start|Stopp|Fail)&#x27;
+  echo &quot;-- last lines of this boot&quot;
+  journalctl -b &quot;$b&quot; -o short-iso --no-pager -n 5 | cut -c1-160
+done &gt;&gt; boots.txt 2&gt;&amp;1
+cat boots.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected</strong>, after about 2 minutes:
+<ul>
+<li>Three boots: 24 Jul 15:49, 11 Sep 09:14 and 12 Oct 10:38.</li>
+<li><strong>Boot 0:</strong> <code>Starting containerd.service</code> at 10:38:15, <code>Failed with result 'timeout'</code> at 10:39:45 and <code>Started containerd.service</code> at 10:40:15. Then <code>Mounted data.mount</code> at 10:54:05. That confirms Q1.</li>
+<li><strong>Boot -1:</strong> few or no lines, because its older entries were rotated away. Its last lines are from 11 Oct 15:24, with no shutdown messages.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output of <code>cat boots.txt</code>.</li>
+</ul>
+<h3 id="4-2-out-of-memory-stuck-processes-and-disk-messages-q9">4.2 Out of memory, stuck processes and disk messages (Q9)</h3>
+<ul>
+<li><strong>Why:</strong>
+<ul>
+<li><strong>Out-of-memory kills:</strong> when memory runs out, the kernel kills processes (&quot;out-of-memory killer&quot;). The 12 Oct restart followed a day of that.</li>
+<li><strong>Stuck processes:</strong> &quot;blocked for more than&quot; and &quot;waiting for writeback&quot; mean a process waited minutes for the disk.</li>
+<li><strong>Disk recovery:</strong> &quot;recovery complete&quot; and &quot;orphan&quot; mean a disk wasn't unmounted cleanly.</li>
+<li><strong>The question:</strong> did this also happen around 6 and 7 Oct, when the first damage appeared?</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none. It reads the kernel logs, about 50 MB.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+zgrep -hE &#x27;Out of memory: Killed process|invoked oom-killer|blocked for more than|waiting for writeback|soft lockup|I/O error|EXT4-fs (error|warning)|EXT4-fs \(nvme|recovery complete|orphan&#x27; \
+  /var/log/kern.log.4.gz /var/log/kern.log.3.gz /var/log/kern.log.2.gz /var/log/kern.log.1 /var/log/kern.log &gt; kernel.txt
+grep &#x27;Out of memory: Killed&#x27; kernel.txt | cut -c1-10 | uniq -c &gt; oom_per_day.txt                   # kills per day
+grep -oE &#x27;Killed process [0-9]+ \([^)]+\)&#x27; kernel.txt | awk &#x27;{print $4}&#x27; | sort | uniq -c | sort -rn &gt; oom_victims.txt
+grep -E &#x27;blocked for more than|waiting for writeback&#x27; kernel.txt | cut -c1-160 &gt; hung_tasks.txt     # processes stuck on the disk
+grep -E &#x27;systemd-journald.service: (Failed|State)&#x27; /var/log/syslog &gt; journald_watchdog.txt           # these lines are only in syslog
+cat oom_per_day.txt oom_victims.txt journald_watchdog.txt
+cut -c1-13 hung_tasks.txt | sort | uniq -c                                                          # stuck processes per hour
+grep -E &#x27;recovery complete|orphan|I/O error|EXT4-fs error&#x27; kernel.txt | cut -c1-160
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><strong>Kills per day:</strong> on 11 Oct (from 15:21) and on 12 Oct (until 10:36), 26 in all in <code>kern.log</code>. Another day, above all 6 or 7 Oct, is a lead.</li>
+<li><strong>Victims:</strong> <code>python</code> and <code>java</code>, not <code>containerd</code> or <code>dockerd</code>.</li>
+<li><strong>Watchdog:</strong> failures at 15:23 and 15:31 on 11 Oct.</li>
+<li><strong>Stuck processes:</strong> at least <code>2026-10-14T20</code> and <code>2026-10-14T21</code>, when <code>dockerd</code> waited more than 2 minutes for the disk.</li>
+<li><strong>Disk messages:</strong>
+<ul>
+<li><code>orphan cleanup</code> on <code>nvme0n1p3</code> at 10:38 on 12 Oct;</li>
+<li><code>recovery complete</code> and <code>1386 orphan inodes deleted</code> on <code>nvme1n1p1</code> at 10:54;</li>
+<li>no <code>I/O error</code>.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output.</li>
+</ul>
+<h3 id="4-3-logins-and-sudo-commands-since-13-sep-q2-q8-q11">4.3 Logins and sudo commands since 13 Sep (Q2, Q8, Q11)</h3>
+<ul>
+<li><strong>Why:</strong> every SSH login is in <code>auth.log</code>, with the fingerprint of the key used. Root's work therefore shows as root logins, and as sudo commands when root used sudo. This is how we see who was on the host when fstab was edited and <code>/data</code> mounted.</li>
+<li><strong>Risk:</strong> none. It reads <code>auth.log*</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+a=&quot;/var/log/auth.log.4.gz /var/log/auth.log.3.gz /var/log/auth.log.2.gz /var/log/auth.log.1 /var/log/auth.log&quot;
+zgrep -hE &#x27;sshd.*Accepted &#x27; $a &gt; logins.txt                                           # every SSH login, with the key&#x27;s fingerprint
+zgrep -hE &#x27;sudo.*COMMAND=&#x27; $a &gt; sudo_commands.txt                                     # every sudo command
+grep &#x27; for root &#x27; logins.txt | awk &#x27;{print substr($1, 1, 10), $NF}&#x27; | sort | uniq -c &gt; root_logins_by_day.txt
+grep -hE &#x27;^2026-10-12T(09|10|11|12):&#x27; logins.txt sudo_commands.txt | grep -E &#x27; for root |COMMAND=&#x27; | sort &gt; around_1012.txt
+wc -l logins.txt sudo_commands.txt
+cat root_logins_by_day.txt
+echo &quot;--- root logins and sudo commands, 12 Oct 09:00-12:59&quot;; cat around_1012.txt
+echo &quot;--- all sudo commands&quot;; cut -c1-200 sudo_commands.txt
+echo &quot;--- who logged in on 12 Oct 10:00-12:59&quot;; grep -E &#x27;^2026-10-12T1[0-2]:&#x27; logins.txt | grep -oE &#x27;for [a-z0-9_-]+&#x27; | sort | uniq -c
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><strong>Root logins per day:</strong> the count, date and key fingerprint (<code>SHA256:…</code>) of each.</li>
+<li><strong>12 Oct:</strong> root logins between 10:38 and 12:10, when <code>/data</code> was mounted and fstab rewritten.</li>
+<li><strong>Sudo commands:</strong> a few lines, all by root, for example <code>systemctl start taskanchor-…</code> at 11:19 on 12 Oct, and the group change for <code>toby</code> at 10:17 on 15 Oct.</li>
+<li><strong>Users:</strong> the accounts that logged in on 12 Oct.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output. It contains IP addresses and user names; that's fine for this chat.</li>
+</ul>
+<h3 id="4-4-12-oct-in-detail-q4">4.4 12 Oct in detail (Q4)</h3>
+<ul>
+<li><strong>Why:</strong> every start, stop and mount of containerd, Docker and <code>/data</code> on 12 Oct. The stop and start between 11:41 and 14:41 is when containerd switched back to the real database.</li>
+<li><strong>Risk:</strong> none. It reads the journal.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+journalctl --since &#x27;2026-10-12 10:30&#x27; --until &#x27;2026-10-12 15:00&#x27; -o short-iso --no-pager -u containerd -u docker -u data.mount &gt; day_1012.txt
+grep -E &#x27;systemd\[1\]: .*(Start|Stopp|Mount|Fail)&#x27; day_1012.txt | cut -c1-160
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>containerd starting at 10:38 and 10:40, and <code>/data</code> mounted at 10:54;</li>
+<li>Docker stopping at 11:48 and starting at 13:07;</li>
+<li>a containerd stop and start between 11:41 and 14:41. Compare its time with the root logins in 4.3.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h3 id="4-5-containerd-s-restarts-on-14-oct-q11">4.5 containerd's restarts on 14 Oct (Q11)</h3>
+<ul>
+<li><strong>Why:</strong> containerd restarted at 11:11 and 17:36 on 14 Oct. A restart doesn't delete data, but we want to know who did it and why.</li>
+<li><strong>Risk:</strong> none. It reads the journal and the files from 4.3.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+journalctl -u containerd --since 2026-10-14 --until 2026-10-15 -o short-iso --no-pager | grep -E &#x27;systemd\[1\]: &#x27; &gt; restarts_1014.txt
+grep -hE &#x27;2026-10-14T(10:5|11:[01]|17:[23])&#x27; logins.txt sudo_commands.txt | grep -E &#x27; for root |COMMAND=&#x27; &gt;&gt; restarts_1014.txt
+cut -c1-160 restarts_1014.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> <code>Stopping</code>, <code>Stopped</code>, <code>Starting</code> and <code>Started</code> lines at about 11:11 and 17:36, and any root login or sudo command just before them.</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h3 id="4-6-your-own-scheduled-jobs-q8">4.6 Your own scheduled jobs (Q8)</h3>
+<ul>
+<li><strong>Why:</strong> rule out your own account first. Four accounts keep background services running without being logged in: naiyu, toby, yun and zihan. Step 6.3 lists the other three.</li>
+<li><strong>Risk:</strong> none. It only lists.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>systemctl --user list-timers --all --no-pager
+crontab -l
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> no timer that deletes files, and only the hourly canary line in the crontab.</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h2 id="step-5-containerd-s-records-against-the-disk-20-minutes-sudo">Step 5: containerd's records against the disk (20 minutes, sudo)</h2>
+<h3 id="5-1-save-containerd-s-lists-and-the-files-on-disk">5.1 Save containerd's lists, and the files on disk</h3>
+<ul>
+<li><strong>Why:</strong> compare containerd's records with what is really on disk. <code>images check</code> tells, for each image, whether all its downloaded files are present (<code>complete</code>) and whether it's unpacked. The lists of layer folders and downloaded files are what's on disk.</li>
+<li><strong>Risk:</strong> none. Every sudo command here is a list command from your rule. <code>images check</code> reads the records of all 7,089 images; it takes up to 10 minutes and changes nothing.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
+d=/data/containerd
+sudo ctr -n moby images check &gt; images_check.txt 2&gt;&amp;1                 # each image: complete or incomplete, unpacked or not
+sudo ctr -n moby snapshots ls &gt; snapshots_db.txt                      # every layer record
+sudo ctr -n moby content ls &gt; content_records.txt                     # every downloaded-file record, with its age
+sudo ctr -n moby content active &gt; content_active.txt                  # downloads in progress, or cut off by the restart
+sudo ls -l --full-time $d/io.containerd.snapshotter.v1.overlayfs/snapshots &gt; snapshot_dirs.txt    # layer folders on disk
+sudo ls -U $d/io.containerd.content.v1.content/blobs/sha256 &gt; blob_files.txt                     # downloaded files on disk
+wc -l images_check.txt snapshots_db.txt content_records.txt content_active.txt snapshot_dirs.txt blob_files.txt
+awk &#x27;NR &gt; 1 {print $4, $NF}&#x27; images_check.txt | sort | uniq -c        # images per state
+cat content_active.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li><code>wc -l</code> gives many thousands of lines for each list, and few for <code>content_active.txt</code>.</li>
+<li>The states are counts such as <code>5000 complete true</code> and <code>900 incomplete true</code>. &quot;Incomplete&quot; means downloaded files are missing.</li>
+<li><code>content_active.txt</code> is a header, and maybe a few downloads cut off on 11 or 12 Oct.</li>
+<li>If a command says <code>not allowed</code> or <code>I'm sorry</code>, stop and send it to me: it doesn't match the rule.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output.</li>
+</ul>
+<h3 id="5-2-records-against-disk-and-the-ages-of-the-missing-files-q7">5.2 Records against disk, and the ages of the missing files (Q7)</h3>
+<ul>
+<li>
+<p><strong>Why:</strong> this is the test that tells the remaining candidates apart (report, section 7.2).</p>
+<ul>
+<li><strong>Deleted by age:</strong> the missing files are all old, and the present ones younger.</li>
+<li><strong>Lost in the restart:</strong> the missing files are from 11 and 12 Oct.</li>
+<li><strong>Neither:</strong> no pattern.</li>
+</ul>
+<p><code>comm</code> compares two sorted lists: <code>-23</code> keeps lines only in the first (recorded but not on disk), and <code>-13</code> lines only in the second (on disk but not recorded).</p>
+</li>
+<li>
+<p><strong>Risk:</strong> none. No sudo; it reads the files from 5.1 and writes text files.</p>
+</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
+echo &quot;layer records $(($(wc -l &lt; snapshots_db.txt) - 1)), layer folders $(grep -c &#x27;^d&#x27; snapshot_dirs.txt)&quot;
+awk &#x27;NR &gt; 1 {sub(/^sha256:/, &quot;&quot;, $1); print $1}&#x27; content_records.txt | LC_ALL=C sort &gt; blobs_db.txt
+LC_ALL=C sort blob_files.txt &gt; blob_files.sorted
+LC_ALL=C comm -23 blobs_db.txt blob_files.sorted &gt; blobs_missing.txt          # recorded, but not on disk
+LC_ALL=C comm -13 blobs_db.txt blob_files.sorted &gt; blobs_unrecorded.txt       # on disk, but not recorded
+wc -l blobs_db.txt blobs_missing.txt blobs_unrecorded.txt
+awk &#x27;NR == FNR {miss[&quot;sha256:&quot; $1]; next} FNR &gt; 1 {print (($1 in miss) ? &quot;missing&quot; : &quot;present&quot;) &quot;\t&quot; $3 &quot; &quot; $4}&#x27; \
+  blobs_missing.txt content_records.txt | sort | uniq -c &gt; blob_ages.txt
+cat blob_ages.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>More layer records than layer folders.</li>
+<li>Some thousands of missing files, and few or no unrecorded ones.</li>
+<li><code>blob_ages.txt</code>: counts per state and age, for example <code>812 missing 2 months</code> and <code>40210 present 3 weeks</code>.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output.</li>
+</ul>
+<h3 id="5-3-folders-from-a-second-numbering-q5">5.3 Folders from a second numbering (Q5)</h3>
+<ul>
+<li><strong>Why:</strong> the empty database of 12 Oct numbered its folders from 1, while the real one is past 350,000. A low-numbered folder with another date would mean another split brain, for example at the 11 Sep boot.</li>
+<li><strong>Risk:</strong> none. No sudo; it reads <code>snapshot_dirs.txt</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
+awk &#x27;$9 ~ /^[0-9]+$/ &amp;&amp; $9 &lt; 1000 {print $9, $6, $7, $8}&#x27; snapshot_dirs.txt | sort -n &gt; low_numbered_dirs.txt
+wc -l &lt; low_numbered_dirs.txt
+awk &#x27;{print $2}&#x27; low_numbered_dirs.txt | sort | uniq -c                       # low-numbered folders per date
+head -n 5 low_numbered_dirs.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> only the date <code>2026-10-12</code>, with times between 10:54 and 14:41, including folders 37 and 54. Any other date answers Q5 with &quot;yes&quot;.</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h2 id="step-6-what-only-root-can-read-20-minutes-sudo">Step 6: what only root can read (20 minutes, sudo)</h2>
+<h3 id="6-1-whose-keys-may-log-in-as-root-q2">6.1 Whose keys may log in as root (Q2)</h3>
+<ul>
+<li><strong>Why:</strong> match the fingerprints of the root logins in 4.3 to the people the keys belong to. Each key's comment is usually its owner's name or computer.</li>
+<li><strong>Risk:</strong> none. It prints fingerprints and comments, not the keys.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+sudo ssh-keygen -lf /root/.ssh/authorized_keys &gt; root_keys.txt
+cat root_keys.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> one line per key, for example <code>2048 SHA256:… comment (RSA)</code>. Your fingerprint from 0.2 should be among them, and so should each fingerprint in <code>root_logins_by_day.txt</code>.</li>
+<li><strong>Send me:</strong> the output. You may replace e-mail addresses in the comments with names.</li>
+</ul>
+<h3 id="6-2-root-s-shell-history-q2-q8">6.2 Root's shell history (Q2, Q8)</h3>
+<ul>
+<li><strong>Why:</strong> find any command of root's that edited fstab, mounted or unmounted, or deleted under <code>/data</code>. Only matching lines are kept. <code>-B1</code> also keeps the line before each match; if bash saved timestamps, that line is <code>#</code> followed by seconds since 1970.</li>
+<li><strong>Risk:</strong> none. <code>sudo cat</code> only reads the file; the filtering runs as <code>toby</code>.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+sudo cat /root/.bash_history | grep -nE -B1 &#x27;fstab|mount|/data|containerd|docker|rm -|find |prune&#x27; &gt; root_history.txt
+wc -l &lt; root_history.txt
+cat root_history.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the commands that wrote and fixed fstab and mounted <code>/data</code>, and any deletion under <code>/data</code>. To turn a timestamp line such as <code>#1791979238</code> into a date, run <code>date -d @1791979238</code>. Ubuntu's default keeps only the last 2,000 commands, so a missing line isn't proof.</li>
+<li><strong>Send me:</strong> the output. Read it first, and replace any password or token with <code>&lt;removed&gt;</code>.</li>
+</ul>
+<h3 id="6-3-every-crontab-and-the-other-users-timers-q8">6.3 Every crontab, and the other users' timers (Q8)</h3>
+<ul>
+<li><strong>Why:</strong> find any scheduled job, of any user, that deletes files or prunes Docker. Crontabs are in <code>/var/spool/cron/crontabs/&lt;user&gt;</code>. User timers are in <code>~/.config/systemd/user/</code> of the three users who keep services running.</li>
+<li><strong>Risk:</strong> none. It reads crontabs, and lists only the file names of the timers.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+sudo grep -rH . /var/spool/cron/crontabs | grep -vE &#x27;:[[:space:]]*#&#x27; &gt; crontabs.txt
+sudo ls -laR /home/naiyu/.config/systemd/user /home/yun/.config/systemd/user /home/zihan/.config/systemd/user &gt; user_timers.txt 2&gt;&amp;1
+echo &quot;--- crontab lines that delete, prune or touch Docker or /data&quot;; grep -iE &#x27;rm |find |prune|delete|docker|ctr|/data&#x27; crontabs.txt
+echo &quot;--- user units&quot;; grep -E &#x27;\.(timer|service)&#x27; user_timers.txt
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>Crontab lines as <code>/var/spool/cron/crontabs/&lt;user&gt;:&lt;job&gt;</code>, including your canary.</li>
+<li>Unit file names of naiyu, yun and zihan; zihan's include <code>contextgraph-release-…</code> services, which use <code>/data</code>.</li>
+<li>A timer named like clean, prune or gc is a lead; its owner should say what it does.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the output.</li>
+</ul>
+<h3 id="6-4-the-empty-store-hidden-under-data-q3">6.4 The empty store hidden under <code>/data</code> (Q3)</h3>
+<ul>
+<li><strong>Why:</strong> when <code>/data</code> is mounted, the folder of the same name on the system disk is hidden underneath. containerd's empty database from 12 Oct 10:38 should still be there. The only way to look under a mount point is a second, read-only view of the system disk at <code>/mnt/rootfs</code>.</li>
+<li><strong>Risk:</strong> low.
+<ul>
+<li>The view is read-only (<code>ro</code>), so nothing can be written through it, not even by root.</li>
+<li>It covers the system disk only, not <code>/data</code>, and it changes no file.</li>
+<li>The last commands remove it.</li>
+<li><code>findmnt</code> checks that the view really is read-only. <strong>If it shows <code>rw</code>, stop:</strong> run only <code>sudo umount /mnt/rootfs</code>, and send me the output.</li>
+</ul>
+</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+sudo mkdir -p /mnt/rootfs                                  # an empty folder for the view
+sudo mount -o bind,ro / /mnt/rootfs                        # the read-only view of the system disk
+findmnt -no TARGET,OPTIONS /mnt/rootfs                     # must show &quot;/mnt/rootfs ro,...&quot;
+sudo ls -la --full-time /mnt/rootfs/data /mnt/rootfs/data/containerd /mnt/rootfs/data/containerd/io.containerd.metadata.v1.bolt &gt; hidden_store.txt 2&gt;&amp;1
+sudo du -sh /mnt/rootfs/data &gt;&gt; hidden_store.txt 2&gt;&amp;1      # how much is hidden
+sudo umount /mnt/rootfs                                    # remove the view
+findmnt /mnt/rootfs || echo &quot;view removed&quot;
+cat hidden_store.txt
+</code></pre></div>
+<ul>
+<li>
+<p><strong>Expected:</strong></p>
+<ul>
+<li>The first <code>findmnt</code> shows <code>/mnt/rootfs ro,…</code>.</li>
+<li><code>hidden_store.txt</code> shows a <code>containerd</code> folder from 2026-10-12, around 10:38, and a <code>meta.db</code> last changed between 10:38 and 14:41. Together they prove the split brain.</li>
+<li>The last <code>findmnt</code> prints <code>view removed</code>.</li>
+</ul>
+<p>An empty <code>/mnt/rootfs/data</code> would mean someone deleted the hidden store later; we'd ask root.</p>
+</li>
+<li>
+<p><strong>Send me:</strong> the whole output.</p>
+</li>
+</ul>
+<h3 id="6-5-the-two-containers-from-the-split-brain-q12">6.5 The two containers from the split brain (Q12)</h3>
+<ul>
+<li><strong>Why:</strong> two containers were created on 12 Oct at 11:33 and 11:41, while containerd used the empty database. If the real database doesn't know them, they will fail at their next start, and their owners should be told.</li>
+<li><strong>Risk:</strong> none. <code>docker inspect</code> and the <code>sudo ls</code> only read, and the database check reads the file from 5.1.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+for c in f870b22117e6 6afbbec81e30; do
+  id=$(docker inspect --format &#x27;{{.Id}}&#x27; &quot;$c&quot;)                                       # full container ID
+  echo &quot;== $c $(docker inspect --format &#x27;{{.Name}} {{.Config.Image}} {{.State.Status}}&#x27; &quot;$c&quot;)&quot;
+  echo &quot;records for it in the real database: $(grep -c &quot;$id&quot; ../inventory/snapshots_db.txt)&quot;
+done &gt; split_brain_containers.txt
+sudo ls -ld --full-time /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/37 /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/54 &gt;&gt; split_brain_containers.txt 2&gt;&amp;1
+cat split_brain_containers.txt
+</code></pre></div>
+<ul>
+<li>
+<p><strong>Expected:</strong> for each container, its name, image and state (<code>running</code> or <code>exited</code>), and its number of records.</p>
+<ul>
+<li><strong>2:</strong> its layer and init records exist, so it's known.</li>
+<li><strong>0:</strong> it isn't known.</li>
+</ul>
+<p>Then both folders, dated 12 Oct.</p>
+</li>
+<li>
+<p><strong>Send me:</strong> the output.</p>
+</li>
+</ul>
+<h2 id="step-7-results-of-the-long-jobs">Step 7: results of the long jobs</h2>
+<h3 id="7-1-the-slow-log-scans-q6-q10">7.1 The slow log scans (Q6, Q10)</h3>
+<ul>
+<li><strong>When:</strong> <code>cat ~/snapshot-audit/logs/long_scans.log</code> shows <code>Q10 done</code>.</li>
+<li><strong>Why:</strong>
+<ul>
+<li><code>damage_first_seen.txt</code> dates the first appearance of each kind of error.</li>
+<li><code>syslog_volume.txt</code> shows which days and programs wrote the 15 GB of syslog.</li>
+</ul>
+</li>
+<li><strong>Risk:</strong> none.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/logs
+cat long_scans.log damage_first_seen.txt
+grep &#x27;^day&#x27; syslog_volume.txt | sort                                  # syslog size per day, 4 to 11 Oct
+grep &#x27;^prog&#x27; syslog_volume.txt | sort -k2,2nr | head -n 15             # the programs that wrote the most lines
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong>
+<ul>
+<li>For each error type, the first containerd or Docker line with it, or <code>never</code>. Errors that a client sees aren't always in the daemon's log, so <code>never</code> doesn't prove anything.</li>
+<li>One line per day with its size in MB, then the top 15 programs.</li>
+</ul>
+</li>
+<li><strong>Send me:</strong> the whole output.</li>
+</ul>
+<h3 id="7-2-the-start-test-impact">7.2 The start test (impact)</h3>
+<ul>
+<li><strong>When:</strong> <code>pgrep -f layer_test.sh</code> prints nothing.</li>
+<li><strong>Why:</strong> count the broken images per type of damage, see whose they are (grouped by repository), and list the containers that use a broken image.</li>
+<li><strong>Risk:</strong> none. <code>docker ps</code> only lists.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit/inventory
+cut -f1 layer_test.tsv | sort | uniq -c                                              # images per result type
+awk -F&#x27;\t&#x27; &#x27;$1 != &quot;ok&quot; {print $1 &quot;\t&quot; $2}&#x27; layer_test.tsv | sed -E &#x27;s|[:@][^/]*$||&#x27; | sort | uniq -c | sort -rn &gt; broken_by_repo.txt
+awk -F&#x27;\t&#x27; &#x27;$1 != &quot;ok&quot; {print $2}&#x27; layer_test.tsv | while read -r i; do
+  docker ps -a --filter ancestor=&quot;$i&quot; --format &quot;{{.ID}}\t{{.Names}}\t{{.Status}}\t$i&quot;
+done &gt; containers_on_broken.tsv
+head -n 20 broken_by_repo.txt
+wc -l &lt; containers_on_broken.tsv
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> counts of <code>ok</code>, <code>layers_missing</code>, <code>blob_missing</code>, <code>stale_record</code> and <code>other</code>. The DeepSWE repository should be near the top of the list, with 113.</li>
+<li><strong>Send me:</strong> the whole output.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>The image starts</td>
+</tr>
+<tr>
+<td><code>layers_missing</code></td>
+<td>A layer folder is gone, as with DeepSWE</td>
+</tr>
+<tr>
+<td><code>blob_missing</code></td>
+<td>A downloaded file is gone</td>
+</tr>
+<tr>
+<td><code>stale_record</code></td>
+<td><code>already exists</code> or <code>missing parent</code></td>
+</tr>
+<tr>
+<td><code>other</code></td>
+<td>Any other error, for example an image for another CPU type</td>
+</tr>
+</tbody>
+</table>
+<h2 id="step-8-finish">Step 8: finish</h2>
+<h3 id="8-1-stop-recording">8.1 Stop recording</h3>
+<ul>
+<li><strong>Risk:</strong> none. If bash says <code>There are running jobs</code>, type <code>exit</code> again; the <code>nohup</code> jobs keep running.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>exit
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> the normal prompt again. The recording is in <code>~/snapshot-audit/sessions/</code>.</li>
+</ul>
+<h3 id="8-2-copy-the-evidence-to-your-pc-optional">8.2 Copy the evidence to your PC (optional)</h3>
+<ul>
+<li><strong>Where:</strong> terminal 2, your PC.</li>
+<li><strong>Why:</strong> a copy for the meeting with the mentor. It goes outside the mac-k3d repository, because it contains user names, IP addresses and root's commands.</li>
+<li><strong>Risk:</strong> none. It reads from the worker and writes on your PC.</li>
+</ul>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>mkdir -p ~/cloud-worker-evidence
+scp -r toby@47.84.16.18:snapshot-audit/logs ~/cloud-worker-evidence/
+scp -r toby@47.84.16.18:snapshot-audit/inventory ~/cloud-worker-evidence/
+du -sh ~/cloud-worker-evidence/*
+</code></pre></div>
+<ul>
+<li><strong>Expected:</strong> two folders, <code>logs</code> and <code>inventory</code>, a few hundred MB together.</li>
+</ul>
+<h3 id="8-3-when-the-investigation-is-over-root-removes-the-access">8.3 When the investigation is over: root removes the access</h3>
+<p>Root runs this, or tells you to run it with <code>root.pem</code> in the same way as step 1:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>rm -f /etc/sudoers.d/90-toby-investigate                   # removes the rule
+systemctl stop toby-investigate-expire.timer 2&gt;/dev/null   # stops the backstop timer
+passwd -l toby                                             # locks toby&#x27;s password again
+sudo -l -U toby                                            # shows that toby may not run sudo
+</code></pre></div>
+<ul>
+<li><strong>Risk:</strong> low. Each line only takes back what step 1 gave.</li>
+<li><strong>Expected:</strong> the last line says that <code>toby</code> may not run sudo.</li>
+</ul>
+<h2 id="if-something-goes-wrong">If something goes wrong</h2>
+<table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>What it means</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Permission denied (publickey)</code> with <code>root.pem</code></td>
+<td>The key isn't accepted for root on this host</td>
+<td>Stop. Give root the fingerprint from 0.2</td>
+</tr>
+<tr>
+<td><code>UNPROTECTED PRIVATE KEY FILE</code></td>
+<td>Others can read the key</td>
+<td>Run step 0.1 again</td>
+</tr>
+<tr>
+<td><code>I'm sorry toby</code> or <code>not allowed</code> after a sudo command</td>
+<td>The command differs from the rule, even by one character</td>
+<td>Copy the command again exactly. If it still fails, send it to me</td>
+</tr>
+<tr>
+<td><code>sudo: … incorrect password</code></td>
+<td>Typing mistake</td>
+<td>Try again. After three failures, wait a minute</td>
+</tr>
+<tr>
+<td>The connection drops</td>
+<td>Nothing is lost; <code>nohup</code> jobs keep running</td>
+<td>Log in, run step 2.3 again, and carry on</td>
+</tr>
+<tr>
+<td><code>findmnt</code> shows <code>rw</code> in step 6.4</td>
+<td>The view isn't read-only</td>
+<td>Run only <code>sudo umount /mnt/rootfs</code>, then send me the output</td>
+</tr>
+<tr>
+<td><code>No space left on device</code></td>
+<td>The system disk is full</td>
+<td>Stop, and send me <code>df -h / /home</code></td>
+</tr>
+<tr>
+<td>Anything else unexpected</td>
+<td></td>
+<td>Stop, and send me the command and its output</td>
+</tr>
+</tbody>
+</table>
+
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var text = button.parentElement.querySelector('code').textContent;
+    function done() {
+      button.textContent = 'Copied';
+      button.classList.add('done');
+      setTimeout(function () { button.textContent = 'Copy'; button.classList.remove('done'); }, 1500);
+    }
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      if (ok) { done(); } else { button.textContent = 'Copy failed: select the text'; }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+});
+</script>
+</body>
+</html>

@@ -125,9 +125,8 @@ pub async fn run(args: StartArgs, config: &MacK3dConfig, config_path: Option<&Pa
                     println!("Warning: could not prepare the remote trigger token ({err}).");
                 }
                 println!(
-                    "Ensuring Jenkins eval jobs (one / some / full suite for {}, and {}; ui_profile={})…",
+                    "Ensuring Jenkins eval jobs (one / some / full suite for {}; ui_profile={})…",
                     jenkins_job::EVAL_BENCHMARKS.join(", "),
-                    jenkins_job::JIUWENSWARM_HEADLESS,
                     config.jenkins_job.ui_profile
                 );
                 // Best-effort: config will retry if Jenkins is still warming up.

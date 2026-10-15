@@ -48,7 +48,7 @@ Current pins:
 | k3s image | default of the installed k3d | floating | — | k3d | — |
 | Jenkins Helm chart `jenkins/jenkins` | latest chart | floating | `src/runtime/jenkins.rs` | `mac-k3d start` (`helm upgrade --install`) | Helm |
 | Jenkins controller image | `jenkins/jenkins` tag label `jdk{JAVA_MAJOR}` (`JAVA_MAJOR=21`) | pinned (major) | `toolchain.env` `JAVA_MAJOR`, written as Helm `controller.image.tagLabel` | `mac-k3d start` | `helm_values_pin_the_controller_java` |
-| Jenkins plugins | `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter` | floating (`installLatestPlugins: true`) | `ADDITIONAL_PLUGINS` in `src/runtime/jenkins.rs` | the chart at start | `helm_values_include_lockable_resources` |
+| Jenkins plugins | `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`, `uno-choice` | floating (`installLatestPlugins: true`) | `ADDITIONAL_PLUGINS` in `src/runtime/jenkins.rs` | the chart at start | `helm_values_include_lockable_resources` |
 
 ## Worker host
 

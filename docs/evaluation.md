@@ -33,16 +33,15 @@ DeepSWE, LoLBench, and SWE-bench Pro all use this path. Question choice: a non-e
 
 ## Which job to run
 
-Three jobs per suite, and one for JiuwenSwarm, ten in total:
+Three jobs per suite, nine in total. On DeepSWE each of them evaluates iCode or JiuwenSwarm, as `HARNESS` says ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)):
 
 | Job | Questions | Rollouts (default) | Use it for |
 |---|---|---|---|
-| `<suite>_one_task` | `TASK` | 1, editable | smoke test after a code change; cheapest proof the pipeline still works |
+| `<suite>_one_task` | `TASK` | 1 | smoke test after a code change; cheapest proof the pipeline still works |
 | `<suite>_some_task` | `TASKS` list, or first `N_TASKS` | 4, editable | comparing a handful of questions against a known-good result |
 | `<suite>_full_suite_task` | whole suite | 4, editable | the real run |
-| `build_jiuwenswarm_headless` | `TASKS` list, or first `N_TASKS` (default 113, the whole suite) | 4, editable | JiuwenSwarm on DeepSWE ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)) |
 
-`<suite>_one_task` is the only job that evaluates, and it is exactly one question and one rollout. `some_task`, `full_suite_task` and `build_jiuwenswarm_headless` are dispatchers: they queue one `<suite>_one_task` build per question and rollout, at most `MAX_IN_FLIGHT` of them in Jenkins at once (`0` means twice the online executors that can run the suite), and wait. Executors are `cpu_cores / cpus_per_executor` (default 2), so this PC (4 cores) runs 2 builds at once and the cloud worker (16 cores) can run 8. An OOM rollout is queued again at the tail, at most `OOM_RETRIES` times (default 2).
+`<suite>_one_task` is the only job that evaluates, and it is exactly one question and one rollout. `some_task` and `full_suite_task` are dispatchers: they queue one `<suite>_one_task` build per question and rollout, at most `MAX_IN_FLIGHT` of them in Jenkins at once (`0` means twice the online executors that can run the suite), and wait. Executors are `cpu_cores / cpus_per_executor` (default 2), so this PC (4 cores) runs 2 builds at once and the cloud worker (16 cores) can run 8. An OOM rollout is queued again at the tail, at most `OOM_RETRIES` times (default 2).
 
 ```mermaid
 flowchart TD

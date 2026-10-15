@@ -57,7 +57,7 @@ LLM API keys, Git forge PATs, and similar CI secrets live in the **Jenkins Crede
 | LLM API keys (OpenRouter, DeepSeek, OpenLux, OpenAI, Anthropic, …) | Harbor / harnesses in Jenkins builds | Jenkins Credentials (Secret text) on **controller** |
 | GitHub / GitCode (etc.) PAT — clone, push, PR comments | Pipeline `git` / `gh` / REST on agent | Jenkins Credentials on **controller** |
 | Jenkins API user/token for `mac-k3d` agent register/clean | CLI on **worker** | Local only, in `config.yaml` / `worker.yaml` written mode 600 (`mac-k3d config` tightens an older file). curl reads it on stdin, never from its arguments. Keychain / encrypted file later; plaintext in YAML is transitional debt. **`mac-k3d export` / `import` never copy `api_token` or `credentials.pending.yaml`.** |
-| Remote build trigger token (`jenkins.remote_trigger_token`) | Jenkins job "Trigger builds remotely" on all ten eval jobs | Local only, in the controller `config.yaml` (mode 600). `config` / `start` generate it once when the field is empty and write it into each job as `<authToken>`. **`mac-k3d export` omits it.** `mac-k3d eval` does not use it. |
+| Remote build trigger token (`jenkins.remote_trigger_token`) | Jenkins job "Trigger builds remotely" on all nine eval jobs | Local only, in the controller `config.yaml` (mode 600). `config` / `start` generate it once when the field is empty and write it into each job as `<authToken>`. **`mac-k3d export` omits it.** `mac-k3d eval` does not use it. |
 | Agent JNLP connection secret | LaunchAgent / systemd unit on worker | Local `<remote_fs>/.agent-secret` (mode 600, node-specific, not shared). `launch-agent.sh` (mode 700) passes `-secret @<file>`, so the secret is not in the agent's arguments. |
 | Jenkins initial admin password | Helm chart secret in k3d | Cluster secret; printed by `mac-k3d config` |
 
@@ -153,7 +153,7 @@ Possible later enhancements (not required for the model above):
 
 ## Related docs
 
-- [jenkins-jobs.md](jenkins-jobs.md) — the ten eval jobs
+- [jenkins-jobs.md](jenkins-jobs.md) — the nine eval jobs
 - [setup.md](setup.md#how-the-machines-fit-together) — controller vs worker topology
 - [architecture.md](architecture.md) — security baseline
 - [configuration.md](configuration.md) — YAML fields (including transitional plaintext API token)

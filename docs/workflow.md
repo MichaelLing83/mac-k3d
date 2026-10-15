@@ -10,7 +10,7 @@ The product is a CI path for AI harness evaluation: many short jobs, each in its
 
 | Piece | What it does now | Why it matches the goal |
 |-------|------------------|-------------------------|
-| **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), plus `build_jiuwenswarm_headless` (JiuwenSwarm on DeepSWE), ten in total. `_one_task` is one question and one rollout. The others prepare the harness once, queue one `_one_task` build per question and rollout, then merge in the same build. Executors are `cpu_cores / 2`. Evaluate locks only the CPUs that question declares. | Several trials can run on one worker, each in its own build, without one trial taking the whole machine. |
+| **Jenkins** | Three jobs per benchmark (`_one_task`, `_some_task`, `_full_suite_task`), nine in total; the DeepSWE ones evaluate iCode or JiuwenSwarm (`HARNESS`). `_one_task` is one question and one rollout. The others prepare the harness once, queue one `_one_task` build per question and rollout, then merge in the same build. Executors are `cpu_cores / 2`. Evaluate locks only the CPUs that question declares. | Several trials can run on one worker, each in its own build, without one trial taking the whole machine. |
 | **Harbor** | Inside that one build, `evaluate` is one `harbor run -n 1 -k 1` plus `icode_harbor_agent:ICodeAgent`, at the version pinned in `pipeline/config/toolchain.env`. Harbor applies the task's declared limits and grades. `--allow-agent-host` comes from `pipeline/config/network-allowlist-v1.json` (`api.deepseek.com`, `api.deepseek.ai`). | One runner, used as a runner. mac-k3d does not schedule containers. The allowlist is the isolation that ships today: the agent can call the model and cannot browse the answer online. |
 | **k3d** | The controller uses k3d to host Jenkins. Eval sandboxes still run as Harbor containers on the worker's Docker. | A later job will `k3d cluster create` per build, apply a default-deny NetworkPolicy (DeepSeek API only), pull images through a Harbor registry proxy cache, run Harbor, then delete the cluster. That cluster, the NetworkPolicy, and the registry cache are **not** implemented yet. |
 
@@ -107,7 +107,7 @@ mac-k3d eval --stage tasks --n-tasks 1   # one phase on its own (env, tasks, eva
 
 `--job one|some|full` and the job's **Build with Parameters** page start the same build: the CLI sends only the fields you give and the job keeps its defaults for the rest ([commands.md](commands.md#queue-a-jenkins-job-from-the-cli)).
 
-Ten Jenkins jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**, and `build_jiuwenswarm_headless` (JiuwenSwarm on DeepSWE). Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job pins `HARNESS`, `LLM` and `BENCHMARK` and shows them first. Logs print `PROGRESS n% …`. Agent label `lolbench`. Evaluate locks the CPUs that question declares, not the whole node. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor's `-n 1` is in [optimization.md](optimization.md).
+Nine Jenkins jobs: `one_task`, `some_task` and `full_suite_task` for each of **deepswe**, **lolbench** and **swebenchpro**. Every evaluation runs as a `one_task` build from the same `run_all.sh`; each job shows `HARNESS`, `LLM` and `BENCHMARK` first and pins them, except `HARNESS` on DeepSWE, which picks iCode or JiuwenSwarm. Logs print `PROGRESS n% …`. Agent label `lolbench`. Evaluate locks the CPUs that question declares, not the whole node. Which shape to pick is in [evaluation.md](evaluation.md#which-job-to-run); how the lock becomes Harbor's `-n 1` is in [optimization.md](optimization.md).
 
 ---
 
@@ -125,7 +125,7 @@ bash scripts/redeploy.sh --controller <user>@<controller> --worker <user>@<worke
 
 | Host | What it does |
 |---|---|
-| Controller | installs `~/.local/bin/mac-k3d`, then `config --skip-secrets` (rewrites the ten jobs). With `--start` it runs `start` instead, which is only needed when the Jenkins plugin list changed |
+| Controller | installs `~/.local/bin/mac-k3d`, then `config --skip-secrets` (rewrites the nine jobs). With `--start` it runs `start` instead, which is only needed when the Jenkins plugin list changed |
 | Each `--worker` | installs `~/.local/bin/mac-k3d`, then `config -c worker.yaml` (node, core locks, agent) |
 | This PC | the same as a worker, unless `--no-local-worker` |
 
@@ -199,5 +199,5 @@ CI checks `file` + `lipo -info` so the Intel asset is **x86_64**, not arm64. The
 | [cloud-eval-runbook.md](testing/cloud-eval-runbook.md) | Operator runbook: cloud root controller → local worker → JSON |
 | [testing-eval-pipeline.md](testing/testing-eval-pipeline.md) | Pipeline stage CLI tests |
 | [secrets.md](secrets.md) | Controller credentials (`deepseek-api-key`) |
-| [jenkins-jobs.md](jenkins-jobs.md) | The ten eval jobs, all Harbor: iCode, or JiuwenSwarm on DeepSWE |
+| [jenkins-jobs.md](jenkins-jobs.md) | The nine eval jobs, all Harbor: iCode, or JiuwenSwarm on DeepSWE |
 | [harbor-delegation-multiworker/README.md](harbor-delegation-multiworker/README.md) | Harbor/mac-k3d responsibility split, job topology, multi-worker scaling |

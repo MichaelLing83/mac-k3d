@@ -89,7 +89,7 @@ With `CANARY=only` the build stops after evaluate: the later phases print `canar
 
 ## Harness store
 
-A harness is prepared once per input and platform, and each worker keeps what it prepared or received in its harness store (`pipeline/lib/harness_store.py`). A `some_task`, `full_suite_task` or `build_jiuwenswarm_headless` build therefore prepares the harness once in its `Prepare harness` stage ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)), and each worker unpacks that bundle once, however many shards it runs.
+A harness is prepared once per input and platform, and each worker keeps what it prepared or received in its harness store (`pipeline/lib/harness_store.py`). A `some_task` or `full_suite_task` build therefore prepares the harness once in its `Prepare harness` stage ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)), and each worker unpacks that bundle once, however many shards it runs.
 
 **Bundle.** One reproducible gzipped tar (`tar --sort=name`, mtime 0, owner 0, `gzip -n`) of `bundle.json` and `tree/`, the prepared tree a trial mounts read-only. `bundle.json` records the harness, the input it was built from (`git` url, kind, ref, sha and subject, or `release` filename, sha256 and format), the platform, the recipe, the build and node that made it, and for JiuwenSwarm `runtime.json` and `uv pip freeze`. The bundle's name is the sha256 of the tarball.
 

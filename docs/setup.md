@@ -10,7 +10,7 @@ Each machine is self-contained: its Docker, its k3d cluster (controller only) an
 
 | Role | Runs | Config file |
 |------|------|-------------|
-| Controller | Docker, a k3d cluster with Jenkins in it: the queue, the ten eval jobs, and the credentials ([secrets.md](secrets.md)) | `config.yaml` |
+| Controller | Docker, a k3d cluster with Jenkins in it: the queue, the nine eval jobs, and the credentials ([secrets.md](secrets.md)) | `config.yaml` |
 | Worker | Docker, Java, git, the pinned Harbor and the Jenkins agent. Eval builds run their Harbor containers on the worker's Docker. No k3d (`mac-k3d start -c worker.yaml` is rejected) | `worker.yaml` |
 | Standalone | Docker and a local k3d cluster, optionally Harbor for `mac-k3d eval --local` | `config.yaml` |
 
@@ -331,6 +331,7 @@ Open `http://localhost:17070` and complete the Jenkins setup wizard.
 - `copyartifact` — the `some_task` / `full_suite_task` `Aggregate` stage copies each shard's `eval-runs/`
 - `pipeline-utility-steps` — `nodesByLabel`, so a dispatcher counts the online executors for `MAX_IN_FLIGHT` and stops at once when no online worker carries `AGENT_LABEL`
 - `hidden-parameter` — `ui_profile: user` hides developer parameters while keeping their defaults
+- `uno-choice` (Active Choices) — a DeepSWE page shows the inputs of the `HARNESS` you pick ([jenkins-jobs.md](jenkins-jobs.md#harness-fields-on-the-deepswe-pages)). `config` pre-approves the scripts that draw them
 
 `mac-k3d config` rewrites the job XML ([jenkins-jobs.md](jenkins-jobs.md)) and credentials. It does not Helm-upgrade plugins. Workers never install plugins, and the per-core lock entries are created when a worker runs `mac-k3d config -c worker.yaml`. Do not create them by hand under Manage Jenkins, and do not install extra plugins from the Jenkins UI.
 

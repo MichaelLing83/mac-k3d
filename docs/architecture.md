@@ -123,7 +123,7 @@ State is written after successful `start` and updated by `config`. `clean --purg
 When `--jenkins in-cluster` (or `jenkins.enabled: true` in config):
 
 1. Ensure Helm repo `jenkins` is added.
-2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
+2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`, `uno-choice`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
 3. Map `jenkins.host_port` → Service port 8080 via k3d `--port`.
 
 Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.
@@ -184,16 +184,15 @@ The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and 
 
 ### Job topology
 
-Ten evaluation jobs: three shapes for each of `deepswe`, `lolbench`, `swebenchpro`, and `build_jiuwenswarm_headless`:
+Nine evaluation jobs: three shapes for each of `deepswe`, `lolbench`, `swebenchpro`:
 
 | Job | Shape | Purpose |
 |---|---|---|
 | `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change; also every unit a dispatcher queues |
 | `<suite>_some_task` | dispatcher, `agent none` | a `TASKS` list or the first `N_TASKS`, at full rollouts |
 | `<suite>_full_suite_task` | dispatcher, `agent none` | the whole suite at full rollouts |
-| `build_jiuwenswarm_headless` | dispatcher, `agent none` | DeepSWE with JiuwenSwarm instead of iCode: a `TASKS` list, or the first `N_TASKS` (the whole suite by default) |
 
-A dispatcher's first stage, `Prepare harness`, builds the harness once on a worker; every shard runs that bundle, by its sha256 ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)).
+The DeepSWE jobs evaluate iCode or JiuwenSwarm (`HARNESS`), and their pages redraw the harness fields for the harness picked (Active Choices, [jenkins-jobs.md](jenkins-jobs.md#harness-fields-on-the-deepswe-pages)). The other suites run iCode. A dispatcher's first stage, `Prepare harness`, builds the harness once on a worker; every shard runs that bundle, by its sha256 ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)).
 
 ```mermaid
 flowchart LR

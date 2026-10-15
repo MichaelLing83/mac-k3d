@@ -1,19 +1,32 @@
 # Jenkins eval jobs
 
-`mac-k3d config` on the controller writes ten jobs: three shapes for each of three benchmarks, and `build_jiuwenswarm_headless`. Every job evaluates a harness with a DeepSeek catalog model (`DEEPSEEK_MODEL`: `deepseek-flash`, the default, or `deepseek-v4-pro`). The harness is iCode, except on `build_jiuwenswarm_headless` and on `deepswe_one_task` with `HARNESS=jiuwenswarm`, which evaluate JiuwenSwarm ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)). Which one to run: [evaluation.md](evaluation.md#which-job-to-run). Every parameter: [commands.md](commands.md#jenkins-job-parameters).
+`mac-k3d config` on the controller writes nine jobs: three shapes for each of three benchmarks. Every job evaluates a harness with a DeepSeek catalog model (`DEEPSEEK_MODEL`: `deepseek-flash`, the default, or `deepseek-v4-pro`). The harness is iCode, or on the DeepSWE jobs JiuwenSwarm when `HARNESS=jiuwenswarm` ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)). Which one to run: [evaluation.md](evaluation.md#which-job-to-run). Every parameter: [commands.md](commands.md#jenkins-job-parameters).
 
 | Shape | Jobs | What a build does |
 |-------|------|-------------------|
 | `one_task` | `deepswe_one_task`, `lolbench_one_task`, `swebenchpro_one_task` | Runs one question and one rollout on one worker: the seven pipeline stages, one `harbor run -k 1 -n 1` |
-| `some_task` | `deepswe_some_task`, `lolbench_some_task`, `swebenchpro_some_task` | Dispatcher: prepares iCode once, queues one `one_task` build per question and rollout for a `TASKS` list or the first `N_TASKS`, then merges them in its `Aggregate` stage |
+| `some_task` | `deepswe_some_task`, `lolbench_some_task`, `swebenchpro_some_task` | Dispatcher: prepares the harness once, queues one `one_task` build per question and rollout for a `TASKS` list or the first `N_TASKS`, then merges them in its `Aggregate` stage |
 | `full_suite_task` | `deepswe_full_suite_task`, `lolbench_full_suite_task`, `swebenchpro_full_suite_task` | The same dispatcher over the whole suite (DeepSWE 113, LoLBench 20, SWE-bench Pro 731 questions) |
-| JiuwenSwarm | `build_jiuwenswarm_headless` | The same dispatcher for JiuwenSwarm on DeepSWE: `TASKS`, or else the first `N_TASKS` (all 113 by default). Its shards are `deepswe_one_task` builds with `HARNESS=jiuwenswarm` |
 
-`HARNESS` is fixed on every job except `deepswe_one_task`, which offers `icode` and `jiuwenswarm`.
+`HARNESS` offers `icode` and `jiuwenswarm` on the three DeepSWE jobs, with the controller's default (`mac-k3d set --harness`) first; a dispatcher's shards run the harness it was given. It is fixed to `icode` on the LoLBench and SWE-bench Pro jobs. `config` also deletes the retired `eval_aggregate` and `build_jiuwenswarm_headless` jobs.
+
+## Harness fields on the DeepSWE pages
+
+A DeepSWE page has iCode's fields (`ICODE_*`) and JiuwenSwarm's (`JIUWENSWARM_*`), and shows the ones of the `HARNESS` you pick. The Active Choices plugin (`uno-choice`, installed by `mac-k3d start`) redraws each text and choice field when `HARNESS` changes:
+
+| Field | With its harness | With the other harness |
+|-------|------------------|------------------------|
+| `ICODE_MODE`, the three `ICODE_GIT_*` | the input and its help | `Not used with this HARNESS. Pick HARNESS=icode to set it.` |
+| `JIUWENSWARM_MODE`, the three `JIUWENSWARM_GIT_*`, `JIUWENSWARM_AGENT_MODE`, `JIUWENSWARM_MAX_TURNS` | the input and its help | `Not used with this HARNESS. Pick HARNESS=jiuwenswarm to set it.` |
+| `ICODE_RELEASE_FILE`, `JIUWENSWARM_RELEASE_FILE` | always shown, labelled `iCode only (HARNESS=icode).` or `JiuwenSwarm only (HARNESS=jiuwenswarm).`, because Jenkins cannot redraw a file field | |
+
+A field of the other harness keeps its default. So does a field left out of a remote trigger (`buildWithParameters`) or a dispatcher's call: every build reads these fields through an `environment` block that falls back to the job's default.
+
+The redraw runs a short Groovy script outside the sandbox, which Jenkins runs only once approved. `config` pre-approves exactly these scripts and prints a warning when it cannot. An administrator can then approve them on **Manage Jenkins > In-process Script Approval**; until then those fields read `Could not draw this field. The build uses its default.` On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each with the `only (HARNESS=…)` label.
 
 ```mermaid
 flowchart LR
-  some["some_task / full_suite_task / build_jiuwenswarm_headless"] --> prep["Prepare harness: one bundle, sha256"]
+  some["some_task / full_suite_task"] --> prep["Prepare harness: one bundle, sha256"]
   prep -->|"one build per question x rollout"| one["one_task on a worker"]
   one --> stages["Environment, Tasks, Evaluate (CPU lock), Anti-cheat, Score, Report, Archive"]
   stages --> agg["Aggregate in the dispatcher build"]
@@ -73,8 +86,8 @@ mac-k3d eval --job one --benchmark deepswe --task abs-module-cache-flags --icode
 mac-k3d eval --job one --benchmark deepswe --task abs-module-cache-flags --icode-mode git             # queue it; prints the build URL
 ```
 
-`--job some` and `--job full` queue the dispatchers; with `--harness jiuwenswarm` they queue `build_jiuwenswarm_headless`. Release mode needs the file upload, which only the job page has. See [commands.md](commands.md#queue-a-jenkins-job-from-the-cli).
+`--job some` and `--job full` queue the dispatchers; `--harness jiuwenswarm` sends `HARNESS=jiuwenswarm` to whichever DeepSWE job it queues. Release mode needs the file upload, which only the job page has. See [commands.md](commands.md#queue-a-jenkins-job-from-the-cli).
 
 ## If `config` cannot write a job
 
-`config` prints `Warning: failed to update job …` or `failed to create job …` with the HTTP reply. Delete the job under the Jenkins UI and run `mac-k3d config` again on the controller; it recreates all ten. Do not edit the job XML by hand: the next `config` overwrites it.
+`config` prints `Warning: failed to update job …` or `failed to create job …` with the HTTP reply. Delete the job under the Jenkins UI and run `mac-k3d config` again on the controller; it recreates all nine. Do not edit the job XML by hand: the next `config` overwrites it.

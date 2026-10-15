@@ -112,9 +112,8 @@ pub struct EvalArgs {
     pub local: bool,
 
     /// Queue a Jenkins job: one (<benchmark>_one_task), some (_some_task) or full
-    /// (_full_suite_task); with --harness jiuwenswarm, some and full queue
-    /// build_jiuwenswarm_headless. Sends only the fields given as flags; every
-    /// other field keeps the job's default, as pressing Build does
+    /// (_full_suite_task). Sends only the fields given as flags; every other
+    /// field keeps the job's default, as pressing Build does
     #[arg(long, value_name = "one|some|full", conflicts_with_all = ["local", "stage", "icode_release"])]
     pub job: Option<String>,
 

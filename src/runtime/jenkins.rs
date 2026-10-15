@@ -19,6 +19,7 @@ const ADDITIONAL_PLUGINS: &[&str] = &[
     "copyartifact",           // dispatcher Aggregate stage pulls each rollout build's trials
     "pipeline-utility-steps", // nodesByLabel: online workers and executors for MAX_IN_FLIGHT
     "hidden-parameter",       // ui_profile=user hides developer params, keeping defaults
+    "uno-choice",             // Active Choices: DeepSWE pages show only the chosen HARNESS's inputs
 ];
 
 pub async fn install_or_upgrade(helm: &Path, config: &MacK3dConfig) -> Result<()> {
@@ -142,6 +143,8 @@ mod tests {
         assert!(text.contains("pipeline-utility-steps"));
         // Without this, every job's hidden(...) parameter fails to compile.
         assert!(text.contains("hidden-parameter"));
+        // Without this, a DeepSWE page shows every harness's inputs at once.
+        assert!(text.contains("uno-choice"));
         assert!(!text.contains("- git"));
         assert!(!text.contains("workflow-aggregator"));
         assert!(text.contains("serviceType: LoadBalancer"));
