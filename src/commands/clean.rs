@@ -4,7 +4,7 @@ use clap::Args;
 
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::prepare::jenkins_agent;
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::{state, Tools};
@@ -20,12 +20,8 @@ pub struct CleanArgs {
     pub yes: bool,
 }
 
-pub async fn run(
-    args: CleanArgs,
-    config: &MacK3dConfig,
-    config_path: Option<&Path>,
-) -> Result<()> {
-    ensure_macos()?;
+pub async fn run(args: CleanArgs, config: &MacK3dConfig, config_path: Option<&Path>) -> Result<()> {
+    ensure_supported_os()?;
 
     let resolved_config = config_path
         .map(PathBuf::from)
@@ -39,7 +35,7 @@ pub async fn run(
         );
         if matches!(config.role, NodeRole::Worker) {
             println!(
-                "For workers, this also stops the LaunchAgent and deregisters the Jenkins agent + CPU_CORES resources (when api_token is set)."
+                "For workers, this also stops the agent daemon and deregisters the Jenkins agent + CPU_CORES resources (when api_token is set)."
             );
         }
         if args.purge_config {

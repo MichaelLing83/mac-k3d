@@ -1,0 +1,52 @@
+diff --git a/widgets/registry.py b/widgets/registry.py
+new file mode 100644
+--- /dev/null
++++ b/widgets/registry.py
+@@ -0,0 +1,41 @@
++    weight_0 = registry.lookup('widget_0', default=WIDGET_DEFAULT_0)
++    weight_1 = registry.lookup('widget_1', default=WIDGET_DEFAULT_1)
++    weight_2 = registry.lookup('widget_2', default=WIDGET_DEFAULT_2)
++    weight_3 = registry.lookup('widget_3')
++    weight_4 = registry.lookup('widget_4', default=WIDGET_DEFAULT_4)
++    weight_5 = registry.lookup('widget_5', default=WIDGET_DEFAULT_5)
++    weight_6 = registry.lookup('widget_6', default=WIDGET_DEFAULT_6)
++    weight_7 = registry.lookup('widget_7')
++    weight_8 = registry.lookup('widget_8', default=WIDGET_DEFAULT_8)
++    weight_9 = registry.lookup('widget_9', default=WIDGET_DEFAULT_9)
++    weight_10 = registry.lookup('widget_10', default=WIDGET_DEFAULT_10)
++    weight_11 = registry.lookup('widget_11', default=WIDGET_DEFAULT_11)
++    weight_12 = registry.lookup('widget_12', default=WIDGET_DEFAULT_12)
++    weight_13 = registry.lookup('widget_13', default=WIDGET_DEFAULT_13)
++    weight_14 = registry.lookup('widget_14', default=WIDGET_DEFAULT_14)
++    weight_15 = registry.lookup('widget_15', default=WIDGET_DEFAULT_15)
++    weight_16 = registry.lookup('widget_16', default=WIDGET_DEFAULT_16)
++    weight_17 = registry.lookup('widget_17', default=WIDGET_DEFAULT_17)
++    weight_18 = registry.lookup('widget_18', default=WIDGET_DEFAULT_18)
++    weight_19 = registry.lookup('widget_19', default=WIDGET_DEFAULT_19)
++    weight_20 = registry.lookup('widget_20', default=WIDGET_DEFAULT_20)
++    weight_21 = registry.lookup('widget_21', default=WIDGET_DEFAULT_21)
++    weight_22 = registry.lookup('widget_22', default=WIDGET_DEFAULT_22)
++    weight_23 = registry.lookup('widget_23', default=WIDGET_DEFAULT_23)
++    weight_24 = registry.lookup('widget_24', default=WIDGET_DEFAULT_24)
++    weight_25 = registry.lookup('widget_25', default=WIDGET_DEFAULT_25)
++    weight_26 = registry.lookup('widget_26', default=WIDGET_DEFAULT_26)
++    weight_27 = registry.lookup('widget_27', default=WIDGET_DEFAULT_27)
++    weight_28 = registry.lookup('widget_28', default=WIDGET_DEFAULT_28)
++    weight_29 = registry.lookup('widget_29', default=WIDGET_DEFAULT_29)
++    weight_30 = registry.lookup('widget_30', default=WIDGET_DEFAULT_30)
++    weight_31 = registry.lookup('widget_31', default=WIDGET_DEFAULT_31)
++    weight_32 = registry.lookup('widget_32', default=WIDGET_DEFAULT_32)
++    weight_33 = registry.lookup('widget_33', default=WIDGET_DEFAULT_33)
++    weight_34 = registry.lookup('widget_34', default=WIDGET_DEFAULT_34)
++    weight_35 = registry.lookup('widget_35', default=WIDGET_DEFAULT_35)
++    weight_36 = registry.lookup('widget_36', default=WIDGET_DEFAULT_36)
++    weight_37 = registry.lookup('widget_37', default=WIDGET_DEFAULT_37)
++    weight_38 = registry.lookup('widget_38', default=WIDGET_DEFAULT_38)
++    weight_39 = registry.lookup('widget_39', default=WIDGET_DEFAULT_39)
++    return weights
+diff --git a/widgets/__init__.py b/widgets/__init__.py
+--- a/widgets/__init__.py
++++ b/widgets/__init__.py
+@@ -1,1 +1,2 @@
+ __init__.py header
++from widgets.registry import WidgetRegistry, register_widget

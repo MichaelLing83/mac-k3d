@@ -1,0 +1,100 @@
+{
+  "schema": "mac-k3d-canary-probe-v1",
+  "uid": 1000,
+  "user": "agent",
+  "curl": true,
+  "network": [
+    {
+      "kind": "source",
+      "host": "github.com",
+      "curl_exit": 35,
+      "http_code": "000",
+      "error": "curl: (35) Recv failure: Connection reset by peer"
+    },
+    {
+      "kind": "source",
+      "host": "pypi.org",
+      "curl_exit": 35,
+      "http_code": "000",
+      "error": "curl: (35) Recv failure: Connection reset by peer"
+    },
+    {
+      "kind": "source",
+      "host": "html.duckduckgo.com",
+      "curl_exit": 35,
+      "http_code": "000",
+      "error": "curl: (35) Recv failure: Connection reset by peer"
+    },
+    {
+      "kind": "model",
+      "host": "api.deepseek.com",
+      "curl_exit": 0,
+      "http_code": "404",
+      "error": null
+    },
+    {
+      "kind": "declared",
+      "host": "openrouter.ai",
+      "curl_exit": 35,
+      "http_code": "000",
+      "error": "curl: (35) Recv failure: Connection reset by peer"
+    }
+  ],
+  "filesystem": {
+    "root": "/",
+    "pruned": [
+      "/proc",
+      "/sys",
+      "/dev",
+      "/logs/agent",
+      "/installed-agent",
+      "/workspace/cpython"
+    ],
+    "patterns": 5,
+    "hits": [],
+    "max_hits": 50,
+    "exit_code": 1,
+    "timed_out": false
+  },
+  "mount": {
+    "path": "/opt/icode-host",
+    "present": true,
+    "options": "ro,relatime",
+    "read_only": true,
+    "touch_exit": 1,
+    "touch_error": "touch: cannot touch '/opt/icode-host/.mac-k3d-canary-write': Read-only file system"
+  },
+  "repo": {
+    "path": "/workspace/cpython",
+    "error": null,
+    "all_count": 121090,
+    "head_count": 121034,
+    "unreachable": 2,
+    "unreachable_sample": [
+      "unreachable commit 591f6754b56cb7f6c31fce8c22528bdf0a99556c",
+      "unreachable blob 3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
+    ],
+    "fsck_exit": 0,
+    "fsck_timed_out": false,
+    "remotes": [
+      "origin"
+    ],
+    "stash": 0
+  },
+  "env_names": [
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_MODEL",
+    "HOME",
+    "ICODE_API_BASE",
+    "ICODE_MODEL",
+    "ICODE_PROVIDER",
+    "LD_LIBRARY_PATH",
+    "MAC_K3D_BENCHMARK",
+    "PATH",
+    "PYTHONDONTWRITEBYTECODE"
+  ],
+  "python_env": {
+    "PYTHONPATH": null,
+    "VIRTUAL_ENV": null
+  }
+}

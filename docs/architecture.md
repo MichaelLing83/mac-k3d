@@ -2,7 +2,9 @@
 
 ## Overview
 
-`mac-k3d` is a Rust CLI that orchestrates external tools on macOS to provide a local Kubernetes development environment. It does not embed Docker, k3s, or Jenkins — it shells out to installed binaries and manages configuration/state.
+`mac-k3d` is a Rust CLI that orchestrates external tools on **macOS and Linux** to provide a local Kubernetes / LoLBench eval environment. It does not embed Docker, k3s, or Jenkins — it shells out to installed binaries and manages configuration/state.
+
+Platform-specific behavior lives in `src/platform/{macos,linux}.rs` (Docker Desktop vs Engine, Homebrew vs apt, LaunchAgent vs systemd --user).
 
 ```mermaid
 flowchart TB
@@ -69,16 +71,17 @@ Each subcommand is a module with:
 
 Commands shell out to external tools via a shared `runtime` module (planned).
 
-### 4. Platform guard (`src/platform.rs`)
+### 4. Platform adapters (`src/platform/`)
 
-- Enforces macOS-only execution for commands that interact with Docker Desktop.
-- Future: detect Apple Silicon vs Intel for image/arch hints.
+- `ensure_supported_os()` — allows macOS and Linux.
+- Facades for volume roots, package install, Docker ensure/quit, agent daemon, labels, PATH extras.
 
 ### 5. External dependencies
 
 | Tool | Purpose | Required |
 |------|---------|----------|
-| Docker Desktop | Container runtime | Yes |
+| Docker Desktop | Container runtime (macOS) | Yes (macOS) |
+| Docker Engine | Container runtime (Linux) | Yes (Linux) |
 | docker CLI | Health checks, image pulls | Yes |
 | k3d | Create/manage k3s cluster | Yes |
 | kubectl | Cluster interaction | Yes |
@@ -120,45 +123,122 @@ State is written after successful `start` and updated by `config`. `clean --purg
 When `--jenkins in-cluster` (or `jenkins.enabled: true` in config):
 
 1. Ensure Helm repo `jenkins` is added.
-2. Install chart `jenkins/jenkins` into namespace `jenkins`, including **lockable-resources** via `controller.additionalPlugins`.
+2. Install chart `jenkins/jenkins` into namespace `jenkins`. Extra plugins come from `controller.additionalPlugins` on **controller `mac-k3d start`** (Helm `upgrade --install`, `overwritePlugins: true`): `lockable-resources`, `plain-credentials`, `file-parameters`, `copyartifact`, `pipeline-utility-steps`, `hidden-parameter`, `uno-choice`. Chart defaults already include Pipeline, Git, and Configuration as Code. `config` rewrites jobs only; it does not install plugins. Do not add plugins in the Jenkins UI.
 3. Map `jenkins.host_port` → Service port 8080 via k3d `--port`.
 
 Jenkins runs inside the cluster; access is via `http://localhost:<host_port>`.
 
 ## Intended deployment topologies
 
-### Single Mac (default)
+### One machine (default)
 
-- One Mac hosts one k3d cluster.
-- Docker Desktop and k3d are local to that Mac.
+- One Linux or macOS machine hosts one k3d cluster.
+- Docker (Docker Desktop on macOS) and k3d are local to that machine.
 - Optional Jenkins runs in-cluster and acts as the CI controller for that local environment.
 
-### Multiple Macs with independent local clusters
+### Several machines, coordinated by Jenkins
 
-- Each Mac runs its own independent k3d cluster.
-- A Mac with Jenkins enabled is the "controller" role for CI orchestration.
-- Macs without Jenkins are "worker" role machines (local execution targets), but they are not Kubernetes worker nodes of the controller's k3d cluster.
+- The machine with Jenkins enabled is the "controller" role for CI orchestration; it is the only one with a k3d cluster.
+- Workers (Linux or macOS) run the Jenkins agent, Docker and Harbor, but they are not Kubernetes worker nodes of the controller's k3d cluster.
 - This is the recommended model for v1 because it avoids cross-host k3d networking complexity.
-- When several Mac Minis share one Internet Ethernet drop, put them on a switched LAN (router + switch). See [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
+- When several machines share one Internet Ethernet drop, put them on a switched LAN (router + switch). See [setup.md](setup.md#physical-lan-co-located-machines).
 
-### Multiple Macs as one Kubernetes cluster (not supported in v1)
+### Several machines as one Kubernetes cluster (not supported in v1)
 
 - k3d is optimized for local, single-host Docker networking.
-- Spanning a single k3d cluster across multiple Macs is not a primary design target and is fragile over routed/WAN links.
+- Spanning a single k3d cluster across multiple machines is not a primary design target and is fragile over routed/WAN links.
 - For true multi-host worker nodes, use a different Kubernetes distribution designed for multi-node networking (for example k3s across hosts, kubeadm, or managed Kubernetes).
 
 ## Controller/worker role clarification
 
 In this project, "controller" and "worker" mean CI roles, not Kubernetes node roles:
 
-- **CI controller**: Mac that runs Jenkins (inside its local k3d cluster).
-- **CI workers**: other Macs that run agent processes/tools and execute jobs.
+- **CI controller**: the machine that runs Jenkins (inside its local k3d cluster).
+- **CI workers**: other Linux or macOS machines that run agent processes/tools and execute jobs.
 
-Kubernetes node roles remain internal to each Mac's own local k3d cluster (`server` and optional `agents` configured by `cluster.agents`).
+Kubernetes node roles remain internal to the controller's own local k3d cluster (`server` and optional `agents` configured by `cluster.agents`).
+
+## Evaluation architecture
+
+mac-k3d is the **environment and scheduling manager**. It does not run containers for the benchmark, apply per-task resource limits, retry trials, or compute rewards — [Harbor](https://github.com/laude-institute/harbor) does all of that. The boundary:
+
+| Layer | Owner |
+|---|---|
+| Bare-machine prep: Docker, k3d, the pinned Harbor, Jenkins agent, base images | mac-k3d (`setup`, `start`, `config`), re-checked per build by the `env` phase |
+| Per-build prep and checks: benchmark checkout, task selection, iCode checkout and sandbox, read-only mount, network allowlist, leak scan | mac-k3d (pipeline `tasks` phase). The checkout holds each question's image address, not the image ([pipeline.md](pipeline.md#benchmark-checkout-and-question-images)) |
+| Question image pull, container lifecycle, per-task cpus/memory, trial retry, verifier, reward | **Harbor** (one `harbor run` of one trial on Jenkins; LoLBench images are built for this CPU by `tasks/images` first) |
+| Fan-out of questions and rollouts, job placement across workers, resource admission | Jenkins dispatchers (`some_task`, `full_suite_task`) + lockable-resources |
+| Isolation canary, capture receipts, anti-cheat verdicts, score, report, archive | mac-k3d (pipeline `evaluate/canary`, then the `anticheat`, `score`, `report` and `archive` phases) |
+
+The integrity layer stays here because Harbor has no equivalent: `harbor job summarize` is a removed shim and `harbor analyze` is rubric-only, so neither inspects a transcript for solution leakage or can reject a trial.
+
+### One Harbor run per build
+
+A Jenkins `one_task` build issues one command and Harbor runs one trial. A local run can still pass several task ids and `-n` slots. Every flag is explained in [pipeline.md](pipeline.md#how-harbor-is-called):
+
+```text
+harbor run -p <dataset dir> -i <task id> -k 1 -n 1 -r 1
+```
+
+The per-task `cpus` / `memory_mb` / `storage_mb` come from each `task.toml` and are **not** overridden. The build fails before any container starts if this worker's CPU limit is below what the task declares. Out-of-memory requeue and container cleanup are in [pipeline.md](pipeline.md).
+
+### Job topology
+
+Nine evaluation jobs: three shapes for each of `deepswe`, `lolbench`, `swebenchpro`:
+
+| Job | Shape | Purpose |
+|---|---|---|
+| `<suite>_one_task` | 1 question, 1 rollout | smoke test after a code change; also every unit a dispatcher queues |
+| `<suite>_some_task` | dispatcher, `agent none` | a `TASKS` list or the first `N_TASKS`, at full rollouts |
+| `<suite>_full_suite_task` | dispatcher, `agent none` | the whole suite at full rollouts |
+
+The DeepSWE jobs evaluate iCode or JiuwenSwarm (`HARNESS`), and their pages redraw the harness fields for the harness picked (Active Choices, [jenkins-jobs.md](jenkins-jobs.md#harness-fields-on-the-deepswe-pages)). The other suites run iCode. A dispatcher's first stage, `Prepare harness`, builds the harness once on a worker; every shard runs that bundle, by its sha256 ([jenkins-jobs.md](jenkins-jobs.md#prepare-harness)).
+
+```mermaid
+flowchart LR
+  someTask["suite_some_task"] -->|"one build per question x rollout"| oneTask["suite_one_task builds"]
+  fullSuite["suite_full_suite_task"] -->|"one build per question x rollout"| oneTask
+  oneTask -->|"fits-suite label, executors, core lock"| workers["Workers"]
+  someTask --> mergeStage["Aggregate stage in the same build"]
+  fullSuite --> mergeStage
+```
+
+A dispatcher queues **one** `<suite>_one_task` build per question and rollout. It keeps the rest of the units in its own list and submits at most `MAX_IN_FLIGHT` at a time (controller yaml `jenkins_job.max_in_flight`: 0 means twice the online executors that can run this suite). An OOM unit goes back to the tail, at most `oom_retries` times. Its final `Aggregate` stage runs on a worker, copies each unit's final build by number (`copyArtifacts selector: specific(n)`; `one_task` grants the two dispatchers `copyArtifactPermission`), and merges them with `aggregate_runs.py` into one `artifact.json`. The dispatcher holds no executor while those builds queue, so it cannot starve them. A label no online worker carries (`AGENT_LABEL && fits-<suite>`) fails the build before any unit is queued.
+
+### Executors and the core lock
+
+`jenkins_agent.cpu_cores` is the worker's CPU upper limit. Executors are `cpu_cores / cpus_per_executor` (default 2, so a 16-core cloud worker has 8 and a 4-core local worker has 2). Registration also adds `fits-<suite>` for each suite whose declared CPUs fit, and `executors-<n>`. A dispatcher reads that label from each online worker (`NODE_LABELS`) and sums it. `nodesByLabel` returns names, and a miss is a console line, so the count is not a probe of every `executors-<n>`.
+
+Each `<suite>_one_task` build is seven stages, one per pipeline phase — Environment, Tasks, Evaluate, Anti-cheat, Score, Report, Archive — each running `run_all.sh` with its `MAC_K3D_PHASE`. Only `Evaluate` takes the lock, and only for the CPUs the task declares (`tasks/resources` writes `eval-runs/cpus_each.txt`):
+
+```groovy
+lock(label: env.NODE_NAME, quantity: cpusEach, variable: 'HELD_CORES')
+```
+
+Harbor then runs `-n 1`. The label is the **node name**, because `mac-k3d setup` creates resources named `<agent>-core-1..cpu_cores` labelled with the agent name, which is the Jenkins node name. A LoLBench task (4 CPUs) and a DeepSWE task (2) share one worker without exceeding `cpu_cores`. Benchmark checkout, iCode build and image checks (Tasks), and everything after Harbor, run unlocked. An OOM sets `TRIAL_OOM` and skips the later stages; `post { always }` removes the containers.
+
+### Adding a worker
+
+`mac-k3d setup -c worker.yaml` registers the node (executors from the CPU limit, `fits-*` and `executors-<n>` labels, and its core resources). Nothing in the pipeline is edited: the next dispatcher counts the new executors, and Jenkins places each build on a node that fits the suite.
+
+Scale workers, not controllers. Lockable-resources state is per-controller, so a second controller would hand out tokens for cores the first one already lent out.
+
+### The pipeline under test ships in the binary
+
+`include_dir!` embeds `pipeline/` in `mac-k3d`, and `build.rs` bakes in the commit, a dirty flag (uncommitted changes under `src/` or `pipeline/`) and an FNV-64 hash of the embedded files. A build's first stage (Environment) runs `mac-k3d pipeline --extract-to $WORKSPACE/mac-k3d-pipeline`; the other six stages reuse that extract, so a redeploy during a build cannot change the scripts under it.
+
+| Where | What records the pipeline |
+|---|---|
+| Worker binary | `mac-k3d --version` → `mac-k3d 0.5.3 (<commit>[, dirty])` |
+| The build's extract | `pipeline/BUILD.json` → `version`, `commit`, `dirty`, `pipeline_hash`, `binary` |
+| `artifact.json` | `eval_protocol.pipeline` → `source: binary` plus the same four fields |
+| Aggregate of shards | `pipeline_status: same`, or `mixed` with each commit/hash when a worker missed a redeploy |
+
+Every Jenkins build extracts with `--require-clean`, which refuses a dirty build or an unknown commit, and `check_report.py` rejects a dirty or mixed pipeline. A commit reaches every host through `scripts/redeploy.sh` — see [workflow.md](workflow.md#development-loop-commit-push-redeploy). There is no GitHub clone on the worker and no pipeline URL or ref parameter.
 
 ## Cross-network operation (not necessarily LAN)
 
-- Co-located Mac Minis should use a shared switched LAN; see [deployment.md](deployment.md#physical-lan-co-located-mac-minis).
+- Co-located machines should use a shared switched LAN; see [setup.md](setup.md#physical-lan-co-located-machines).
 - Connectivity over VPN, routed corporate networks, or public internet can work if endpoints are reachable and secured.
 - Remote workers only need network access to Jenkins controller endpoints (HTTPS + agent transport), not direct membership in the controller's k3d Docker network.
 - Latency and intermittent links are expected; Jenkins agents should be configured for reconnect and retry behavior.

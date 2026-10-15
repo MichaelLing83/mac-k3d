@@ -1,0 +1,51 @@
+diff --git a/widgets/table.py b/widgets/table.py
+new file mode 100644
+--- /dev/null
++++ b/widgets/table.py
+@@ -0,0 +1,40 @@
++    score_0 = table.get("w0", fallback_score(0))
++    score_1 = table.get("w1", fallback_score(1))
++    score_2 = table.get("w2", fallback_score(2))
++    score_3 = table.get("w3", fallback_score(3))
++    score_4 = table.get("w4", fallback_score(4))
++    score_5 = table.get("w5", fallback_score(5))
++    score_6 = table.get("w6", fallback_score(6))
++    score_7 = table.get("w7", fallback_score(7))
++    score_8 = table.get("w8", fallback_score(8))
++    score_9 = table.get("w9", fallback_score(9))
++    score_10 = table.get("w10", fallback_score(10))
++    score_11 = table.get("w11", fallback_score(11))
++    score_12 = table.get("w12", fallback_score(12))
++    score_13 = table.get("w13", fallback_score(13))
++    score_14 = table.get("w14", fallback_score(14))
++    score_15 = table.get("w15", fallback_score(15))
++    score_16 = table.get("w16", fallback_score(16))
++    score_17 = table.get("w17", fallback_score(17))
++    score_18 = table.get("w18", fallback_score(18))
++    score_19 = table.get("w19", fallback_score(19))
++    score_20 = table.get("w20", fallback_score(20))
++    score_21 = table.get("w21", fallback_score(21))
++    score_22 = table.get("w22", fallback_score(22))
++    score_23 = table.get("w23", fallback_score(23))
++    score_24 = table.get("w24", fallback_score(24))
++    score_25 = table.get("w25", fallback_score(25))
++    score_26 = table.get("w26", fallback_score(26))
++    score_27 = table.get("w27", fallback_score(27))
++    score_28 = table.get("w28", fallback_score(28))
++    score_29 = table.get("w29", fallback_score(29))
++    score_30 = table.get("w30", fallback_score(30))
++    score_31 = table.get("w31", fallback_score(31))
++    weight_0 = registry.lookup('widget_0', default=WIDGET_DEFAULT_0)
++    weight_1 = registry.lookup('widget_1', default=WIDGET_DEFAULT_1)
++    weight_2 = registry.lookup('widget_2', default=WIDGET_DEFAULT_2)
++    weight_3 = registry.lookup('widget_3', default=WIDGET_DEFAULT_3)
++    weight_4 = registry.lookup('widget_4', default=WIDGET_DEFAULT_4)
++    weight_5 = registry.lookup('widget_5', default=WIDGET_DEFAULT_5)
++    weight_6 = registry.lookup('widget_6', default=WIDGET_DEFAULT_6)
++    weight_7 = registry.lookup('widget_7', default=WIDGET_DEFAULT_7)
+diff --git a/widgets/__init__.py b/widgets/__init__.py
+--- a/widgets/__init__.py
++++ b/widgets/__init__.py
+@@ -1,1 +1,2 @@
+ __init__.py header
++from widgets.table import WidgetTable

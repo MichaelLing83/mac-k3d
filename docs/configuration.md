@@ -27,7 +27,7 @@ jenkins:
   enabled: false          # set true or use `start --jenkins in-cluster`
   namespace: jenkins
   release_name: jenkins
-  host_port: 9080         # localhost URL for Jenkins UI
+  host_port: 17070         # localhost URL for Jenkins UI
 
 docker:
   startup_timeout_secs: 120
@@ -55,28 +55,39 @@ dependencies:
   helm:
     source: skip
   harbor:
-    source: skip          # install via `uv tool install harbor` or pipx
+    source: skip          # worker / standalone eval: setup installs HARBOR_VERSION from pipeline/config/toolchain.env with uv
   java:
     source: skip          # required on workers (Jenkins agent)
+  git:
+    source: skip          # required on workers (the tasks phase clones benchmarks and iCode)
 
-lolbench:
+lolbench:                 # not asked any more: the pipeline clones LoLBench itself at its pin
   path: null
   source: skip            # skip | existing | clone | release
   git_url: https://github.com/MichaelLing83/LoLBench-Preview.git
 
 jenkins_agent:
-  controller_url: null    # worker: Jenkins base URL
+  controller_url: null    # worker: Jenkins base URL (wizard default http://43.107.42.252:17070 or $JENKINS_URL)
   name: null
   labels: [macos, docker, lolbench]
   remote_fs: null
   agent_jar: null
-  cpu_cores: 0            # logical cores recorded at prepare
-  api_user: null          # CLI registration only; plaintext for now → Keychain later
-  api_token: null         # not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
+  cpu_cores: 0            # CPU upper limit (local 4, cloud 16); wizard default is the logical count
+  cpus_per_executor: 2    # executors = cpu_cores / this
+  api_user: ''            # worker: always written, '' until filled in; CLI registration only
+  api_token: ''           # plaintext for now; not for LLM/Git — those live in Jenkins Credentials (see secrets.md)
 
 resources:
   cpu_cores_label: CPU_CORES
-  disk_min_gb: 0          # 0 = role default (40 / 60 / 100)
+  disk_min_gb: 0          # 0 = role default (40 / 60 / 40)
+```
+
+```mermaid
+flowchart LR
+  cores["jenkins_agent.cpu_cores"] --> exec["executors = cpu_cores / cpus_per_executor"]
+  cores --> locks["core-1 .. core-N"]
+  exec --> builds["that many one_task builds at once"]
+  locks --> hold["Evaluate locks the CPUs the question declares"]
 ```
 
 All fields are optional; omitted keys use defaults above.
@@ -89,7 +100,7 @@ All fields are optional; omitted keys use defaults above.
 |-------|---------|
 | `standalone` | Local k3d only |
 | `controller` | Jenkins in-cluster on this Mac |
-| `worker` | Jenkins agent + Harbor/LoLBench; no in-cluster Jenkins |
+| `worker` | Jenkins agent + the pinned Harbor, Java (at least `JAVA_MAJOR`, the controller image's Java) and git; no cluster, no in-cluster Jenkins |
 
 ### `cluster`
 
@@ -113,12 +124,12 @@ Default ports expose HTTP/HTTPS on the cluster load balancer for Ingress or Node
 | `enabled` | bool | `false` | Whether Jenkins is managed |
 | `namespace` | string | `jenkins` | Kubernetes namespace |
 | `release_name` | string | `jenkins` | Helm release name |
-| `host_port` | u16 | `9080` | Local port mapped to Jenkins service |
+| `host_port` | u16 | `17070` | Local port mapped to Jenkins service |
 
 When enabled, `start` adds a port mapping:
 
 ```text
--p "9080:8080@loadbalancer"
+-p "17070:8080@loadbalancer"
 ```
 
 Helm values applied by `mac-k3d start` (controller):
@@ -128,10 +139,16 @@ controller:
   serviceType: LoadBalancer
   installLatestPlugins: true
   additionalPlugins:
-    - lockable-resources   # CPU_CORES capacity locks for workers
+    - lockable-resources      # per-worker <agent>-core-N capacity locks
+    - plain-credentials       # Secret text for LLM keys and forge PATs
+    - file-parameters         # ICODE_RELEASE_FILE upload
+    - copyartifact            # dispatcher Aggregate stage pulls each rollout build's trials
+    - pipeline-utility-steps  # nodesByLabel: online workers and executors for MAX_IN_FLIGHT
+    - hidden-parameter        # ui_profile=user hides developer params
+    - uno-choice              # Active Choices: DeepSWE pages show only the chosen HARNESS's inputs
 ```
 
-Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code.
+Chart defaults still install kubernetes, workflow-aggregator, git, and configuration-as-code. `mac-k3d config` does not change this list; re-run **controller** `mac-k3d start` after a binary that added a plugin.
 
 ### `docker`
 
@@ -141,7 +158,7 @@ Chart defaults still install kubernetes, workflow-aggregator, git, and configura
 
 ### `storage`
 
-Set by the [prepare wizard](prepare-wizard.md). Paths for large artifacts; config/state stay in `~/.config` and `~/.local/state`.
+Set by the [setup wizard](setup.md#storage). Paths for large artifacts; config/state stay in `~/.config` and `~/.local/state`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -157,16 +174,21 @@ Per-tool resolution. The prepare wizard discovers existing installs first and ne
 
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
-| `source` | string | `existing`, `install`, `skip` | Use found binary, install via Homebrew, or skip |
+| `source` | string | `existing`, `install`, `skip` | Use found binary, install (apt on Linux, Homebrew on macOS; see [Install commands](#install-commands-prepare)), or skip |
 | `binary` | path | — | CLI path when `source: existing` |
 | `app` | path | — | App bundle (Docker Desktop only) |
 
 | Tool | Required when |
 |------|---------------|
 | `docker` | Always |
-| `k3d` | Always |
-| `kubectl` | Always |
+| `k3d` | controller, standalone |
+| `kubectl` | controller, standalone |
 | `helm` | Jenkins controller (`jenkins.enabled: true`) |
+| `java` | worker. Must be at least `JAVA_MAJOR` (21) from `pipeline/config/toolchain.env`, the Java of the controller image; an older one makes validation fail and the agent drop with `UnsupportedClassVersionError` |
+| `git` | worker; standalone with Harbor |
+| `harbor` | worker (exactly `HARBOR_VERSION`); standalone unless `source: skip` |
+
+Versions, pins, and what installs and checks each tool on Linux and macOS: [dependencies.md](dependencies.md).
 
 ## Example: Jenkins enabled
 
@@ -213,7 +235,7 @@ CLI flag `--jenkins` overrides config for that invocation only (does not write b
 {
   "namespace": "jenkins",
   "release": "jenkins",
-  "host_port": 9080,
+  "host_port": 17070,
   "chart_version": "5.1.0"
 }
 ```
@@ -224,15 +246,31 @@ LLM API keys and forge PATs are **not** fields in `config.yaml`. Configure them 
 
 Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml` (mode 0600); `mac-k3d config` creates Jenkins Secret text credentials and clears uploaded entries.
 
-`jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys.
+`jenkins_agent.api_user` / `api_token` are only for the mac-k3d CLI talking to Jenkins (register/clean), and are unrelated to Harbor/LLM keys. A worker's YAML always has both keys; `''` means not filled in yet, and `config` then prints which keys to fill in. `mac-k3d export` writes `api_token: ''`.
+
+`jenkins.remote_trigger_token` is the shared secret for **Trigger builds remotely** on the nine eval jobs. It lives only in the controller `config.yaml`. `config` generates it once when the field is empty. `mac-k3d export` omits it.
 
 ### `jenkins_job` (controller)
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `default_harness` | `oracle` | `lolbench_one_task` HARNESS parameter default (first choice) |
-| `default_task` | `ruff_1` | TASK parameter default |
-| `default_model` | `openrouter/deepseek/deepseek-v4-pro` | MODEL parameter default |
+| `default_task` | `ruff_1` | Exported as `TASK` / `ICODE_TASK` |
+| `default_eval_mode` | `binary` | Jenkins `ICODE_MODE` default: `release` (`binary` alias) or `git` (see [icode-harness-inputs.md](icode-harness-inputs.md)) |
+| `default_icode_release` | *(empty)* | Local persist / CLI default for a `*-full-*` path or stub `icode` (not a Jenkins UI string; Jenkins release uses `ICODE_RELEASE_FILE` upload) |
+| `default_icode_git_url` | *(empty)* | Default `ICODE_GIT_URL` for git mode |
+| `default_icode_git_ref` | `main` | Default git ref for git mode |
+| `default_jiuwenswarm_git_url` | `https://gitcode.com/michaelling/jiuwenswarm` | Default `JIUWENSWARM_GIT_URL` ([jiuwenswarm-harness-inputs.md](jiuwenswarm-harness-inputs.md)) |
+| `default_jiuwenswarm_git_ref` | `2` | Default `JIUWENSWARM_GIT_REF`; empty means `2` |
+| `default_jiuwenswarm_git_ref_kind` | `pr` | Default `JIUWENSWARM_GIT_REF_KIND`: `branch`, `tag`, `commit` or `pr` |
+| `default_icode_args` | *(empty)* | Argv after `./icode` |
+| `default_harness` | *(empty → `icode`)* | Catalog harness (`mac-k3d set --harness`): the first `HARNESS` choice of the three DeepSWE jobs. The LoLBench and SWE-bench Pro jobs' harness is fixed to `icode` |
+| `default_llm` | *(empty → `deepseek`)* | Catalog LLM family (`mac-k3d set --llm`) |
+| `default_deepseek_model` | *(empty → `deepseek-flash`)* | Catalog Chat Completions id (`mac-k3d set --model`; also `deepseek-v4-pro`) |
+| `default_benchmark` | *(empty)* | Which job gets TASK defaults (`deepswe` \| `lolbench` \| `swebenchpro`) |
+| `ui_profile` | `user` | `user` hides developer parameters (pins, canary, `MAX_IN_FLIGHT`, `OOM_RETRIES`, `TEST_MEMORY_MB`, `TEST_MEMORY_ATTEMPTS`) as hidden parameters that keep their defaults; `developer` shows them. `mac-k3d set --ui-profile`, then `config --skip-secrets` |
+| `max_in_flight` | `0` | How many `one_task` builds one dispatcher may have in Jenkins at once. `0` means twice the online executors that can run the suite. `mac-k3d set --max-in-flight` |
+| `oom_retries` | `2` | An OOM rollout is appended to the queue tail at most this many times (three tries in total). `mac-k3d set --oom-retries` |
+| `default_shard_size` | `2` | Kept so an old config still loads. Dispatch is one build per question and rollout; this value is not used |
 
 ## Environment variables
 
@@ -241,6 +279,10 @@ Prepare may write pending values to `~/.config/mac-k3d/credentials.pending.yaml`
 | `RUST_LOG` | Logging filter (e.g. `mac_k3d=debug`) |
 | `KUBECONFIG` | Respected by kubectl invocations |
 | `MAC_K3D_CONFIG` | *(planned)* alternate config path |
+| `MAC_K3D_HARNESS_STORE` | Worker pipeline: the [harness store](pipeline.md#harness-store) folder (default `$MAC_K3D_SHARE/harness-store`) |
+| `MAC_K3D_HARNESS_STORE_KEEP` | Worker pipeline: bundles kept per harness (default 6); one used in the last 24 hours is never removed |
+| `MAC_K3D_BUILD_NETWORK` | Worker pipeline: `docker run --network` for the harness build container, for example `host` when the bridge cannot reach PyPI. Trials keep their own network |
+| `JIUWENSWARM_TIMEOUT_SECONDS` | Worker pipeline: `timeout_seconds` in JiuwenSwarm's run document. Unset leaves JiuwenSwarm's default |
 
 ## Multi-Mac setup guidance
 
@@ -261,7 +303,7 @@ cluster:
   agents: 0
 jenkins:
   enabled: true
-  host_port: 9080
+  host_port: 17070
 docker:
   startup_timeout_secs: 180
 ```
@@ -287,11 +329,15 @@ The following keys may be added later for better controller/worker automation:
 - `controller.tunnel: ssh | inbound | websocket`
 - `worker.labels: ["macos", "docker", "k3d"]`
 
-## Homebrew install hints (prepare)
+## Install commands (prepare)
 
-| Dependency | Install command |
-|------------|-----------------|
-| Docker Desktop | `brew install --cask docker` |
-| k3d | `brew install k3d` |
-| kubectl | `brew install kubectl` |
-| helm | `brew install helm` |
+What `source: install` runs, or prints for an administrator when it needs root and `sudo` is not available:
+
+| Dependency | Linux (`apt-get`, as root) | macOS (Homebrew, as you) |
+|------------|----------------------------|--------------------------|
+| Docker | `apt-get install -y docker.io docker-compose-v2 && systemctl enable --now docker` | `brew install --cask docker` (Docker Desktop) |
+| k3d | `curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \| bash` | `brew install k3d` |
+| kubectl | `apt-get install -y kubectl` (else the `dl.k8s.io` stable binary) | `brew install kubectl` |
+| helm | `curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \| bash` | `brew install helm` |
+| java (worker) | `apt-get install -y openjdk-21-jre-headless` | `brew install --cask temurin@21` |
+| git | `apt-get install -y git` | `brew install git` |

@@ -33,11 +33,7 @@ pub async fn capture(program: &Path, args: &[impl AsRef<OsStr>]) -> Result<Strin
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(Error::CommandFailed {
             cmd,
-            source: anyhow::anyhow!(
-                "exit {}: {}",
-                output.status.code().unwrap_or(-1),
-                detail
-            ),
+            source: anyhow::anyhow!("exit {}: {}", output.status.code().unwrap_or(-1), detail),
         });
     }
 

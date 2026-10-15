@@ -1,13 +1,29 @@
-use crate::config::MacK3dConfig;
+use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::runtime::docker;
 use crate::runtime::k3d::{self, ClusterState};
 use crate::runtime::kubectl;
 use crate::runtime::{jenkins, Tools};
 
 pub async fn run(config: &MacK3dConfig) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
+
+    if matches!(config.role, NodeRole::Worker) {
+        println!("Role:            worker (Jenkins agent; not a k3d node)");
+        println!(
+            "Jenkins URL:     {}",
+            config
+                .jenkins_agent
+                .controller_url
+                .as_deref()
+                .unwrap_or("(unset)")
+        );
+        println!("Agent daemon:    {}", crate::platform::agent_daemon_label());
+        for warning in crate::platform::worker_host_warnings() {
+            println!("Warning:         {warning}");
+        }
+    }
 
     let tools = match Tools::from_config(config) {
         Ok(t) => t,
@@ -27,7 +43,10 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
     };
 
     let docker_status = docker::status(&tools.docker).await;
-    println!("Docker Desktop:  {docker_status}");
+    println!(
+        "{}:  {docker_status}",
+        crate::platform::docker_display_name()
+    );
 
     let info = k3d::inspect(&tools.k3d, &config.cluster.name).await?;
     println!(
@@ -47,12 +66,8 @@ pub async fn run(config: &MacK3dConfig) -> Result<()> {
         let phase = match info.state {
             ClusterState::Running => {
                 let ctx = kubectl::context_name(&config.cluster.name);
-                kubectl::jenkins_pod_phase(
-                    &tools.kubectl,
-                    &config.jenkins.namespace,
-                    Some(&ctx),
-                )
-                .await
+                kubectl::jenkins_pod_phase(&tools.kubectl, &config.jenkins.namespace, Some(&ctx))
+                    .await
             }
             ClusterState::Missing | ClusterState::Stopped => None,
         };
@@ -87,16 +102,16 @@ mod tests {
 
     #[test]
     fn jenkins_line_missing_cluster() {
-        let s = format_jenkins_line(ClusterState::Missing, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Missing, None, "http://localhost:17070");
         assert_eq!(
             s,
-            "configured, not running (cluster missing), http://localhost:9080"
+            "configured, not running (cluster missing), http://localhost:17070"
         );
     }
 
     #[test]
     fn jenkins_line_stopped_cluster() {
-        let s = format_jenkins_line(ClusterState::Stopped, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Stopped, None, "http://localhost:17070");
         assert!(s.contains("cluster stopped"));
     }
 
@@ -105,14 +120,14 @@ mod tests {
         let s = format_jenkins_line(
             ClusterState::Running,
             Some("Running"),
-            "http://localhost:9080",
+            "http://localhost:17070",
         );
-        assert_eq!(s, "configured, pod Running, http://localhost:9080");
+        assert_eq!(s, "configured, pod Running, http://localhost:17070");
     }
 
     #[test]
     fn jenkins_line_running_no_pod() {
-        let s = format_jenkins_line(ClusterState::Running, None, "http://localhost:9080");
+        let s = format_jenkins_line(ClusterState::Running, None, "http://localhost:17070");
         assert!(s.contains("pod not found"));
     }
 }

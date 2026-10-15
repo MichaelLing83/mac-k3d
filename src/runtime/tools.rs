@@ -16,6 +16,8 @@ pub struct Tools {
 
 impl Tools {
     pub fn from_config(config: &MacK3dConfig) -> Result<Self> {
+        use crate::config::NodeRole;
+        let need_cluster = !matches!(config.role, NodeRole::Worker);
         Ok(Self {
             docker: resolve("docker", &config.dependencies.docker)?,
             docker_app: config
@@ -24,9 +26,19 @@ impl Tools {
                 .app
                 .clone()
                 .filter(|p| p.exists())
+                .or_else(crate::platform::docker_app_default)
                 .unwrap_or_else(|| PathBuf::from("/Applications/Docker.app")),
-            k3d: resolve("k3d", &config.dependencies.k3d)?,
-            kubectl: resolve("kubectl", &config.dependencies.kubectl)?,
+            k3d: if need_cluster {
+                resolve("k3d", &config.dependencies.k3d)?
+            } else {
+                resolve("k3d", &config.dependencies.k3d).unwrap_or_else(|_| PathBuf::from("k3d"))
+            },
+            kubectl: if need_cluster {
+                resolve("kubectl", &config.dependencies.kubectl)?
+            } else {
+                resolve("kubectl", &config.dependencies.kubectl)
+                    .unwrap_or_else(|_| PathBuf::from("kubectl"))
+            },
             helm: match resolve("helm", &config.dependencies.helm) {
                 Ok(path) => Some(path),
                 Err(_) if !config.jenkins.enabled => None,

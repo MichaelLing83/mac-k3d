@@ -71,7 +71,10 @@ pub fn remove_config_file(path: &std::path::Path) -> Result<()> {
             .map_err(|e| Error::Config(format!("failed to remove {}: {e}", path.display())))?;
         println!("Removed {}", path.display());
     } else {
-        println!("Config file {} not present; nothing to purge.", path.display());
+        println!(
+            "Config file {} not present; nothing to purge.",
+            path.display()
+        );
     }
     Ok(())
 }

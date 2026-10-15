@@ -97,11 +97,7 @@ pub async fn inspect(k3d: &Path, name: &str) -> Result<ClusterInfo> {
     let mut any_running = false;
 
     for node in &cluster.nodes {
-        let running = node
-            .state
-            .as_ref()
-            .map(|s| s.running)
-            .unwrap_or(false);
+        let running = node.state.as_ref().map(|s| s.running).unwrap_or(false);
         match node.role.to_lowercase().as_str() {
             "server" => servers += 1,
             "agent" => agents += 1,
@@ -133,7 +129,18 @@ pub async fn create(k3d: &Path, config: &MacK3dConfig) -> Result<()> {
     let args = create_args(config);
     let display: Vec<&str> = args.iter().map(String::as_str).collect();
     println!("Creating k3d cluster '{}'…", config.cluster.name);
-    exec::visible(k3d, &display).await
+    match exec::visible(k3d, &display).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let msg = err.to_string();
+            Err(crate::error::Error::Config(format!(
+                "{msg}\n\
+                 Hint: a host port may still be in use (cluster.ports or jenkins.host_port). \
+                 Re-run `mac-k3d start` after freeing the port, or set free host ports in config. \
+                 Newer builds auto-remap busy ports before create."
+            )))
+        }
+    }
 }
 
 pub async fn start(k3d: &Path, name: &str) -> Result<()> {
@@ -203,8 +210,8 @@ mod tests {
     fn create_args_add_jenkins_port_when_enabled() {
         let mut config = MacK3dConfig::default();
         config.jenkins.enabled = true;
-        config.jenkins.host_port = 9080;
+        config.jenkins.host_port = 17070;
         let args = create_args(&config);
-        assert!(args.iter().any(|a| a == "9080:8080@loadbalancer"));
+        assert!(args.iter().any(|a| a == "17070:8080@loadbalancer"));
     }
 }

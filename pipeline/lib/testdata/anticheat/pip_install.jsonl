@@ -1,0 +1,2 @@
+{"type": "ToolCallStart", "event_id": "c1Start", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "bash", "tool_call_id": "c1", "tool_args": {"command": "cd /app && pip install requests"}}
+{"type": "ToolCallResult", "event_id": "c1esult", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "bash", "tool_call_id": "c1", "result": "ERROR: Could not find a version that satisfies the requirement requests", "tool_success": true}

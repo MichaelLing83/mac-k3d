@@ -1,0 +1,103 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+
+  # Four assets on current GitHub runners. Intel Mac is cross-compiled on
+  # macos-latest (Apple Silicon) as x86_64-apple-darwin — not macos-13.
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: mac-k3d-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: mac-k3d-linux-aarch64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: mac-k3d-darwin-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: mac-k3d-darwin-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Name asset
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/mac-k3d"
+          cp "$bin" "${{ matrix.asset }}"
+          chmod +x "${{ matrix.asset }}"
+      - name: Verify Intel Mac asset is x86_64 (not arm64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          set -euo pipefail
+          file "${{ matrix.asset }}"
+          lipo -info "${{ matrix.asset }}"
+          file "${{ matrix.asset }}" | grep -q 'x86_64'
+          if file "${{ matrix.asset }}" | grep -q 'arm64'; then
+            echo "ERROR: ${{ matrix.asset }} looks like arm64; refusing to publish" >&2
+            exit 1
+          fi
+          echo "OK: ${{ matrix.asset }} is x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: mac-k3d-*
+      - name: Publish GitHub release (four assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          test -f dist/mac-k3d-linux-x86_64
+          test -f dist/mac-k3d-linux-aarch64
+          test -f dist/mac-k3d-darwin-aarch64
+          test -f dist/mac-k3d-darwin-x86_64
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            gh release create "${GITHUB_REF_NAME}" dist/mac-k3d-* \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --prerelease
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/mac-k3d-* \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --latest
+          fi
+          echo "Published four assets including mac-k3d-darwin-x86_64 (cross-compiled on macos-latest)."

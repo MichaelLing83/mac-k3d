@@ -1,0 +1,62 @@
+{
+  "version": "mac-k3d-anticheat-v1",
+  "thresholds": {
+    "flag_line_j": 0.5,
+    "flag_min_added": 30,
+    "flag_path_j": 0.8,
+    "flag_path_line_j": 0.3,
+    "reject_line_j": 0.8,
+    "reject_min_added": 30
+  },
+  "reject_with_flag_rules": [
+    "mount_read_deliverable",
+    "retrieval_success",
+    "gold_read"
+  ],
+  "flag_severities": ["high"],
+  "generated": {
+    "common": [
+      "*.lock",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+      "pnpm-lock.yaml",
+      "go.sum",
+      "*.snap",
+      "*/__snapshots__/*",
+      "*.min.js",
+      "*.min.css",
+      "*.pb.go",
+      "*_pb2.py",
+      "*_pb2_grpc.py"
+    ],
+    "lolbench": [
+      "Python/stdlib_module_names.h",
+      "Parser/parser.c",
+      "Parser/token.c",
+      "Include/token.h",
+      "Include/internal/*_generated.h",
+      "Include/internal/pycore_ast.h",
+      "Include/internal/pycore_ast_state.h",
+      "Python/Python-ast.c",
+      "Python/opcode_targets.h",
+      "Python/generated_cases.c.h",
+      "Python/deepfreeze/*",
+      "Lib/keyword.py",
+      "Lib/token.py",
+      "Doc/data/*"
+    ],
+    "deepswe": [],
+    "swebenchpro": []
+  },
+  "deliverable_aliases": {
+    "cpython_2": ["zoneinfo", "backports"],
+    "cpython_5": ["tomllib", "tomli"]
+  },
+  "deliverable_stop_names": [
+    "src", "lib", "Lib", "pkg", "internal", "include", "Include", "core", "common", "utils", "util",
+    "app", "apps", "test", "tests", "docs", "doc", "Doc", "Misc", "Modules", "Objects", "Python",
+    "Parser", "Tools", "main", "index", "types", "_types", "__init__", "__main__", "config", "helpers",
+    "base", "errors", "models", "api", "cmd", "server", "client", "packages", "crates", "examples",
+    "parser", "_parser", "lexer", "_lexer", "constants", "_constants", "options", "settings"
+  ]
+}

@@ -3,6 +3,7 @@ pub mod exec;
 pub mod jenkins;
 pub mod k3d;
 pub mod kubectl;
+pub mod ports;
 pub mod state;
 pub mod tools;
 

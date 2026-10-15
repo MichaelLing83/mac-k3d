@@ -1,0 +1,33 @@
+{
+  "version": "mac-k3d-canary-v1",
+  "source_hosts": [
+    "github.com",
+    "api.github.com",
+    "raw.githubusercontent.com",
+    "codeload.github.com",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "python.org",
+    "repo.maven.apache.org",
+    "huggingface.co",
+    "gitee.com",
+    "gitcode.com",
+    "duckduckgo.com",
+    "html.duckduckgo.com"
+  ],
+  "model_hosts": ["api.deepseek.com"],
+  "model_host_aliases": ["api.deepseek.ai"],
+  "secret_names": {
+    "contains": ["TOKEN", "SECRET", "PASSWORD", "API_KEY"],
+    "suffix": ["_PAT"],
+    "allowed": ["DEEPSEEK_API_KEY", "ICODE_MAX_TOKENS"],
+    "forbidden": ["GITCODE_TOKEN", "MAC_K3D_GITCODE_PAT", "GITHUB_TOKEN", "MAC_K3D_GITHUB_PAT", "MAC_K3D_GIT_TOKEN"]
+  },
+  "gold_names": ["solution.patch", "eval_tests*.patch"],
+  "gold_paths": ["*/tests/private"],
+  "prune": ["/proc", "/sys", "/dev", "/logs/agent", "/installed-agent"],
+  "filesystem_ignore": [],
+  "mount": "/opt/icode-host",
+  "timeouts": {"curl": 10, "model": 30, "find": 300, "git": 300},
+  "model_attempts": 3
+}

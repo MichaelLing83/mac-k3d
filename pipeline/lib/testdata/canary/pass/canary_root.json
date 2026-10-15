@@ -1,0 +1,8 @@
+{
+  "schema": "mac-k3d-canary-probe-v1",
+  "uid": 0,
+  "path": "/opt/icode-host",
+  "touch_exit": 1,
+  "touch_error": "touch: cannot touch '/opt/icode-host/.mac-k3d-canary-root': Read-only file system",
+  "read_only_error": true
+}

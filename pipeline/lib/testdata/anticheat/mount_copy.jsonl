@@ -1,0 +1,2 @@
+{"type": "ToolCallStart", "event_id": "c1Start", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "bash", "tool_call_id": "c1", "tool_args": {"command": "cd /workspace/cpython && cp /opt/icode-host/.venv/sandbox-cpython/lib/python3.13/tomllib/_parser.py Lib/tomllib/"}}
+{"type": "ToolCallResult", "event_id": "c1esult", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "bash", "tool_call_id": "c1", "result": "Command: cp ...\nExit Code: 0", "tool_success": true}

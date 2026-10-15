@@ -16,7 +16,7 @@ jenkins:
   enabled: false
   namespace: jenkins
   release_name: jenkins
-  host_port: 9080
+  host_port: 17070
 
 docker:
   startup_timeout_secs: 120
@@ -52,19 +52,32 @@ lolbench:
   git_url: https://github.com/MichaelLing83/LoLBench-Preview.git  # used only if path is empty
 
 jenkins_agent:
-  controller_url: null
+  controller_url: null    # wizard default http://127.0.0.1:17070 or $JENKINS_URL
   name: null
   labels: [macos, docker, lolbench]
   remote_fs: null
   agent_jar: null
-  cpu_cores: 0
+  cpu_cores: 0            # wizard fills this; local 4, cloud 16
+  cpus_per_executor: 2    # executors = cpu_cores / this
   api_user: null          # CLI registration only
   api_token: null         # not for LLM/Git — see docs/secrets.md
 
-jenkins_job:              # controller: lolbench_one_task parameter defaults (non-secret)
-  default_harness: oracle
-  default_task: ruff_1
-  default_model: openrouter/deepseek/deepseek-v4-pro
+jenkins_job:              # controller: *_one_task parameter defaults (non-secret)
+  default_task: ""
+  default_tasks: []
+  default_n_tasks: 1
+  default_n_rollouts: 4
+  default_eval_mode: git      # release | git  (binary aliases release)
+  default_icode_release: ""   # release: GitCode icode-OS-ARCH-full-vX.Y.Z.tar.gz URL or path
+  default_icode_git_url: "https://gitcode.com/michaelling/jiuwenicode"
+  default_icode_git_ref: "2"
+  default_icode_git_ref_kind: pr   # branch | tag | commit | pr
+  default_jiuwenswarm_git_url: "https://gitcode.com/michaelling/jiuwenswarm"   # DeepSWE only
+  default_jiuwenswarm_git_ref: "2"
+  default_jiuwenswarm_git_ref_kind: pr   # branch | tag | commit | pr
+  default_icode_args: ""      # argv after ./icode (smoke: --help)
+  max_in_flight: 0             # 0 = 2 x online executors for the suite
+  oom_retries: 2               # an OOM rollout is queued again at most this many times
 
 resources:
   cpu_cores_label: CPU_CORES

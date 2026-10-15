@@ -34,9 +34,8 @@ pub fn prepend_to_process_path(dir: &Path) -> Result<()> {
         Some(existing) => {
             let mut paths = vec![PathBuf::from(&dir_str)];
             paths.extend(env::split_paths(&existing));
-            env::join_paths(paths).map_err(|e| {
-                Error::Config(format!("failed to update PATH: {e}"))
-            })?
+            env::join_paths(paths)
+                .map_err(|e| Error::Config(format!("failed to update PATH: {e}")))?
         }
         None => dir_str.into(),
     };
@@ -51,9 +50,8 @@ pub fn ensure_user_local_bin_in_process() -> Result<()> {
         return Ok(());
     };
     if !local_bin.exists() {
-        std::fs::create_dir_all(&local_bin).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", local_bin.display()))
-        })?;
+        std::fs::create_dir_all(&local_bin)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", local_bin.display())))?;
     }
     prepend_to_process_path(&local_bin)
 }
@@ -112,9 +110,8 @@ fn dir_already_in_shell_rc(dir: &Path) -> Result<bool> {
     if !rc.exists() {
         return Ok(false);
     }
-    let contents = std::fs::read_to_string(&rc).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", rc.display()))
-    })?;
+    let contents = std::fs::read_to_string(&rc)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", rc.display())))?;
     let needle = dir.display().to_string();
     Ok(contents.contains(&needle) || contents.contains(PATH_MARKER))
 }
@@ -133,17 +130,17 @@ fn preferred_shell_rc() -> PathBuf {
         } else {
             home.join(".bashrc")
         }
-    } else {
-        // zsh default on modern macOS
+    } else if shell.ends_with("/zsh") {
         home.join(".zshrc")
+    } else {
+        crate::platform::preferred_shell_rc_default(&home)
     }
 }
 
 fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
     if let Some(parent) = rc.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Error::Config(format!("failed to create {}: {e}", parent.display()))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Config(format!("failed to create {}: {e}", parent.display())))?;
     }
 
     let line = if rc.extension().and_then(|s| s.to_str()) == Some("fish")
@@ -152,15 +149,9 @@ fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
             .and_then(|s| s.to_str())
             .is_some_and(|n| n == "config.fish")
     {
-        format!(
-            "\n{PATH_MARKER}\nfish_add_path {}\n",
-            dir.display()
-        )
+        format!("\n{PATH_MARKER}\nfish_add_path {}\n", dir.display())
     } else {
-        format!(
-            "\n{PATH_MARKER}\nexport PATH=\"{}:$PATH\"\n",
-            dir.display()
-        )
+        format!("\n{PATH_MARKER}\nexport PATH=\"{}:$PATH\"\n", dir.display())
     };
 
     use std::io::Write;
@@ -174,10 +165,10 @@ fn append_path_export(rc: &Path, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// PATH for Jenkins agent / LaunchAgent: configuring shell PATH + Docker/Harbor dirs.
+/// PATH for Jenkins agent daemon: configuring shell PATH + OS tool dirs.
 ///
-/// LaunchAgents otherwise only get `/usr/bin:/bin:/usr/sbin:/sbin`, so `docker` and
-/// `harbor` (often under `/usr/local/bin` or `~/.local/bin`) are missing in builds.
+/// LaunchAgents / systemd user units otherwise get a minimal PATH and miss
+/// `docker` / `harbor` under `/usr/local/bin` or `~/.local/bin`.
 pub fn agent_tool_path() -> String {
     let mut dirs: Vec<PathBuf> = Vec::new();
 
@@ -190,14 +181,15 @@ pub fn agent_tool_path() -> String {
         }
     };
 
-    // Prefer dirs from the shell that ran `mac-k3d config`.
+    for first in crate::platform::agent_path_first() {
+        push_unique(PathBuf::from(first));
+    }
     if let Ok(path) = env::var("PATH") {
         for p in env::split_paths(&path) {
             push_unique(p);
         }
     }
 
-    // Guaranteed extras (even if not on the configuring shell PATH).
     if let Some(local) = user_local_bin() {
         push_unique(local);
     }
@@ -205,23 +197,13 @@ pub fn agent_tool_path() -> String {
         push_unique(home.join("homebrew/bin"));
         push_unique(home.join(".cargo/bin"));
     }
-    for extra in [
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        "/Applications/Docker.app/Contents/Resources/bin",
-        "/usr/bin",
-        "/bin",
-        "/usr/sbin",
-        "/sbin",
-    ] {
+    for extra in crate::platform::agent_path_extras() {
         push_unique(PathBuf::from(extra));
     }
 
     env::join_paths(&dirs)
         .map(|os| os.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| {
-            "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".into()
-        })
+        .unwrap_or_else(|_| crate::platform::agent_path_extras().join(":"))
 }
 
 #[cfg(test)]
@@ -236,10 +218,26 @@ mod tests {
     }
 
     #[test]
-    fn agent_tool_path_includes_docker_and_local_bin() {
+    fn agent_tool_path_includes_local_or_usr_bin() {
         let p = agent_tool_path();
-        assert!(p.contains("/usr/local/bin") || p.contains("/opt/homebrew/bin"));
+        assert!(
+            p.contains("/usr/local/bin")
+                || p.contains("/usr/bin")
+                || p.contains("/opt/homebrew/bin")
+        );
         assert!(p.contains(".local/bin") || p.contains("/usr/bin"));
-        assert!(p.contains("Docker.app") || p.contains("/usr/local/bin"));
+    }
+
+    #[test]
+    fn agent_path_puts_platform_first_dirs_ahead_of_system_bins() {
+        let p = agent_tool_path();
+        let dirs: Vec<PathBuf> = env::split_paths(&p).collect();
+        let at = |d: &str| dirs.iter().position(|x| x == Path::new(d));
+        for (i, first) in crate::platform::agent_path_first().into_iter().enumerate() {
+            assert_eq!(at(first), Some(i), "{first} must lead the agent PATH: {p}");
+        }
+        if cfg!(target_os = "macos") {
+            assert!(at("/opt/homebrew/bin") < at("/bin"), "{p}");
+        }
     }
 }

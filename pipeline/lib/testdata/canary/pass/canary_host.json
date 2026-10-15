@@ -1,0 +1,10 @@
+{
+  "schema": "mac-k3d-canary-host-v1",
+  "agent": "canary",
+  "spec_version": "mac-k3d-canary-v1",
+  "task_mcp_servers": 0,
+  "tool_list": {
+    "status": "unavailable",
+    "reason": "iCode PR 2 has no command that prints its tool set; the P0.5 transcript scan covers web tools"
+  }
+}

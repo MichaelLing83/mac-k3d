@@ -1,0 +1,43 @@
+{
+  "suite": "deepswe",
+  "harness": "icode",
+  "model": "deepseek-v4-pro",
+  "model_served": "deepseek-v4-pro",
+  "api_base": "https://api.deepseek.com",
+  "n_tasks": 1,
+  "n_rollouts": 1,
+  "access_date_utc": "2026-09-14T00:00:00Z",
+  "wall_seconds": 1.5,
+  "wall_minutes": 0.025,
+  "pass_at_1": 1.0,
+  "macro": {"f2p": 1.0, "p2p": 1.0, "partial": null, "reward": 1.0},
+  "tokens": {"in": 10, "out": 5, "total": 15},
+  "tasks": [
+    {
+      "id": "example-task",
+      "c": 1,
+      "n": 1,
+      "pass_frac": 1.0,
+      "first": true,
+      "reward": 1.0,
+      "f2p": 1.0,
+      "f2p_pass": 6,
+      "f2p_total": 6,
+      "p2p": 1.0,
+      "p2p_pass": 6,
+      "p2p_total": 6,
+      "partial": null,
+      "tok_in": 10,
+      "tok_out": 5,
+      "dur_s": 1.0,
+      "dur_min": 0.017,
+      "baseline": {
+        "reward": 0.0,
+        "tok_in": 8,
+        "tok_out": 4,
+        "dur_s": 0.5,
+        "dur_min": 0.008
+      }
+    }
+  ]
+}

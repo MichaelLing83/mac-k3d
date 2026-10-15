@@ -2,7 +2,7 @@ use clap::Args;
 
 use crate::config::{MacK3dConfig, NodeRole};
 use crate::error::Result;
-use crate::platform::ensure_macos;
+use crate::platform::ensure_supported_os;
 use crate::prepare::jenkins_agent;
 use crate::runtime::docker::{self, DockerStatus};
 use crate::runtime::k3d::{self, ClusterState};
@@ -10,7 +10,7 @@ use crate::runtime::Tools;
 
 #[derive(Debug, Args)]
 pub struct TeardownArgs {
-    /// Also stop Docker Desktop (default: leave Docker running)
+    /// Also stop Docker (default: leave Docker running)
     #[arg(long)]
     pub stop_docker: bool,
 
@@ -20,7 +20,7 @@ pub struct TeardownArgs {
 }
 
 pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
-    ensure_macos()?;
+    ensure_supported_os()?;
 
     let tools = Tools::from_config(config)?;
     let info = k3d::inspect(&tools.k3d, &config.cluster.name).await?;
@@ -28,23 +28,20 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
     match info.state {
         ClusterState::Running => k3d::stop(&tools.k3d, &config.cluster.name).await?,
         ClusterState::Stopped => {
-            println!(
-                "k3d cluster '{}' is already stopped.",
-                config.cluster.name
-            );
+            println!("k3d cluster '{}' is already stopped.", config.cluster.name);
         }
         ClusterState::Missing => {
-            println!(
-                "k3d cluster '{}' does not exist.",
-                config.cluster.name
-            );
+            println!("k3d cluster '{}' does not exist.", config.cluster.name);
         }
     }
 
     if args.stop_docker {
         match docker::status(&tools.docker).await {
             DockerStatus::Running => docker::quit().await?,
-            other => println!("Docker Desktop is {other}; nothing to quit."),
+            other => println!(
+                "{} is {other}; nothing to quit.",
+                crate::platform::docker_display_name()
+            ),
         }
     }
 
@@ -58,7 +55,7 @@ pub async fn run(args: TeardownArgs, config: &MacK3dConfig) -> Result<()> {
         // Stop local agent process; leave Jenkins node registered for later reconnect.
         jenkins_agent::stop_worker_agent_process()?;
         println!(
-            "Jenkins agent process stopped (LaunchAgent unloaded).\n\
+            "Jenkins agent process stopped (daemon unloaded).\n\
              Node left registered on the controller — use `teardown --deregister-agent` or `clean --yes` to delete it."
         );
     }

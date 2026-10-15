@@ -1,0 +1,47 @@
+# Example controller config.
+# mac-k3d prepare -i   then mac-k3d start && mac-k3d config --show-jenkins
+# Copy to another host: mac-k3d export -c ~/.config/mac-k3d/config.yaml -o controller.yaml
+#                       mac-k3d import controller.yaml
+
+role: controller
+platform: linux   # or macos
+
+cluster:
+  name: mac-k3d
+  agents: 0
+
+jenkins:
+  enabled: true
+  namespace: jenkins
+  release_name: jenkins
+  host_port: 17070
+
+storage:
+  base_dir: /var/lib/mac-k3d
+
+dependencies:
+  docker:
+    source: existing
+    binary: /usr/bin/docker
+  k3d:
+    source: existing
+    binary: /usr/local/bin/k3d
+  kubectl:
+    source: existing
+    binary: /usr/bin/kubectl
+  helm:
+    source: existing
+    binary: /usr/local/bin/helm
+
+jenkins_job:
+  default_task: ruff_1
+  default_eval_mode: binary
+  default_icode_release: ""
+  default_icode_git_url: ""
+  default_icode_git_ref: main
+  default_icode_args: ""
+  max_in_flight: 0        # 0 = 2 x online executors for the suite
+  oom_retries: 2
+
+resources:
+  cpu_cores_label: CPU_CORES

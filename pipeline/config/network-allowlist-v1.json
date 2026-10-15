@@ -1,0 +1,4 @@
+{
+  "version": "mac-k3d-network-allowlist-v1",
+  "agent_hosts": ["api.deepseek.com", "api.deepseek.ai"]
+}

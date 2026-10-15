@@ -1,0 +1,1508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cloud worker Docker store: investigation record</title>
+<style>
+  body { font: 15px/1.55 -apple-system, "Segoe UI", Ubuntu, sans-serif; color: #1f2328; margin: 0; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 32px 80px; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.6em 0 0.6em; }
+  h1 { font-size: 2em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+  h3 { font-size: 1.2em; }
+  a { color: #0969da; }
+  code { font: 13px/1.45 ui-monospace, "DejaVu Sans Mono", monospace; background: #eff1f3; padding: .15em .35em; border-radius: 4px; }
+  .code { position: relative; margin: 12px 0 16px; }
+  .code pre { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 14px 16px; padding-right: 90px; overflow-x: auto; margin: 0; }
+  .code pre code { background: none; padding: 0; white-space: pre; }
+  .copy { position: absolute; top: 8px; right: 8px; font: 13px sans-serif; padding: 4px 12px; border: 1px solid #d1d9e0;
+           border-radius: 6px; background: #fff; cursor: pointer; }
+  .copy:hover { background: #f3f4f6; }
+  .copy.done { background: #dafbe1; border-color: #4ac26b; }
+  table { border-collapse: collapse; margin: 12px 0 16px; display: block; overflow-x: auto; }
+  th, td { border: 1px solid #d1d9e0; padding: 6px 12px; vertical-align: top; }
+  th { background: #f6f8fa; }
+  nav { background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px; padding: 8px 20px; margin: 16px 0; }
+  nav ul { margin: 4px 0; padding-left: 20px; }
+  nav li.h3 { margin-left: 20px; font-size: 14px; }
+  .note { color: #59636e; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<p class="note">Generated from <code>CLOUD_WORKER_DOCKER_REPORT.md</code>. Edit the .md, then run <code>python3 cloud_worker_docs_html.py</code>.</p>
+<h1>Cloud worker Docker store: investigation record</h1>
+<nav><ul><li class="h2"><a href="#summary">Summary</a></li><li class="h2"><a href="#1-what-was-checked">1. What was checked</a></li><li class="h2"><a href="#2-findings">2. Findings</a></li><li class="h3"><a href="#2-1-deepswe-none-of-the-113-images-starts">2.1 DeepSWE: none of the 113 images starts</a></li><li class="h3"><a href="#2-2-common-images-7-of-11-fail">2.2 Common images: 7 of 11 fail</a></li><li class="h3"><a href="#2-3-listing-images-fails">2.3 Listing images fails</a></li><li class="h3"><a href="#2-4-what-happened-on-11-and-12-oct">2.4 What happened on 11 and 12 Oct</a></li><li class="h3"><a href="#2-5-ruled-out">2.5 Ruled out</a></li><li class="h2"><a href="#3-cause-as-far-as-known">3. Cause, as far as known</a></li><li class="h3"><a href="#3-1-the-12-oct-event-explains-the-missing-layer-folders">3.1 The 12 Oct event (explains the missing layer folders)</a></li><li class="h3"><a href="#3-2-not-explained-yet">3.2 Not explained yet</a></li><li class="h3"><a href="#3-3-what-it-means-on-a-shared-host">3.3 What it means on a shared host</a></li><li class="h2"><a href="#4-access-for-the-investigation">4. Access for the investigation</a></li><li class="h3"><a href="#4-1-risk-levels">4.1 Risk levels</a></li><li class="h3"><a href="#4-2-the-investigation-only-sudo-rule">4.2 The investigation-only sudo rule</a></li><li class="h3"><a href="#4-3-root-pem">4.3 root.pem</a></li><li class="h3"><a href="#4-4-rules-toby-follows">4.4 Rules Toby follows</a></li><li class="h3"><a href="#4-5-how-root-can-follow">4.5 How root can follow</a></li><li class="h2"><a href="#5-what-the-investigation-must-answer">5. What the investigation must answer</a></li><li class="h3"><a href="#5-1-the-questions">5.1 The questions</a></li><li class="h3"><a href="#5-2-ask-first-the-fastest-answers">5.2 Ask first: the fastest answers</a></li><li class="h2"><a href="#6-investigation-log">6. Investigation log</a></li><li class="h2"><a href="#7-investigation-result">7. Investigation result</a></li><li class="h3"><a href="#7-1-answers">7.1 Answers</a></li><li class="h3"><a href="#7-2-how-to-decide-the-cause-of-the-missing-downloaded-files-and-the-stale-records">7.2 How to decide the cause of the missing downloaded files and the stale records</a></li><li class="h3"><a href="#7-3-conclusions">7.3 Conclusions</a></li><li class="h2"><a href="#appendix-a-checks-already-run-as-toby-no-sudo">Appendix A: checks already run as toby (no sudo)</a></li><li class="h2"><a href="#appendix-b-where-the-evidence-is">Appendix B: where the evidence is</a></li></ul></nav>
+<ul>
+<li><strong>Host:</strong> cloud worker <code>iZt4ndd2dff7gqjta7mppaZ</code> (Jenkins node <code>linux-iZt4ndd2dff7gqjta7mppaZ</code>)</li>
+<li><strong>Prepared by:</strong> Toby. Findings from 14 and 15 Oct 2026; investigation on 15 Oct 2026.</li>
+<li><strong>For:</strong> the mentor and the root account holder.</li>
+<li><strong>Scope:</strong> finding the cause only. Nothing is repaired, removed or restarted during the investigation. The repair plan will be written after the mentor and root have reviewed the result.</li>
+<li><strong>This document is the record:</strong>
+<ul>
+<li>what was found (sections 1 to 3);</li>
+<li>the access used (section 4);</li>
+<li>the questions (section 5);</li>
+<li>what was done, and when (section 6);</li>
+<li>the answers (section 7);</li>
+<li>where each piece of evidence is (Appendix B).</li>
+</ul>
+</li>
+<li><strong>The commands are in a separate guide:</strong> <a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>. It has every step, with its purpose, risk, copy-paste command and expected result.</li>
+<li><strong>Status (15 Oct, 13:39):</strong> guide steps 0 to 5.3 passed. Q5 cannot be answered from folder numbers: none under 1000 remain, including the 12 Oct folders 37 and 54. Next is step 6.1.</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<ul>
+<li>
+<p>The shared image store (containerd, in <code>/data/containerd</code>) is damaged for images pulled before 12 Oct. All 113 DeepSWE images and 7 of 11 common images fail; images pulled since then work.</p>
+</li>
+<li>
+<p>Most of the damage has a clear cause: a chain of events around the restart on 12 Oct.</p>
+<ol>
+<li>From 11 Oct 15:21, the host ran out of memory again and again until 12 Oct 10:36. The system journal was killed at 15:23 and stopped recording. At 10:38 on 12 Oct the host was restarted without a clean shutdown: both disks had to recover their filesystem journals.</li>
+<li>The <code>/data</code> line in <code>/etc/fstab</code> had literal double quotes around it: <code>&quot;/dev/nvme1n1p1 /data ext4 defaults 0 0&quot;</code>. That isn't valid, so at the 10:38 boot the line was skipped and <code>/data</code> wasn't mounted.</li>
+<li>containerd started anyway, at 10:38 and again at 10:40, on the empty <code>/data</code> folder of the system disk. It created a new, empty database there.</li>
+<li>At 10:54, <code>/data</code> was mounted while containerd was still running. containerd kept its empty database, but its files and its cleanup now went to the real disk. The cleanup removes layer folders its database doesn't list, so it removed the real store's layer folders.</li>
+</ol>
+</li>
+<li>
+<p>The fstab trigger was fixed at 12:09 on 12 Oct: the line was rewritten correctly, and containerd and Docker were made to require <code>/data</code>.</p>
+</li>
+<li>
+<p><strong>Not explained yet:</strong></p>
+<ul>
+<li>downloaded files missing across many old images;</li>
+<li>stale records seen on 6 and 7 Oct, before the restart.</li>
+</ul>
+<p>Three candidates remain: a clean-up that deleted old files by age, files deleted by hand, or files lost in the forced restart. Today's investigation is designed to tell them apart (section 5).</p>
+</li>
+<li>
+<p>A DeepSWE image's downloaded files are still on disk; one image exported in full. Only its unpacked layer folders are missing.</p>
+</li>
+</ul>
+<p><strong>Today's plan</strong> (guide steps 0 to 8): about 2 hours of commands, plus a test that runs 2 to 4 hours in the background. The result is ready for the mentor at the end of the day.</p>
+<table>
+<thead>
+<tr>
+<th>Guide step</th>
+<th>What</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Secure <code>root.pem</code> on Toby's PC, and test it</td>
+<td>5 min</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Install the investigation-only sudo rule, with <code>root.pem</code>, after root's OK</td>
+<td>10 min</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Log in as <code>toby</code>, check access, start recording, save the two scripts</td>
+<td>5 min</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Copy the logs, and start the long jobs: two log scans and the image start test</td>
+<td>15 min, then 2 to 4 hours in the background</td>
+</tr>
+<tr>
+<td>4</td>
+<td>The logs: boots, memory, logins, 12 and 14 Oct</td>
+<td>30 min</td>
+</tr>
+<tr>
+<td>5</td>
+<td>containerd's records against the disk</td>
+<td>20 min</td>
+</tr>
+<tr>
+<td>6</td>
+<td>What only root can read: keys, history, crontabs, the hidden store, two containers</td>
+<td>20 min</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Results of the long jobs</td>
+<td>15 min</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Finish; fill in sections 6 and 7</td>
+<td>30 min</td>
+</tr>
+</tbody>
+</table>
+<p>None of the commands is high risk, except opening the root shell in step 1.1, which is used only to install the rule. The only low-risk actions are a temporary read-only view of the system disk, and test containers that start and are removed at once.</p>
+<h2 id="1-what-was-checked">1. What was checked</h2>
+<p>As <code>toby</code>, without sudo:</p>
+<ol>
+<li>Host facts: versions, settings, disk and permissions.</li>
+<li>Eleven common images: pulled if missing, then started once with no network.</li>
+<li>All 113 DeepSWE images at the benchmark commit mac-k3d pins (<code>0b9fabbb</code>): started once with no network, without pulling.</li>
+<li>Possible causes, from these sources:
+<ul>
+<li>systemd's timestamps;</li>
+<li><code>/etc/fstab</code> and its backup;</li>
+<li>the mount table and container creation times;</li>
+<li>scheduled jobs, other Docker daemons, filesystem error counters, log sizes and the package history;</li>
+<li>on 15 Oct, the boot list, the kernel log and the syslog around the 12 Oct restart.</li>
+</ul>
+</li>
+</ol>
+<p>Host facts:</p>
+<ul>
+<li>Ubuntu 26.04 LTS, kernel 7.0.0-22, 96 CPUs, 182 GB of memory. Docker 29.6.2 with containerd 2.2.6 and the containerd image store.</li>
+<li>The store holds 7,089 images and 497 containers, 43 of them running. <code>live_restore</code> is false, so restarting Docker stops every container. Restarting containerd does not; it was restarted three times on 14 Oct with all containers still running.</li>
+<li>containerd keeps its data in <code>/data/containerd</code>. <code>/data</code> is a separate 14 TB ext4 disk, 88% used, with 1.7 TB free. The system disk is 66% used, with 165 GB free.</li>
+<li><code>toby</code> is in the <code>docker</code> group. Since 15 Oct he is also in <code>adm</code> and <code>systemd-journal</code>, so he can read the system journal and <code>/var/log</code> without sudo. He has no sudo yet, and his password is locked. containerd's socket is root-only (<code>root:root</code>, mode 0660).</li>
+<li><code>sudo</code> on this host is <code>sudo-rs</code> 0.2.13, Ubuntu's default. Password logins over SSH are off for every account (<code>/etc/ssh/sshd_config.d/00-disable-password.conf</code>). Root may log in with a key only (<code>PermitRootLogin prohibit-password</code>).</li>
+<li><strong>How far back the logs go:</strong>
+<ul>
+<li>The journal is capped at 3.9 GB. It still lists the boots of 24 Jul, 11 Sep and 12 Oct, but containerd's entries start on 10 Oct at 02:08.</li>
+<li><code>/var/log/syslog*</code>, <code>auth.log*</code> and <code>kern.log*</code> start on 13 Sep.</li>
+<li>Nothing older than 13 Sep can be checked from the logs.</li>
+<li>These files rotate weekly, keeping four weeks. At the next rotation, on Sunday 18 Oct, the week of 13 to 20 Sep is deleted. Guide step 3.1 copies the logs first.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-findings">2. Findings</h2>
+<h3 id="2-1-deepswe-none-of-the-113-images-starts">2.1 DeepSWE: none of the 113 images starts</h3>
+<p>All 113 images are on the host, and all 113 fail to start for the same reason: folders that hold their layers are missing.</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>failed to stat parent: stat /data/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/154281/fs: no such file or directory
+failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs ... err: no such file or directory
+</code></pre></div>
+<p>All 113 images are built on the same 23 base layers (folders 153120 to 153142).</p>
+<p>The images were pulled between 10 and 29 Sep. <code>docs/testing/question-log.md</code> records two runs with them on this worker:</p>
+<ul>
+<li>8 Oct: 40 questions run and scored (<code>deepswe_some_task</code> #9).</li>
+<li>9 Oct: three more passed (<code>deepswe_one_task</code> #93 and <code>deepswe_some_task</code> #11).</li>
+</ul>
+<p>Their downloaded files appear to be intact. One of them (<code>abs-module-cache-flags</code>) exported in full with <code>docker save</code>: 840 MB, with no error. That export reads every downloaded file of the image. So for DeepSWE, only the unpacked layer folders are missing.</p>
+<h3 id="2-2-common-images-7-of-11-fail">2.2 Common images: 7 of 11 fail</h3>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Used for</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm</code></td>
+<td>Building the JiuwenSwarm bundle</td>
+<td>Fails: layer record already exists (<code>sha256:51e78f04…</code>)</td>
+</tr>
+<tr>
+<td><code>alpine:3.23.4</code></td>
+<td>Harbor's egress probe</td>
+<td>Fails: layer record already exists (<code>sha256:29df493b…</code>), first seen on 6 Oct (build #53)</td>
+</tr>
+<tr>
+<td><code>alpine:3.20</code></td>
+<td>mac-k3d's fallback for deleting files that containers left owned by root</td>
+<td>Fails: parent layer missing (<code>sha256:08bc4e…</code>), seen on 7 Oct (build #61)</td>
+</tr>
+<tr>
+<td><code>alpine:3.19@sha256:6baf4358…</code></td>
+<td>mac-k3d's last egress-probe fallback</td>
+<td>Fails: downloaded file missing</td>
+</tr>
+<tr>
+<td><code>debian:bookworm-slim</code></td>
+<td>Common base image</td>
+<td>Fails: downloaded file missing</td>
+</tr>
+<tr>
+<td><code>ubuntu:22.04</code></td>
+<td>Common base image</td>
+<td>Fails: downloaded file missing</td>
+</tr>
+<tr>
+<td><code>ubuntu:24.04</code></td>
+<td>Common base image</td>
+<td>Fails: downloaded file missing</td>
+</tr>
+<tr>
+<td><code>alpine:3.21</code>, <code>alpine:3.22</code>, <code>busybox:1.36</code>, <code>debian:bookworm</code></td>
+<td>(control images)</td>
+<td>Work</td>
+</tr>
+</tbody>
+</table>
+<p>&quot;Downloaded file missing&quot; is this error: <code>blob sha256:… expected at /data/containerd/io.containerd.content.v1.content/blobs/sha256/…: blob not found</code>. containerd's database lists the file, but the file is not on disk.</p>
+<p>All four images that work were pulled on 14 Oct. <code>alpine:3.20</code>, pulled on 24 Jul, fails.</p>
+<p>An hourly canary in <code>toby</code>'s crontab starts those four images. By 15 Oct at 09:49 it hadn't failed once (<code>canary_fail.log</code> doesn't exist), so nothing new has broken since 14 Oct.</p>
+<h3 id="2-3-listing-images-fails">2.3 Listing images fails</h3>
+<p><code>docker image ls</code> fails on this host, each time on a different missing file:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>Error response from daemon: rpc error: code = NotFound desc = blob sha256:69735e6a… expected at /data/containerd/io.containerd.content.v1.content/blobs/sha256/69735e6a…: blob not found: not found
+</code></pre></div>
+<p>Ten tries named ten different missing files. Their digests are spread across the whole range, from <code>09b515bf…</code> to <code>fffbbb45…</code>. So no user can easily see which of their images are broken.</p>
+<h3 id="2-4-what-happened-on-11-and-12-oct">2.4 What happened on 11 and 12 Oct</h3>
+<table>
+<thead>
+<tr>
+<th>Time (CST)</th>
+<th>Event</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Before the restart</td>
+<td><code>/etc/fstab</code> has the <code>/data</code> line inside literal quotes: <code>&quot;/dev/nvme1n1p1 /data ext4 defaults 0 0&quot;</code></td>
+<td><code>/etc/fstab.bak</code>. <code>findmnt --verify --tab-file /etc/fstab.bak</code> reports <code>parse error at line 12 -- ignored</code></td>
+</tr>
+<tr>
+<td>11 Oct, 15:18 to 15:24</td>
+<td>Messages arrive late, some by 7 hours, and Tailscale loses its connection: the host is barely responsive</td>
+<td>Journal, last lines of the boot</td>
+</tr>
+<tr>
+<td>11 Oct, 15:21</td>
+<td>The kernel runs out of memory and kills a <code>java</code> process. More kills follow until 12 Oct 10:36; all of them hit <code>python</code> or <code>java</code> processes</td>
+<td><code>/var/log/kern.log</code>, <code>/var/log/syslog</code></td>
+</tr>
+<tr>
+<td>11 Oct, 15:23 and 15:31</td>
+<td>The system journal stops answering its watchdog and is killed twice. Its last entry is at 15:24; syslog keeps recording</td>
+<td><code>/var/log/syslog</code></td>
+</tr>
+<tr>
+<td>12 Oct, 10:38</td>
+<td>Host boots, without a clean shutdown before it. The system disk runs <code>orphan cleanup</code> on mount. The <code>/data</code> disk is present at 10:38:10, and the boot finishes mounting local filesystems at 10:38:11 without <code>/data</code></td>
+<td>Kernel log, <code>systemctl show</code></td>
+</tr>
+<tr>
+<td>10:38:15 to 10:40:15</td>
+<td>containerd starts, times out at 10:39:45, and starts again at 10:40:15. <code>/data</code> isn't mounted yet</td>
+<td>Journal</td>
+</tr>
+<tr>
+<td>10:54:02</td>
+<td><code>/etc/fstab.bak</code> is saved</td>
+<td>File time</td>
+</tr>
+<tr>
+<td>10:54:05</td>
+<td><code>/data</code> is mounted. ext4 reports <code>recovery complete</code> and <code>1386 orphan inodes deleted</code>. It has not been unmounted since</td>
+<td>Kernel log, <code>systemctl show data.mount</code></td>
+</tr>
+<tr>
+<td>11:33 and 11:41</td>
+<td>Two containers are created on the main Docker with layer folders 37 and 54. containerd is numbering from a new, empty database; the real one is past 350,000</td>
+<td>Mount table, <code>docker inspect</code></td>
+</tr>
+<tr>
+<td>11:48:51</td>
+<td>Docker and containerd are both stopped</td>
+<td><code>logs/boots.txt</code> (guide step 4.1)</td>
+</tr>
+<tr>
+<td>12:09:49</td>
+<td><code>/etc/fstab</code> is rewritten as <code>UUID=25454905-… /data ext4 defaults 0 0</code>. Drop-ins <code>RequiresMountsFor=/data</code> and <code>AssertPathIsMountPoint=/data</code> are added to <code>containerd.service</code> and <code>docker.service</code></td>
+<td>File times</td>
+</tr>
+<tr>
+<td>12:54:32</td>
+<td>containerd starts and is stopped one second later, at 12:54:34</td>
+<td><code>logs/day_1012.txt</code></td>
+</tr>
+<tr>
+<td>13:07:52</td>
+<td>containerd starts and stays up. Docker starts at 13:07:55 and is running at 13:09:24. This is the return to the real database</td>
+<td><code>logs/day_1012.txt</code></td>
+</tr>
+<tr>
+<td>14:41</td>
+<td>The next container gets layer folder 354686, so containerd is back on the real database</td>
+<td>Mount table, <code>docker inspect</code></td>
+</tr>
+</tbody>
+</table>
+<p>The layer folder of each container mount on the main Docker, with the container's creation time (UTC, which is CST minus 8 hours):</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>37       2026-10-12T03:33:21 f870b22117e6
+54       2026-10-12T03:41:19 6afbbec81e30
+354686   2026-10-12T06:41:54 fd19d30764d0
+354842   2026-10-12T16:26:34 755ae3d88b91
+</code></pre></div>
+<p>containerd was restarted again on 14 Oct at 11:11, 17:36 and 20:08. The container processes kept running. The store count afterwards was 7,089 images; it is 7,750 on 15 Oct.</p>
+<p>What the restart means:</p>
+<ul>
+<li><strong>&quot;Without a clean shutdown&quot;</strong> means the host was powered off or reset while it was hung. A normal shutdown unmounts the disks, and ext4 then has nothing to recover.</li>
+<li><strong>The orphan inodes</strong> are files that had already been deleted while a program still had them open. After a crash, ext4 finishes deleting them. That is normal and isn't, by itself, a sign of data loss.</li>
+<li><strong>Who restarted the host</strong> isn't in the host's logs. The Alibaba Cloud console records instance restarts; root can check it (section 5.2).</li>
+</ul>
+<h3 id="2-5-ruled-out">2.5 Ruled out</h3>
+<ul>
+<li><strong>Filesystem damage:</strong> ext4's error counters for <code>/data</code> are 0. The recovery at 10:54 replayed ext4's journal, which is what ext4 does after any unclean stop.</li>
+<li><strong>A slow disk:</strong> the <code>/data</code> disk was present at 10:38:10, and the boot never entered emergency mode.</li>
+<li><strong>Full disks:</strong> the system disk is 66% used, and <code>/data</code> is 88% used.</li>
+<li><strong>Scheduled jobs:</strong> no systemd timer, system cron job or tmpfiles rule touches Docker or <code>/data</code>. Per-user crontabs and user timers need root to read (Q8).</li>
+<li><strong>Containers with the host disk:</strong> no container on the main Docker bind-mounts <code>/</code>, <code>/data</code> or containerd's folders.</li>
+<li><strong>Other daemons:</strong>
+<ul>
+<li>The TaskAnchor runtime, set up on 10 Sep, keeps its own store in its own folder on <code>/data</code> and already requires the <code>/data</code> mount.</li>
+<li>The daemons serving <code>/experiment-run/docker.sock</code> and <code>/isolated/docker</code> run inside containers of the main Docker.</li>
+</ul>
+</li>
+<li><strong>Configuration changes:</strong> containerd's and Docker's config files haven't changed since 24 Jul, when <code>/data</code> was set up.</li>
+<li><strong>Package upgrades:</strong> Docker 29.6.2 and containerd 2.2.6 were installed on 24 Jul at 16:00 and haven't been upgraded since (<code>/var/log/apt/history.log*</code>). None of the October upgrades is Docker, containerd, runc, systemd or a library they load.</li>
+<li><strong>containerd being killed for memory:</strong> none of the processes killed on 11 and 12 Oct was containerd or Docker.</li>
+</ul>
+<h2 id="3-cause-as-far-as-known">3. Cause, as far as known</h2>
+<p>Every failure has the same shape: containerd's records point at data that is gone.</p>
+<table>
+<thead>
+<tr>
+<th>What is missing</th>
+<th>Error</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A layer's folder on disk, while the layer store still lists it</td>
+<td><code>no such file or directory</code></td>
+<td>all 113 DeepSWE images</td>
+</tr>
+<tr>
+<td>A downloaded file, while containerd's database still lists it</td>
+<td><code>blob not found</code></td>
+<td><code>alpine:3.19</code>, <code>debian:bookworm-slim</code>, <code>ubuntu:22.04</code>, <code>ubuntu:24.04</code>, <code>docker image ls</code></td>
+</tr>
+<tr>
+<td>A layer's data, while containerd's main database still lists the layer</td>
+<td><code>AlreadyExists</code> or <code>missing parent</code></td>
+<td>uv, <code>alpine:3.23.4</code>, <code>alpine:3.20</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-1-the-12-oct-event-explains-the-missing-layer-folders">3.1 The 12 Oct event (explains the missing layer folders)</h3>
+<ol>
+<li>The host had run out of memory and was restarted without a clean shutdown. This was the first boot that read the quoted <code>/data</code> line, so <code>/data</code> wasn't mounted.</li>
+<li>containerd and Docker had no rule to wait for <code>/data</code> then, so they started on the empty <code>/data</code> folder of the system disk. containerd created a new, empty database there and kept it open.</li>
+<li><code>/data</code> was mounted at 10:54 while containerd was running. From then on, containerd's new files and folders went to the real disk; folders 37 and 54 are there. Its records stayed in the empty database, now hidden under the mount.</li>
+<li>containerd's routine cleanup removes every layer folder that its database doesn't list. With an empty database, that is nearly every folder of the real store. The cleanup runs whenever a layer record is removed, for example when a container is removed. So anyone using Docker in that window could have triggered it without knowing.</li>
+<li>containerd and Docker were stopped at 11:48:51. containerd was started for one second at 12:54:32, then both were started for good at 13:07:52, with <code>/data</code> already mounted, so containerd opened the real database. The real records pointed at deleted folders. The next container, at 14:41, got folder 354686.</li>
+</ol>
+<p>This fits the evidence. The DeepSWE folders are gone while their downloaded files remain, folders 37 and 54 come from a second numbering, and everything pulled since 12 Oct works.</p>
+<p>The step that turned &quot;an empty store for 16 minutes&quot; into data loss was step 3: mounting <code>/data</code> under a running containerd. Had containerd and Docker been stopped first, the real store would have been untouched.</p>
+<h3 id="3-2-not-explained-yet">3.2 Not explained yet</h3>
+<ul>
+<li><strong>Missing downloaded files:</strong> many old images have downloaded files missing (<code>blob not found</code>). containerd's cleanup of downloaded files goes through them in alphabetical order, and it would have removed DeepSWE's files too. Instead, the missing files are spread across the whole range while DeepSWE's survive. So they were probably deleted another way, or at another time.</li>
+<li><strong>Stale records from 6 and 7 Oct:</strong> <code>alpine:3.23.4</code> (6 Oct) and <code>alpine:3.20</code> (7 Oct) failed before the restart, and there was no boot between 11 Sep and 12 Oct.</li>
+<li><strong>15 GB of syslog:</strong> <code>/var/log/syslog.1</code>, covering 4 to 11 Oct, is 15 GB. The days since have produced far less.</li>
+<li><strong>Disk write stalls on 14 Oct:</strong> from 20:21, the kernel reported <code>dockerd</code> blocked for more than 2 minutes, waiting for disk writes to finish. It doesn't delete data, but it shows that the <code>/data</code> disk can stall under load.</li>
+</ul>
+<p>The candidates, and what each one predicts:</p>
+<table>
+<thead>
+<tr>
+<th>Candidate</th>
+<th>It predicts</th>
+<th>Checked by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A clean-up that deleted files by age, for example <code>find … -mtime +30 -delete</code> run on <code>/data</code> to free space</td>
+<td>Missing files are all older than some age; files still present are younger. Ruled out on 15 Oct: 1,861 files that are 2 months old are still present, while files only 2 to 3 weeks old are almost all missing (Q7)</td>
+<td>Q7, Q8</td>
+</tr>
+<tr>
+<td>Files deleted by hand in <code>/data/containerd</code>, for example to free space (only root can write there)</td>
+<td>A deletion in root's history, a root login or a sudo command at that time</td>
+<td>Q2, Q8</td>
+</tr>
+<tr>
+<td>Files lost in the forced restart on 12 Oct</td>
+<td>Only files written shortly before 12 Oct 10:38 are missing; the old images' files aren't. Ruled out for the missing downloaded files on 15 Oct: most missing files are weeks or months old (Q7). The restart still explains the missing layer folders</td>
+<td>Q7, Q9</td>
+</tr>
+<tr>
+<td>An earlier memory crisis or hang, around 6 and 7 Oct</td>
+<td>Out-of-memory kills or hung tasks in the kernel log on those days. Ruled out on 15 Oct: none on either day (Q9)</td>
+<td>Q6, Q9</td>
+</tr>
+<tr>
+<td>The same fstab problem at the 11 Sep boot</td>
+<td>Low-numbered layer folders dated 11 Sep. On 15 Oct none remain: the lowest folder is 152997, and the 12 Oct folders 37 and 54 are gone too, so this test cannot confirm or rule it out. Still unlikely, because images pulled on 10 Sep still worked on 8 Oct</td>
+<td>Q5</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-3-what-it-means-on-a-shared-host">3.3 What it means on a shared host</h3>
+<ul>
+<li>The 12 Oct event wasn't caused by any user's work. It came from a configuration mistake, a host that ran out of memory, and a recovery step done while the services were running. Still, every user's images were affected.</li>
+<li>12 accounts are in the docker group, which is root-equivalent: any of them could reach the store through a container that mounts the host. So the eventual prevention will need a team rule as well as technical guards.</li>
+</ul>
+<h2 id="4-access-for-the-investigation">4. Access for the investigation</h2>
+<h3 id="4-1-risk-levels">4.1 Risk levels</h3>
+<p>Every command in the guide has one of these labels:</p>
+<ul>
+<li><strong>None:</strong> it only reads. It writes nothing except files in Toby's own folder <code>~/snapshot-audit/</code>.</li>
+<li><strong>Low:</strong> it makes a small change that removes no data and can be undone, for example a temporary read-only view of the system disk, or a test container that starts and is removed at once.</li>
+<li><strong>High:</strong> no limits. The only high-risk command is opening the root shell in guide step 1.1, which is used only to install the rule.</li>
+</ul>
+<h3 id="4-2-the-investigation-only-sudo-rule">4.2 The investigation-only sudo rule</h3>
+<p>Root gave Toby <code>root.pem</code> on 15 Oct. Toby uses it once, after root's OK, to install a sudo rule for <code>toby</code> (guide step 1). The rule is in <code>/etc/sudoers.d/90-toby-investigate</code>; the guide shows its exact text.</p>
+<p>The rule lets <code>toby</code> run 17 exact commands as root, with fixed arguments. sudo refuses anything else, including the same program with other arguments. So <code>sudo -i</code>, <code>sudo bash</code>, <code>sudo rm</code>, <code>sudo systemctl</code>, <code>sudo ctr … rm</code> and any other <code>sudo mount</code> are refused. The rule parses with this host's <code>visudo</code> (<code>sudo-rs</code>) and with the classic <code>visudo.ws</code>; checked on 15 Oct.</p>
+<table>
+<thead>
+<tr>
+<th>Allowed command</th>
+<th>What it reads</th>
+<th>Guide step</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ctr -n moby images ls -q</code></td>
+<td>Every image name</td>
+<td>3.3</td>
+</tr>
+<tr>
+<td><code>ctr -n moby images check</code></td>
+<td>For each image: are all its downloaded files present, and is it unpacked</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ctr -n moby snapshots ls</code></td>
+<td>Every layer record</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ctr -n moby content ls</code></td>
+<td>Every downloaded-file record, with its age</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ctr -n moby content active</code></td>
+<td>Downloads in progress</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ls -l --full-time …/overlayfs/snapshots</code></td>
+<td>The layer folders on disk</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ls -U …/blobs/sha256</code></td>
+<td>The downloaded files on disk</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td><code>ls -ld --full-time …/snapshots/37 …/snapshots/54</code></td>
+<td>The two folders from the split brain</td>
+<td>6.5</td>
+</tr>
+<tr>
+<td><code>ssh-keygen -lf /root/.ssh/authorized_keys</code></td>
+<td>The fingerprints of the keys that may log in as root</td>
+<td>6.1</td>
+</tr>
+<tr>
+<td><code>cat /root/.bash_history</code></td>
+<td>Root's shell history</td>
+<td>6.2</td>
+</tr>
+<tr>
+<td><code>grep -rH . /var/spool/cron/crontabs</code></td>
+<td>Every user's crontab</td>
+<td>6.3</td>
+</tr>
+<tr>
+<td><code>ls -laR</code> of naiyu's, yun's and zihan's <code>~/.config/systemd/user</code></td>
+<td>File names of the three users' timers and services</td>
+<td>6.3</td>
+</tr>
+<tr>
+<td><code>mkdir -p /mnt/rootfs</code>, <code>mount -o bind,ro / /mnt/rootfs</code>, <code>ls -la --full-time /mnt/rootfs/data …</code>, <code>du -sh /mnt/rootfs/data</code>, <code>umount /mnt/rootfs</code> (5 commands)</td>
+<td>A temporary read-only view of the system disk, to see the store hidden under <code>/data</code></td>
+<td>6.4</td>
+</tr>
+</tbody>
+</table>
+<p>Why this is safe:</p>
+<ul>
+<li><strong>Only reading.</strong> Every allowed command lists or reads, except the read-only view, which is mounted and removed in the same step. <code>ctr</code> has no read-only switch, so the rule fixes each command's arguments exactly.</li>
+<li><strong>Jenkins jobs can't use it.</strong> The Jenkins agent also runs as <code>toby</code>. sudo asks for the password, and <code>sudo-rs</code> remembers it for 15 minutes only in the terminal where it was typed. A job has no terminal and no password.</li>
+<li><strong>Every sudo command is logged</strong> in <code>/var/log/auth.log</code> and the journal (section 4.5).</li>
+<li><strong>It ends.</strong> A timer removes the rule after 3 days, and root removes it by hand at the end (guide step 8.3).</li>
+<li><strong>Privacy:</strong> the rule lets Toby read root's shell history and every crontab, but no other user's history or files. For three users who run background services (naiyu, yun and zihan), it lists only the file names of their user timers.</li>
+</ul>
+<h3 id="4-3-root-pem">4.3 <code>root.pem</code></h3>
+<p><code>root.pem</code> is the private key that logs in as root on the worker. It gives unrestricted root access, so:</p>
+<ul>
+<li>It is kept on Toby's PC only, in <code>~/.ssh/cloud-worker-root.pem</code>, readable by Toby only (guide step 0.1). It is never copied to the worker, Jenkins or any git repository, and never pasted anywhere.</li>
+<li>It is used once, for guide step 1, after root's OK, and not again during the investigation.</li>
+<li>After the work, root decides whether Toby deletes it, and whether root removes the key from <code>/root/.ssh/authorized_keys</code>.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fingerprint (guide step 0.2)</td>
+<td><code>2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)</code></td>
+</tr>
+<tr>
+<td>Root's OK to use it for step 1 (who, when)</td>
+<td>Not recorded in this chat. Toby started step 1 at 11:55</td>
+</tr>
+<tr>
+<td>Used for step 1 (from, to)</td>
+<td>15 Oct 11:55:56 to 12:03. Logged out with <code>exit</code></td>
+</tr>
+<tr>
+<td>Rule installed, and <code>sudo -l -U toby</code> checked (time)</td>
+<td>15 Oct, about 12:01. Exactly the 17 commands, each as <code>(root)</code>, and nothing else</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-4-rules-toby-follows">4.4 Rules Toby follows</h3>
+<ol>
+<li>Only the commands in the guide, copied exactly, one step at a time, from his own SSH terminal.</li>
+<li>sudo only interactively. Never <code>sudo -i</code>, <code>sudo su</code> or <code>sudo bash</code>, and never sudo from cron, Jenkins, <code>nohup</code> or a background job. The rule would refuse the first three anyway.</li>
+<li>If a command fails, or its result differs from the guide's &quot;Expected&quot;, stop and ask. No improvising, and no &quot;quick fix&quot;.</li>
+<li><strong>Never run these during the investigation, even though some don't need sudo:</strong>
+<ul>
+<li><code>rm</code>, <code>mv</code> or <code>chmod</code> on anything under <code>/data</code>;</li>
+<li><code>docker rmi</code>, <code>docker image rm</code>, <code>docker system prune</code>, <code>docker image prune</code> or <code>docker builder prune</code>;</li>
+<li><code>docker pull</code>, <code>docker load</code>, <code>docker tag</code>, <code>docker stop</code> or <code>docker rm</code> on other users' images and containers;</li>
+<li><code>ctr … rm</code>, <code>ctr … remove</code>, <code>ctr … delete</code> or <code>ctr … prune</code>;</li>
+<li><code>systemctl stop</code>, <code>restart</code> or <code>kill</code> for <code>containerd</code>, <code>docker</code> or <code>data.mount</code>;</li>
+<li>editing <code>/etc/fstab</code>, any file in <code>/etc/containerd</code>, <code>/etc/docker</code> or <code>/etc/systemd</code>, or mounting or unmounting <code>/data</code>.</li>
+</ul>
+</li>
+<li>Other users' data is read only as far as the guide says. Anything more needs root's and the owner's agreement.</li>
+</ol>
+<h3 id="4-5-how-root-can-follow">4.5 How root can follow</h3>
+<ul>
+<li><strong>Every sudo command</strong> is in the journal: <code>journalctl _COMM=sudo --since today --no-pager</code> lists them, one line each, with the user and the command.</li>
+<li><strong>Every session</strong> is recorded with <code>script</code> (guide step 2.3). The recordings are in <code>~toby/snapshot-audit/sessions/</code>, and root can read them. Passwords aren't shown on screen, so they aren't recorded.</li>
+<li><strong>What was done, and when,</strong> is in the investigation log (section 6).</li>
+</ul>
+<h2 id="5-what-the-investigation-must-answer">5. What the investigation must answer</h2>
+<h3 id="5-1-the-questions">5.1 The questions</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Question</th>
+<th>Why it matters</th>
+<th>Guide step</th>
+<th>Evidence (in <code>~/snapshot-audit/</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>At the 12 Oct boot, did containerd start before <code>/data</code> was mounted?</td>
+<td>Confirms section 3.1, steps 1 and 2. Already seen on 15 Oct</td>
+<td>4.1</td>
+<td><code>logs/boots.txt</code></td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>Who wrote the quoted fstab line, and when? Who mounted <code>/data</code> at 10:54?</td>
+<td>Shows which step failed: writing the line, checking it, or mounting under a running service</td>
+<td>4.3, 6.1, 6.2</td>
+<td><code>logs/logins.txt</code>, <code>logs/root_logins_by_day.txt</code>, <code>logs/around_1012.txt</code>, <code>logs/root_keys.txt</code>, <code>logs/root_history.txt</code></td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>Is the empty store from 12 Oct 10:38 still under the <code>/data</code> mount point?</td>
+<td>Direct proof of the split brain (section 3.1, step 2)</td>
+<td>6.4</td>
+<td><code>logs/hidden_store.txt</code></td>
+</tr>
+<tr>
+<td>Q4</td>
+<td>When did containerd switch back to the real database on 12 Oct, and who restarted it?</td>
+<td>Bounds the window in which folders were deleted</td>
+<td>4.4</td>
+<td><code>logs/day_1012.txt</code></td>
+</tr>
+<tr>
+<td>Q5</td>
+<td>Did the 11 Sep boot also run containerd without <code>/data</code>?</td>
+<td>Would mean an earlier split brain</td>
+<td>4.1, 5.3, 5.3b</td>
+<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
+</tr>
+<tr>
+<td>Q6</td>
+<td>When did each kind of error first appear in the logs?</td>
+<td>Dates the older damage, so the other logs can be read around that time</td>
+<td>3.2, 7.1</td>
+<td><code>logs/damage_first_seen.txt</code></td>
+</tr>
+<tr>
+<td>Q7</td>
+<td>Do the missing downloaded files share an age?</td>
+<td>Old files only means an age-based clean-up; files from 11 and 12 Oct only means the restart; no pattern rules out both</td>
+<td>5.2</td>
+<td><code>inventory/blob_ages.txt</code></td>
+</tr>
+<tr>
+<td>Q8</td>
+<td>Did anyone delete files under <code>/data</code> by hand, or run a clean-up from a crontab or a user timer?</td>
+<td>The other candidate for the missing files</td>
+<td>4.3, 4.6, 6.2, 6.3</td>
+<td><code>logs/root_history.txt</code>, <code>logs/crontabs.txt</code>, <code>logs/user_timers.txt</code>, <code>logs/sudo_commands.txt</code></td>
+</tr>
+<tr>
+<td>Q9</td>
+<td>When did the host run out of memory or stall on disk writes, what was killed, and was there an earlier episode, for example on 6 and 7 Oct?</td>
+<td>The 12 Oct restart came from it, and an earlier one could explain the 6 and 7 Oct damage</td>
+<td>4.2</td>
+<td><code>logs/kernel.txt</code>, <code>logs/oom_per_day.txt</code>, <code>logs/oom_victims.txt</code>, <code>logs/hung_tasks.txt</code></td>
+</tr>
+<tr>
+<td>Q10</td>
+<td>What wrote 15 GB to syslog on 4 to 11 Oct?</td>
+<td>It may be the same event, seen from another side</td>
+<td>3.2, 7.1</td>
+<td><code>logs/syslog_volume.txt</code></td>
+</tr>
+<tr>
+<td>Q11</td>
+<td>Who or what restarted containerd on 14 Oct at 11:11 and 17:36?</td>
+<td>A restart doesn't delete data, but an unexplained one means someone works on the store without telling the others</td>
+<td>4.5</td>
+<td><code>logs/restarts_1014.txt</code></td>
+</tr>
+<tr>
+<td>Q12</td>
+<td>Do the two containers created during the split brain (folders 37 and 54) exist in the real database?</td>
+<td>If not, they will fail at their next start, and their owners should know</td>
+<td>6.5</td>
+<td><code>logs/split_brain_containers.txt</code></td>
+</tr>
+</tbody>
+</table>
+<p>The aim is to find which step of the process failed, not to blame a person.</p>
+<h3 id="5-2-ask-first-the-fastest-answers">5.2 Ask first: the fastest answers</h3>
+<p>Several questions are answered fastest by asking. Toby asks root these today, in writing:</p>
+<ol>
+<li>Was the host restarted on 12 Oct at about 10:37, from the Alibaba Cloud console or otherwise? By whom, and why? The console's instance history shows it. (Q9)</li>
+<li>Who added the <code>/data</code> line to <code>/etc/fstab</code>, and when? (Q2)</li>
+<li>Who mounted <code>/data</code> at 10:54 and rewrote fstab at 12:09? Was containerd stopped first? (Q2, Q4)</li>
+<li>Has anyone deleted files in <code>/data/containerd</code> or <code>/data/docker</code>, for example to free space? When? (Q8)</li>
+<li>Who restarted containerd on 14 Oct at 11:11 and 17:36? (Q11)</li>
+</ol>
+<p>And the users of the docker group, in the team chat:</p>
+<ol>
+<li>Did any job use a lot of memory on 11 Oct from 15:00? (Q9)</li>
+<li>Does anyone run a clean-up script or service that deletes files under <code>/data</code>? (Q8)</li>
+</ol>
+<p>The logs then confirm or correct the answers.</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Answer</th>
+<th>From, when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Root 1: restart on 12 Oct</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Root 2: the fstab line</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Root 3: mount at 10:54, fstab at 12:09</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Root 4: deletes in <code>/data</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Root 5: containerd restarts on 14 Oct</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Users 1: memory on 11 Oct</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Users 2: clean-up scripts</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-investigation-log">6. Investigation log</h2>
+<p>One row per guide step: when it was done, the result in one line, and where the evidence is. &quot;Sent&quot; means the step's output was shared for review.</p>
+<table>
+<thead>
+<tr>
+<th>Guide step</th>
+<th>What</th>
+<th>Done (date, time)</th>
+<th>Result</th>
+<th>Evidence</th>
+<th>Sent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(before)</td>
+<td>Read-only checks of 14 and 15 Oct (Appendix A)</td>
+<td>14 Oct; 15 Oct 10:48 to 11:00</td>
+<td>Sections 2 and 3</td>
+<td><code>facts.txt</code>, <code>base_status.tsv</code>, <code>deepswe_status.tsv</code>, <code>cause_checks.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>0.1</td>
+<td><code>root.pem</code> moved to <code>~/.ssh</code>, mode 600</td>
+<td>15 Oct, before 11:54</td>
+<td><code>-rw------- … /home/Toby/.ssh/cloud-worker-root.pem</code></td>
+<td>the file itself</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>0.2</td>
+<td>Key fingerprint</td>
+<td>15 Oct, before 11:54</td>
+<td><code>2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)</code></td>
+<td>section 4.3</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>0.3</td>
+<td>Test login as root</td>
+<td>15 Oct 11:54:36</td>
+<td><code>root</code>, <code>iZt4ndd2dff7gqjta7mppaZ</code></td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>1.1 to 1.6</td>
+<td>Root shell, password, rule written, checked, installed, and listed</td>
+<td>15 Oct 11:55 to about 12:01</td>
+<td><code>passwd: password updated successfully</code>; <code>parsed OK</code>; <code>sudo -l -U toby</code> lists the 17 commands as <code>(root)</code> only</td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>1.7</td>
+<td>Automatic removal after 3 days</td>
+<td>15 Oct, about 12:03</td>
+<td><code>Running timer as unit: toby-investigate-expire.timer</code></td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>1.8</td>
+<td>Leave the root shell</td>
+<td>15 Oct, about 12:03</td>
+<td><code>logout</code>, then the prompt of Toby's PC</td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>2.1</td>
+<td>Logged in as <code>toby</code></td>
+<td>15 Oct 12:03</td>
+<td>Prompt <code>toby@iZt4ndd2dff7gqjta7mppaZ:~$</code></td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>2.2</td>
+<td>Groups and rule checked as <code>toby</code></td>
+<td>15 Oct, about 12:05</td>
+<td>Groups <code>adm</code>, <code>docker</code>, <code>systemd-journal</code>. <code>sudo -l</code> lists the 17 commands. <code>sudo true</code> refused: <code>I'm sorry toby. I'm afraid I can't do that</code></td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>2.3</td>
+<td>Recording started</td>
+<td>15 Oct 12:05</td>
+<td>Prompt changed to <code>~/snapshot-audit/logs</code> with no other output</td>
+<td><code>sessions/2026-10-15_1205.log</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>2.4</td>
+<td>Scripts saved</td>
+<td>15 Oct, about 12:10</td>
+<td><code>scripts OK</code></td>
+<td><code>long_scans.sh</code>, <code>layer_test.sh</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>3.1</td>
+<td>Logs copied</td>
+<td>15 Oct, finished 12:38</td>
+<td>165 GB free. 12 files, 3.3 GB: three <code>syslog</code>, three <code>auth.log</code> and three <code>kern.log</code> archives, <code>auth.log.1</code>, <code>kern.log.1</code>, and the journal export (341 MB). The 15 GB <code>syslog.1</code> was left in place, as planned</td>
+<td><code>logcopy/</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>3.2</td>
+<td>Slow log scans started</td>
+<td>15 Oct 12:42:12, process 3899174</td>
+<td>Finished at 12:45:28. Q6 at 12:44:43, Q10 at 12:45:28. awk warned about one non-text line in <code>syslog.1</code> and continued</td>
+<td><code>logs/long_scans.log</code>, <code>logs/damage_first_seen.txt</code>, <code>logs/syslog_volume.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>3.3</td>
+<td>Image list; start test started</td>
+<td>15 Oct, about 12:46, process 3954694</td>
+<td>7,750 images (7,089 on 14 Oct). Start test running: 1,043 of 7,750 done in the first 3 minutes</td>
+<td><code>inventory/images_list.txt</code>, <code>inventory/layer_test.log</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.1</td>
+<td>Boots (Q1, Q5)</td>
+<td>15 Oct 12:54</td>
+<td>Three boots: 24 Jul, the 11 Sep boot (journal now starts 17 Sep), and 12 Oct 10:38. Boot 0 confirms Q1. Boot -1 ends 11 Oct 15:24 with no shutdown</td>
+<td><code>logs/boots.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.2</td>
+<td>Memory, stuck processes, disk (Q9)</td>
+<td>15 Oct, about 13:01</td>
+<td>OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. None on 6 or 7 Oct. No disk errors. Disk stalls on 14-15 Sep, 18 Sep, 21 Sep, and 14-15 Oct</td>
+<td><code>logs/kernel.txt</code>, <code>logs/oom_per_day.txt</code>, <code>logs/oom_victims.txt</code>, <code>logs/hung_tasks.txt</code>, <code>logs/journald_watchdog.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.3</td>
+<td>Logins and sudo (Q2, Q8, Q11)</td>
+<td>15 Oct, about 13:13</td>
+<td>262,506 SSH logins, 5 sudo commands. Two root keys. On 12 Oct the active key is the same one as <code>root.pem</code>. No sudo command edited fstab or mounted <code>/data</code></td>
+<td><code>logs/logins.txt</code>, <code>logs/sudo_commands.txt</code>, <code>logs/root_logins_by_day.txt</code>, <code>logs/around_1012.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.4</td>
+<td>12 Oct in detail (Q4)</td>
+<td>15 Oct, about 13:17</td>
+<td>Services stopped 11:48:51. One-second containerd start at 12:54:32. Lasting start at 13:07:52; Docker running at 13:09:24. No systemd &quot;Mounted&quot; line</td>
+<td><code>logs/day_1012.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.5</td>
+<td>14 Oct restarts (Q11)</td>
+<td>15 Oct, about 13:22</td>
+<td>Three restarts, not two: 11:11:31, 17:36:00 and 20:08:52. Each stop left the container shims running. A root login from 178.15.100.199 at 11:01:59, nine minutes before the first. No root login in the 20 minutes around 17:36</td>
+<td><code>logs/restarts_1014.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>4.6</td>
+<td>Toby's own timers and crontab (Q8)</td>
+<td>15 Oct, about 13:24</td>
+<td>One timer, Ubuntu's <code>launchpadlib-cache-clean</code>, which cleans a package cache. The only crontab line is the hourly image canary</td>
+<td>session recording</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>5.1</td>
+<td>containerd's lists</td>
+<td>15 Oct 13:26</td>
+<td>7,750 images: 507 complete and unpacked, 27 complete but not unpacked, 7,216 in error. 19,581 layer records and 10,164 layer folders. 46,179 file records and 3,361 files. No download in progress</td>
+<td><code>inventory/images_check.txt</code>, <code>inventory/snapshots_db.txt</code>, <code>inventory/content_records.txt</code>, <code>inventory/content_active.txt</code>, <code>inventory/snapshot_dirs.txt</code>, <code>inventory/blob_files.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>5.2</td>
+<td>Records against disk; ages (Q7)</td>
+<td>15 Oct, about 13:32</td>
+<td>42,915 file records have no file. 97 files are on disk but not recorded. Missing and present files share the same ages, so this was not an age-based deletion and not only the 12 Oct restart</td>
+<td><code>inventory/blobs_missing.txt</code>, <code>inventory/blobs_unrecorded.txt</code>, <code>inventory/blob_ages.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>5.3</td>
+<td>Low-numbered folders (Q5)</td>
+<td>15 Oct, about 13:37</td>
+<td>The count was 0. The guide expected folders 37 and 54 from 12 Oct, so this was not an answer on its own</td>
+<td><code>inventory/low_numbered_dirs.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>5.3b</td>
+<td>Column check of <code>snapshot_dirs.txt</code> (Q5)</td>
+<td>15 Oct, about 13:39</td>
+<td>Field 9 is the folder name. Zero folders are numbered under 1000. The lowest folder still on disk is 152997, dated 2026-09-10. Folders 37 and 54 from the 12 Oct empty database are gone</td>
+<td>session recording; <code>inventory/snapshot_dirs.txt</code></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>6.1</td>
+<td>Root's keys (Q2)</td>
+<td></td>
+<td></td>
+<td><code>logs/root_keys.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>6.2</td>
+<td>Root's history (Q2, Q8)</td>
+<td></td>
+<td></td>
+<td><code>logs/root_history.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>6.3</td>
+<td>Crontabs and user timers (Q8)</td>
+<td></td>
+<td></td>
+<td><code>logs/crontabs.txt</code>, <code>logs/user_timers.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>6.4</td>
+<td>The hidden store (Q3)</td>
+<td></td>
+<td></td>
+<td><code>logs/hidden_store.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>6.5</td>
+<td>The split-brain containers (Q12)</td>
+<td></td>
+<td></td>
+<td><code>logs/split_brain_containers.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>7.1</td>
+<td>Slow log scans (Q6, Q10)</td>
+<td></td>
+<td></td>
+<td><code>logs/damage_errors.txt</code>, <code>logs/damage_first_seen.txt</code>, <code>logs/syslog_volume.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>7.2</td>
+<td>Start test (impact)</td>
+<td></td>
+<td></td>
+<td><code>inventory/layer_test.tsv</code>, <code>inventory/broken_by_repo.txt</code>, <code>inventory/containers_on_broken.tsv</code></td>
+<td></td>
+</tr>
+<tr>
+<td>8.1</td>
+<td>Recording stopped</td>
+<td></td>
+<td></td>
+<td><code>sessions/</code></td>
+<td></td>
+</tr>
+<tr>
+<td>8.2</td>
+<td>Evidence copied to Toby's PC</td>
+<td></td>
+<td></td>
+<td><code>~/cloud-worker-evidence/</code> on Toby's PC</td>
+<td></td>
+</tr>
+<tr>
+<td>8.3</td>
+<td>Access removed by root</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Anything that didn't go as the guide expected:</p>
+<table>
+<thead>
+<tr>
+<th>Time</th>
+<th>Step</th>
+<th>What happened</th>
+<th>What was decided</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>15 Oct, about 12:00</td>
+<td>1.5</td>
+<td>After <code>rm -f</code> (which printed nothing, as expected), the letter <code>z</code> was typed. The shell answered <code>z: command not found</code></td>
+<td>Harmless. No file was changed. Continue with 1.7</td>
+</tr>
+<tr>
+<td>15 Oct 11:55</td>
+<td>1.1</td>
+<td>The login banner reported 366 zombie processes, and the previous root login was 15 Oct 10:15:39 from 119.8.240.30</td>
+<td>Noted. The zombies are not part of this investigation. The earlier root login is a lead for Q2, to be matched in step 4.3</td>
+</tr>
+<tr>
+<td>15 Oct, about 13:37</td>
+<td>5.3</td>
+<td><code>low_numbered_dirs.txt</code> is empty. The guide expected folders 37 and 54 from 12 Oct</td>
+<td>Step 5.3b, run at 13:39, showed field 9 is the folder name. The empty list is real. The lowest folder is 152997. Q5 cannot be answered from these folders</td>
+</tr>
+</tbody>
+</table>
+<h2 id="7-investigation-result">7. Investigation result</h2>
+<p>Fill this in as the steps finish. Status is confirmed, ruled out or open.</p>
+<h3 id="7-1-answers">7.1 Answers</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Answer</th>
+<th>Evidence</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>Recorded. On 12 Oct containerd started at 10:38:15, timed out at 10:39:45, and started at 10:40:15. Docker started at 10:42:54. <code>/data</code> was mounted at 10:54:05, so both were already running</td>
+<td><code>logs/boots.txt</code></td>
+<td>confirmed</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>Partly answered. Root logins use two keys. <code>SHA256:QHhVAmPV…</code> is the same key as <code>root.pem</code>, used on almost every day since 14 Sep, including all 8 root logins in the 12 Oct repair window. <code>SHA256:Sw9bNRuC…</code> was used heavily on 29-30 Sep and 8-10 Oct, and not on 12 Oct. On 12 Oct: four logins at 10:38:40-47 from 178.15.100.199, then 10:41, 10:46, 10:50 and 11:28 from 119.8.178.37. No root login on 11 Oct, and none at the 12:54 containerd start, so that start came from a session already open. No sudo command edited fstab or mounted <code>/data</code>. Step 6.1 names the keys. Step 6.2 has to find the actual commands</td>
+<td><code>logs/around_1012.txt</code>, <code>logs/root_logins_by_day.txt</code>, <code>logs/sudo_commands.txt</code></td>
+<td>partly confirmed</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td></td>
+<td><code>logs/hidden_store.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>Q4</td>
+<td>containerd ran on the empty store from 10:40:15 until both services were stopped at 11:48:51. It started for one second at 12:54:32 and was stopped at 12:54:34. The lasting start is 13:07:52, and Docker was running at 13:09:24. <code>/data</code> was already mounted, and this start took one second, so it opened the real database. No new root login at these times, so an already-open root session did it. The journal has no systemd &quot;Mounted&quot; line; the 10:54 mount is in the kernel log, which fits a manual mount</td>
+<td><code>logs/day_1012.txt</code></td>
+<td>confirmed</td>
+</tr>
+<tr>
+<td>Q5</td>
+<td>The retained journal for the 11 Sep boot has no containerd or <code>/data</code> lines, and its oldest remaining entry moved from 11 Sep (seen at 10:48 today) to 17 Sep. It ends 11 Oct 15:24 with no shutdown. No layer folder numbered under 1000 is still on disk. The lowest is 152997, dated 2026-09-10, and the 12 Oct empty-database folders 37 and 54 are gone as well. Their absence does not show whether an earlier split brain happened, because those folders would have been removed once the real database was back. Still unlikely: images pulled on 10 Sep worked on 8 Oct</td>
+<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
+<td>open</td>
+</tr>
+<tr>
+<td>Q6</td>
+<td>First lines found so far: <code>blob not found</code> on 13 Sep 01:37 (the oldest log day, so it may be older), <code>missing parent</code> on 14 Sep 12:05, <code>no space left</code> on 18 Sep 17:27, <code>failed to stat parent</code> on 14 Oct 17:01. <code>already exists</code> does not appear in the daemon log. Read in full at step 7.1</td>
+<td><code>logs/damage_first_seen.txt</code></td>
+<td>partly confirmed</td>
+</tr>
+<tr>
+<td>Q7</td>
+<td>42,915 of 46,179 file records have no file, and 97 files are on disk but not recorded. Missing files are 4 days to 2 months old. Present files cover the same range, including 1,861 files that are 2 months old. Files from the last 2 days are almost all present. Files aged 2 to 3 weeks are almost all missing (10,457 missing and 73 present at 2 weeks; 5,613 missing and 13 present at 3 weeks), while older files survived more often. An age-based deletion would have removed the older files first, and the 12 Oct restart would have removed only files a few days old. Neither fits. Step 6 looks for a delete by hand or by a job</td>
+<td><code>inventory/blob_ages.txt</code></td>
+<td>confirmed</td>
+</tr>
+<tr>
+<td>Q8</td>
+<td></td>
+<td><code>logs/root_history.txt</code>, <code>logs/crontabs.txt</code>, <code>logs/user_timers.txt</code></td>
+<td></td>
+</tr>
+<tr>
+<td>Q9</td>
+<td>OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. Victims are <code>java</code>, <code>python</code>, <code>python3</code>, <code>opencode</code>, <code>rg</code> and <code>harbor</code>, never containerd or Docker. The journal failed repeatedly on 11 Oct from 01:47 to 15:36. Disk stalls on 14, 15, 18 and 21 Sep, and from 14 Oct 13:00 to 15 Oct 00:00. No OOM kill and no disk stall on 6 or 7 Oct. No <code>I/O error</code>. The 12 Oct boot recovered both disks. Still open: who restarted the host</td>
+<td><code>logs/oom_per_day.txt</code>, <code>logs/oom_victims.txt</code>, <code>logs/hung_tasks.txt</code>, <code>logs/journald_watchdog.txt</code>, <code>logs/kernel.txt</code></td>
+<td>confirmed, except who restarted it</td>
+</tr>
+<tr>
+<td>Q10</td>
+<td><code>dockerd</code> wrote 22,284,226 of the lines in <code>syslog.1</code>. Volume jumped from 41 MB on 5 Oct to 506 MB on 6 Oct, and peaked at 4,568 MB on 9 Oct. 11 Oct was only 55 MB</td>
+<td><code>logs/syslog_volume.txt</code></td>
+<td>confirmed</td>
+</tr>
+<tr>
+<td>Q11</td>
+<td>Three restarts on 14 Oct: 11:11:31 (back at 11:11:33), 17:36:00 (back at 17:36:01) and 20:08:52 (back at 20:09:22). Each was a clean stop. The &quot;unclean termination&quot; lines are the container shims, which stay running on purpose, so the containers kept running. Root key <code>SHA256:QHhV…</code> logged in from 178.15.100.199 at 11:01:59. No root login in the 20 minutes around 17:36. The 20:08 restart is just before the disk stalls at 20:21. Step 6.2 has to show the commands</td>
+<td><code>logs/restarts_1014.txt</code></td>
+<td>partly confirmed</td>
+</tr>
+<tr>
+<td>Q12</td>
+<td></td>
+<td><code>logs/split_brain_containers.txt</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Inventory</th>
+<th>Count</th>
+<th>File</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Images in the store</td>
+<td>7,750 (7,089 on 14 Oct)</td>
+<td><code>inventory/images_list.txt</code></td>
+</tr>
+<tr>
+<td><code>images check</code>: complete and unpacked / complete, not unpacked / error</td>
+<td>507 / 27 / 7,216</td>
+<td><code>inventory/images_check.txt</code></td>
+</tr>
+<tr>
+<td>Start test: <code>ok</code> / <code>layers_missing</code> / <code>blob_missing</code> / <code>stale_record</code> / <code>other</code></td>
+<td></td>
+<td><code>inventory/layer_test.tsv</code></td>
+</tr>
+<tr>
+<td>Layer records / layer folders</td>
+<td>19,581 / 10,164</td>
+<td><code>inventory/snapshots_db.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
+</tr>
+<tr>
+<td>Downloaded-file records / files on disk / recorded but missing / on disk but not recorded</td>
+<td>46,179 / 3,361 / 42,915 / 97</td>
+<td><code>inventory/content_records.txt</code>, <code>inventory/blob_files.txt</code>, <code>inventory/blobs_missing.txt</code>, <code>inventory/blobs_unrecorded.txt</code></td>
+</tr>
+<tr>
+<td>Repositories with broken images / containers on broken images</td>
+<td></td>
+<td><code>inventory/broken_by_repo.txt</code>, <code>inventory/containers_on_broken.tsv</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="7-2-how-to-decide-the-cause-of-the-missing-downloaded-files-and-the-stale-records">7.2 How to decide the cause of the missing downloaded files and the stale records</h3>
+<table>
+<thead>
+<tr>
+<th>What the evidence shows</th>
+<th>Conclusion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>blob_ages.txt</code>: every <code>missing</code> line is older than every <code>present</code> line, for example missing only at &quot;2 months&quot; and older</td>
+<td>Deleted by age. The deleting job or person is in Q8's evidence or root's answer</td>
+</tr>
+<tr>
+<td><code>blob_ages.txt</code>: the missing files are mostly 3 to 4 days old (11 and 12 Oct)</td>
+<td>Lost in the forced restart</td>
+</tr>
+<tr>
+<td><code>blob_ages.txt</code>: missing and present files have the same spread of ages</td>
+<td>Neither age nor the restart. Look at <code>root_history.txt</code> and root's answer for deletes by hand</td>
+</tr>
+<tr>
+<td><code>oom_per_day.txt</code> or <code>hung_tasks.txt</code> shows out-of-memory kills or hung tasks on 6 or 7 Oct</td>
+<td>The stale records of 6 and 7 Oct probably come from an earlier memory crisis or disk stall</td>
+</tr>
+<tr>
+<td><code>damage_first_seen.txt</code> shows an error type well before 12 Oct</td>
+<td>That damage predates the restart; read <code>logins.txt</code>, <code>root_history.txt</code> and <code>kernel.txt</code> around that date</td>
+</tr>
+</tbody>
+</table>
+<h3 id="7-3-conclusions">7.3 Conclusions</h3>
+<ul>
+<li>Cause of the missing layer folders:</li>
+<li>Cause of the missing downloaded files:</li>
+<li>Cause of the stale records from 6 and 7 Oct:</li>
+<li>What started the 12 Oct chain (memory, restart):</li>
+<li>Who and which jobs are affected:</li>
+<li>Still open:</li>
+</ul>
+<p>The repair and prevention plan will be written after the mentor and root have reviewed this result. Until then, nothing in the store is changed, and mac-k3d jobs run on the local worker (<code>AGENT_LABEL=linux-Michael-Ubuntu</code>).</p>
+<h2 id="appendix-a-checks-already-run-as-toby-no-sudo">Appendix A: checks already run as <code>toby</code> (no sudo)</h2>
+<p>All read-only. The 12 Oct chain (sections 2.1 to 2.4):</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code># boot, /data mount, fstab history and the guards
+uptime -s
+systemctl show data.mount -p ActiveEnterTimestamp -p ActiveExitTimestamp
+systemctl show emergency.target local-fs.target -p Id -p ActiveEnterTimestamp
+systemctl show docker.service -p ActiveExitTimestamp -p InactiveExitTimestamp
+ls -l --time-style=full-iso /etc/fstab /etc/fstab.bak /etc/systemd/system/containerd.service.d/ /etc/systemd/system/docker.service.d/
+diff /etc/fstab.bak /etc/fstab
+findmnt --verify --tab-file /etc/fstab.bak
+cat /sys/fs/ext4/nvme1n1p1/errors_count
+# layer folder of each container mount on the main Docker, with the container&#x27;s creation time (UTC)
+grep &#x27; - overlay &#x27; /proc/self/mountinfo | grep &#x27; /data/docker/rootfs/overlayfs/&#x27; | while read -r line; do
+  sid=$(grep -oE &#x27;upperdir=[^,]+&#x27; &lt;&lt;&lt;&quot;$line&quot; | grep -oE &#x27;snapshots/[0-9]+&#x27; | cut -d/ -f2)
+  cid=$(awk &#x27;{print $5}&#x27; &lt;&lt;&lt;&quot;$line&quot;); cid=${cid##*/}
+  printf &#x27;%-8s %s %s\n&#x27; &quot;$sid&quot; &quot;$(docker inspect --format &#x27;{{.Created}}&#x27; &quot;$cid&quot; 2&gt;/dev/null | cut -c1-19)&quot; &quot;${cid:0:12}&quot;
+done | sort -n
+# one DeepSWE image: are its downloaded files still there? (reads about 840 MB, writes nothing)
+docker save public.ecr.aws/d3j8x8q7/swe-bench-202605:kh75679ajj3b8dtd7se3h7z0a1833y6r-v1.1 | wc -c
+# missing downloaded files named by docker image ls, ten tries
+for n in $(seq 10); do docker image ls -q 2&gt;&amp;1 &gt;/dev/null | grep -oE &#x27;blob sha256:[0-9a-f]{64}&#x27; | head -n 1; done | sort -u
+# Docker and containerd package history
+zgrep -hE &#x27;Start-Date|Commandline|containerd|docker&#x27; /var/log/apt/history.log*
+</code></pre></div>
+<p>The checks behind section 2.5. They write <code>~/snapshot-audit/cause_checks.txt</code>:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>cd ~/snapshot-audit
+{
+  echo &quot;== boot and config changes&quot;
+  uptime -s
+  stat -c &#x27;%y  %n&#x27; /etc/containerd/config.toml /etc/docker/daemon.json
+  ls -ld --time-style=long-iso /var/lib/containerd /data/containerd /etc/taskanchor-runtime 2&gt;&amp;1
+  echo &quot;== which service or container runs each daemon&quot;
+  for p in $(pgrep -x dockerd) $(pgrep -x containerd); do
+    printf &#x27;%s\t%s\t%s\n&#x27; &quot;$p&quot; &quot;$(sed -n &#x27;s/^0:://p&#x27; &quot;/proc/$p/cgroup&quot;)&quot; &quot;$(tr &#x27;\0&#x27; &#x27; &#x27; &lt;&quot;/proc/$p/cmdline&quot; | cut -c1-90)&quot;
+  done
+  echo &quot;== storage settings of the other runtime&quot;
+  grep -E &#x27;&quot;(data-root|containerd)&quot;&#x27; /etc/taskanchor-runtime/daemon.json 2&gt;&amp;1
+  grep -nE &#x27;^[[:space:]]*(root|state)[[:space:]]*=&#x27; /etc/taskanchor-runtime/containerd.toml 2&gt;&amp;1
+  echo &quot;== scheduled jobs and tmpfiles rules that mention Docker, /data or deleting&quot;
+  systemctl list-timers --all --no-pager
+  grep -rlsE &#x27;containerd|/data|prune|rm -rf|-delete&#x27; /etc/crontab /etc/cron.d /etc/cron.hourly /etc/cron.daily /etc/cron.weekly
+  grep -rns &#x27;/data&#x27; /etc/tmpfiles.d /usr/lib/tmpfiles.d /run/tmpfiles.d || echo &quot;no tmpfiles rule mentions /data&quot;
+  echo &quot;== containers that bind-mount the host&#x27;s /, /data or containerd&#x27;s folders&quot;
+  docker ps -aq | xargs -r docker inspect --format &#x27;{{.Name}} {{.State.Status}}{{range .Mounts}}{{if eq .Type &quot;bind&quot;}} {{.Source}}{{end}}{{end}}&#x27; 2&gt;/dev/null \
+    | grep -E &#x27; (/|/data|/data/containerd[^ ]*|/var/lib/containerd[^ ]*)( |$)&#x27;
+} &gt; cause_checks.txt 2&gt;&amp;1
+cat cause_checks.txt
+</code></pre></div>
+<p>The checks of 15 Oct behind section 2.4: the 11 and 12 Oct gap, and log coverage:</p>
+<div class="code"><button class="copy" type="button">Copy</button><pre><code>journalctl --list-boots --no-pager
+journalctl -b -1 -n 12 -o short-iso --no-pager
+journalctl -b 0 -o short-iso --no-pager -u data.mount -u containerd.service -u docker.service | grep -m 8 -E &#x27;Mount|Start|Fail&#x27;
+journalctl -b 0 -k -o short-iso --no-pager | grep -iE &#x27;ext4|recovery|orphan|nvme1n1&#x27;
+r=&#x27;^2026-10-1(1T(15:[2-5]|1[6-9]|2)|2T(0|10:[0-3]))&#x27;
+grep -E &quot;$r&quot; /var/log/syslog | grep -iE &#x27;out of memory|oom-kill|killed process|watchdog|shutdown|power|reboot&#x27;
+grep -E &quot;$r&quot; /var/log/syslog | grep -oE &#x27;Killed process [0-9]+ \([^)]+\)&#x27; | awk &#x27;{print $4}&#x27; | sort | uniq -c
+grep -E &#x27;^2026-10-14T20:(1[5-9]|2[0-2])&#x27; /var/log/kern.log | grep -E &#x27;blocked for more than|waiting for writeback&#x27;
+journalctl --no-pager -o short-iso -q -u containerd | head -n 1
+for f in /var/log/syslog.4.gz /var/log/auth.log.4.gz /var/log/kern.log.4.gz; do zcat &quot;$f&quot; | head -n 1 | cut -c1-26; done
+</code></pre></div>
+<h2 id="appendix-b-where-the-evidence-is">Appendix B: where the evidence is</h2>
+<p>On the worker, in <code>/home/toby/snapshot-audit/</code>. A copy goes to <code>~/cloud-worker-evidence/</code> on Toby's PC (guide step 8.2), outside any git repository.</p>
+<p><strong>From 14 Oct (before the guide):</strong></p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>facts.txt</code></td>
+<td>Host facts (section 1)</td>
+</tr>
+<tr>
+<td><code>base_status.tsv</code></td>
+<td>The eleven common images: <code>ok</code>, <code>absent</code>, <code>pull_failed</code> or <code>run_failed</code>, with the error</td>
+</tr>
+<tr>
+<td><code>deepswe_images.tsv</code>, <code>deepswe_status.tsv</code></td>
+<td>The 113 DeepSWE images (question, then image) and their results</td>
+</tr>
+<tr>
+<td><code>damaged_chains.txt</code></td>
+<td>The layer IDs named in the errors: <code>sha256:51e78f04…</code>, <code>sha256:29df493b…</code>, <code>sha256:08bc4e…</code></td>
+</tr>
+<tr>
+<td><code>cause_checks.txt</code></td>
+<td>The checks behind section 2.5. Its daemon column came from an earlier version of the command and is wrong; Appendix A has the corrected version</td>
+</tr>
+<tr>
+<td><code>damaged_chain_images.tsv</code>, <code>deepswe_pull_sample.tsv</code>, <code>image_ids.txt</code></td>
+<td>Empty: from checks that needed root. Guide step 5 replaces them</td>
+</tr>
+<tr>
+<td><code>canary_fail.log</code></td>
+<td>Not created yet. An hourly line in <code>toby</code>'s crontab starts the four working images, and writes here only if one fails</td>
+</tr>
+</tbody>
+</table>
+<p><strong>From the guide:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>Files</th>
+<th>Guide step</th>
+<th>Answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sessions/</code></td>
+<td>One recording per work session</td>
+<td>2.3</td>
+<td>How every step was run</td>
+</tr>
+<tr>
+<td>(top)</td>
+<td><code>long_scans.sh</code>, <code>layer_test.sh</code></td>
+<td>2.4</td>
+<td></td>
+</tr>
+<tr>
+<td><code>logcopy/</code></td>
+<td>Copies of <code>syslog</code>, <code>auth.log</code> and <code>kern.log</code> from 13 Sep, and the containerd and Docker journal</td>
+<td>3.1</td>
+<td>Kept after the weekly rotation</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>boots.txt</code></td>
+<td>4.1</td>
+<td>Q1, Q5</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>kernel.txt</code>, <code>oom_per_day.txt</code>, <code>oom_victims.txt</code>, <code>hung_tasks.txt</code>, <code>journald_watchdog.txt</code></td>
+<td>4.2</td>
+<td>Q9</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>logins.txt</code>, <code>sudo_commands.txt</code>, <code>root_logins_by_day.txt</code>, <code>around_1012.txt</code></td>
+<td>4.3</td>
+<td>Q2, Q8, Q11</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>day_1012.txt</code></td>
+<td>4.4</td>
+<td>Q4</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>restarts_1014.txt</code></td>
+<td>4.5</td>
+<td>Q11</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>root_keys.txt</code></td>
+<td>6.1</td>
+<td>Q2</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>root_history.txt</code></td>
+<td>6.2</td>
+<td>Q2, Q8</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>crontabs.txt</code>, <code>user_timers.txt</code></td>
+<td>6.3</td>
+<td>Q8</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>hidden_store.txt</code></td>
+<td>6.4</td>
+<td>Q3</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>split_brain_containers.txt</code></td>
+<td>6.5</td>
+<td>Q12</td>
+</tr>
+<tr>
+<td><code>logs/</code></td>
+<td><code>long_scans.log</code>, <code>damage_errors.txt</code>, <code>damage_first_seen.txt</code>, <code>syslog_volume.txt</code></td>
+<td>3.2, 7.1</td>
+<td>Q6, Q10</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>images_list.txt</code>, <code>layer_test.log</code>, <code>layer_test.tsv</code></td>
+<td>3.3, 7.2</td>
+<td>Impact</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>images_check.txt</code>, <code>snapshots_db.txt</code>, <code>content_records.txt</code>, <code>content_active.txt</code>, <code>snapshot_dirs.txt</code>, <code>blob_files.txt</code></td>
+<td>5.1</td>
+<td>Q7, Q12, impact</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>blobs_db.txt</code>, <code>blob_files.sorted</code>, <code>blobs_missing.txt</code>, <code>blobs_unrecorded.txt</code>, <code>blob_ages.txt</code></td>
+<td>5.2</td>
+<td>Q7</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>low_numbered_dirs.txt</code></td>
+<td>5.3</td>
+<td>Q5</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>snapshot_dirs.txt</code> (column check; output is in the session recording)</td>
+<td>5.3b</td>
+<td>Q5</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>broken_by_repo.txt</code>, <code>containers_on_broken.tsv</code></td>
+<td>7.2</td>
+<td>Impact</td>
+</tr>
+</tbody>
+</table>
+
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var text = button.parentElement.querySelector('code').textContent;
+    function done() {
+      button.textContent = 'Copied';
+      button.classList.add('done');
+      setTimeout(function () { button.textContent = 'Copy'; button.classList.remove('done'); }, 1500);
+    }
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      if (ok) { done(); } else { button.textContent = 'Copy failed: select the text'; }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  });
+});
+</script>
+</body>
+</html>

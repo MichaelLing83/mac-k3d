@@ -4,14 +4,14 @@
 //! then created in Jenkins on `config`. They are never written to `config.yaml`.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
 use dialoguer::{theme::ColorfulTheme, Confirm, Password};
 use serde::{Deserialize, Serialize};
 
 use crate::config::MacK3dConfig;
 use crate::error::{Error, Result};
+use crate::jenkins_curl::Session;
 
 /// Catalog of CI secrets mac-k3d can create in Jenkins.
 pub struct CredDef {
@@ -55,13 +55,13 @@ pub const CREDENTIAL_DEFS: &[CredDef] = &[
     CredDef {
         id: "gitcode-pat",
         env_var: "GITCODE_TOKEN",
-        prompt: "GitCode PAT (icode install / private repos)",
+        prompt: "GitCode PAT (private ICODE_MODE=git clone)",
         env_key: "MAC_K3D_GITCODE_PAT",
     },
     CredDef {
         id: "github-pat",
         env_var: "GITHUB_TOKEN",
-        prompt: "GitHub PAT (private agent repos / gh)",
+        prompt: "GitHub PAT (private ICODE_MODE=git clone / gh)",
         env_key: "MAC_K3D_GITHUB_PAT",
     },
 ];
@@ -82,18 +82,16 @@ impl PendingCredentials {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            Error::Config(format!("failed to read {}: {e}", path.display()))
-        })?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
         // Accept either `{ values: { id: secret } }` or flat `{ id: secret }`.
         if let Ok(wrapped) = serde_yaml::from_str::<PendingCredentials>(&text) {
             if !wrapped.values.is_empty() || text.contains("values:") {
                 return Ok(wrapped);
             }
         }
-        let flat: BTreeMap<String, String> = serde_yaml::from_str(&text).map_err(|e| {
-            Error::Config(format!("failed to parse {}: {e}", path.display()))
-        })?;
+        let flat: BTreeMap<String, String> = serde_yaml::from_str(&text)
+            .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))?;
         Ok(Self { values: flat })
     }
 
@@ -107,20 +105,7 @@ impl PendingCredentials {
         // Flat map is easier to edit by hand.
         let text = serde_yaml::to_string(&self.values)
             .map_err(|e| Error::Config(format!("serialize pending credentials: {e}")))?;
-        std::fs::write(&path, text).map_err(|e| {
-            Error::Config(format!("failed to write {}: {e}", path.display()))
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&path)
-                .map_err(|e| Error::Config(e.to_string()))?
-                .permissions();
-            perms.set_mode(0o600);
-            std::fs::set_permissions(&path, perms)
-                .map_err(|e| Error::Config(e.to_string()))?;
-        }
-        Ok(())
+        crate::config::write_private(&path, text.as_bytes())
     }
 
     pub fn clear_ids(&mut self, ids: &[String]) -> Result<()> {
@@ -195,9 +180,9 @@ pub fn ensure_credentials_on_controller(
     force_prompt: bool,
 ) -> Result<Vec<String>> {
     let base = jenkins_url.trim_end_matches('/');
-    let auth = format!("{api_user}:{api_token_or_password}");
+    let auth = (api_user, api_token_or_password);
 
-    let existing = list_credential_ids(base, &auth).unwrap_or_default();
+    let existing = list_credential_ids(base, auth).unwrap_or_default();
     let mut pending = PendingCredentials::load().unwrap_or_default();
 
     // Env fallbacks into pending.
@@ -216,9 +201,7 @@ pub fn ensure_credentials_on_controller(
     if interactive && (force_prompt || pending.values.is_empty()) {
         let missing: Vec<_> = CREDENTIAL_DEFS
             .iter()
-            .filter(|d| {
-                !existing.iter().any(|e| e == d.id) && !pending.values.contains_key(d.id)
-            })
+            .filter(|d| !existing.iter().any(|e| e == d.id) && !pending.values.contains_key(d.id))
             .collect();
         if force_prompt || !missing.is_empty() {
             println!("\nJenkins Credentials (controller — used by all agents):");
@@ -269,7 +252,7 @@ pub fn ensure_credentials_on_controller(
             .find(|d| d.id == id)
             .map(|d| d.prompt)
             .unwrap_or(id.as_str());
-        match upsert_string_credential(base, &auth, &id, desc, &secret) {
+        match upsert_string_credential(base, auth, &id, desc, &secret) {
             Ok(status) => {
                 println!("Jenkins credential '{id}': {status}");
                 if !created_or_present.contains(&id) {
@@ -287,11 +270,25 @@ pub fn ensure_credentials_on_controller(
     }
 
     // Return IDs that exist in Jenkins after this pass (for job binding).
-    let after = list_credential_ids(base, &auth).unwrap_or(created_or_present);
+    let after = list_credential_ids(base, auth).unwrap_or(created_or_present);
     Ok(after)
 }
 
-fn list_credential_ids(base: &str, auth: &str) -> Result<Vec<String>> {
+/// The API user and token (or admin password), in that order.
+type Auth<'a> = (&'a str, &'a str);
+
+/// IDs already stored on the controller. Does not prompt or upload secrets.
+/// Used by `--skip-secrets` and `start` so job rewrite keeps `withCredentials` binds.
+pub(crate) fn existing_ids_on_controller(
+    jenkins_url: &str,
+    api_user: &str,
+    api_token_or_password: &str,
+) -> Result<Vec<String>> {
+    let base = jenkins_url.trim_end_matches('/');
+    list_credential_ids(base, (api_user, api_token_or_password))
+}
+
+fn list_credential_ids(base: &str, auth: Auth) -> Result<Vec<String>> {
     let groovy = r#"
 import com.cloudbees.plugins.credentials.CredentialsProvider
 import com.cloudbees.plugins.credentials.common.StandardCredentials
@@ -317,7 +314,7 @@ println('IDS:' + ids.join(','))
 
 fn upsert_string_credential(
     base: &str,
-    auth: &str,
+    auth: Auth,
     id: &str,
     description: &str,
     secret: &str,
@@ -373,32 +370,9 @@ fn groovy_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-fn run_script_text(base: &str, auth: &str, script: &str) -> Result<String> {
-    let cookie_file = tempfile_path("mac-k3d-cred-cookies")?;
-    let crumb = fetch_crumb(base, auth, &cookie_file);
-    let mut cmd = Command::new("curl");
-    cmd.args([
-        "-sS",
-        "-b",
-        &cookie_file.display().to_string(),
-        "-c",
-        &cookie_file.display().to_string(),
-        "-u",
-        auth,
-        "-X",
-        "POST",
-        &format!("{base}/scriptText"),
-        "--data-urlencode",
-        &format!("script={script}"),
-    ]);
-    if let Some((field, value)) = &crumb {
-        cmd.args(["-H", &format!("{field}: {value}")]);
-    }
-    let output = cmd.output().map_err(|e| Error::CommandFailed {
-        cmd: "curl scriptText credentials".into(),
-        source: e.into(),
-    })?;
-    let _ = std::fs::remove_file(&cookie_file);
+/// The script may hold a secret (base64 is not encryption): Session sends it on curl's stdin.
+fn run_script_text(base: &str, (user, token): Auth, script: &str) -> Result<String> {
+    let output = Session::open(base, user, token)?.script_text(script)?;
     let body = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
         return Err(Error::CommandFailed {
@@ -413,49 +387,6 @@ fn run_script_text(base: &str, auth: &str, script: &str) -> Result<String> {
         return Err(Error::Config(truncate(&body, 300)));
     }
     Ok(body)
-}
-
-fn tempfile_path(prefix: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
-    std::fs::File::create(&path).map_err(|e| Error::Config(e.to_string()))?;
-    Ok(path)
-}
-
-fn fetch_crumb(base: &str, auth: &str, cookie_file: &Path) -> Option<(String, String)> {
-    let output = Command::new("curl")
-        .args([
-            "-fsS",
-            "-b",
-            &cookie_file.display().to_string(),
-            "-c",
-            &cookie_file.display().to_string(),
-            "-u",
-            auth,
-            &format!("{base}/crumbIssuer/api/json"),
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let field = extract_json_str(&text, "crumbRequestField")?;
-    let crumb = extract_json_str(&text, "crumb")?;
-    Some((field, crumb))
-}
-
-fn extract_json_str(json: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let idx = json.find(&needle)?;
-    let after = &json[idx + needle.len()..];
-    let colon = after.find(':')?;
-    let rest = after[colon + 1..].trim_start();
-    if !rest.starts_with('"') {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 fn truncate(s: &str, max: usize) -> String {

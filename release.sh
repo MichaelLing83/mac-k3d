@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Bump the Cargo patch version (X.Y.Z -> X.Y.(Z+1)), or use a version
-# string supplied as an argument or interactively. Build the release
-# binary first so a failed compile never produces a commit or tag.
-# Then commit, tag, push, and publish a GitHub latest release.
+# Bump the Cargo patch version, build the *current host* release binary, tag, and
+# publish a GitHub latest release with a single asset.
+#
+# Multi-arch binaries (linux/darwin x86_64+aarch64) are produced by
+# .github/workflows/release-binaries.yml on version tags. Prefer that for
+# user-facing downloads. This script remains a maintainer shortcut for a
+# same-machine publish.
+#
 #
 # Usage:
 #   ./release.sh              # auto bump patch (prompts if stdin is a TTY)

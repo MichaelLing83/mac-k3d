@@ -1,0 +1,46 @@
+# Example worker config for LoLBench eval hosts (Mac or Linux).
+# Copy and adjust, then: mac-k3d prepare --non-interactive -c worker.yaml
+# Or generate interactively: mac-k3d prepare -i -c ~/.config/mac-k3d/worker.yaml
+# Or from a live worker: mac-k3d export -c ~/.config/mac-k3d/worker.yaml -o worker.yaml
+#                        mac-k3d import worker.yaml -c ~/.config/mac-k3d/worker.yaml
+# api_token is never included in export/import.
+
+role: worker
+platform: linux   # or macos
+
+storage:
+  base_dir: /var/lib/mac-k3d   # use a volume with >= 100 GB free
+
+dependencies:
+  docker:
+    source: existing
+    binary: /usr/bin/docker
+  harbor:
+    source: existing
+    binary: /home/YOU/.local/bin/harbor
+  java:
+    source: existing
+    binary: /usr/bin/java
+  k3d:
+    source: skip
+  kubectl:
+    source: skip
+  helm:
+    source: skip
+
+lolbench:
+  path: /var/lib/mac-k3d/lolbench
+  source: existing
+
+jenkins_agent:
+  controller_url: http://CONTROLLER_HOST:17070
+  name: linux-eval-1
+  labels: [linux, docker, lolbench]
+  remote_fs: /home/YOU/jenkins-agent
+  cpu_cores: 4              # local upper limit; a cloud worker uses 16
+  cpus_per_executor: 2    # executors = cpu_cores / this (local 2, cloud 8)
+  api_user: admin
+  # api_token: set via prepare or MAC_K3D_JENKINS_TOKEN
+
+resources:
+  cpu_cores_label: CPU_CORES

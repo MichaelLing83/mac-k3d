@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo=${1:-$PWD}
+out=${LOLBENCH_PATCH_OUT:-/logs/artifacts/solution.patch}
+
+mkdir -p "$(dirname "$out")"
+cd "$repo"
+
+baseline=/opt/lolbench/base_untracked.txt
+current=$(mktemp)
+new_files=$(mktemp)
+trap 'rm -f "$current" "$new_files"' EXIT
+
+git ls-files --others --exclude-standard | sort > "$current"
+if [ -f "$baseline" ]; then
+    comm -13 "$baseline" "$current" > "$new_files"
+else
+    cp "$current" "$new_files"
+fi
+
+if [ -s "$new_files" ]; then
+    xargs -r git add -N -- < "$new_files"
+fi
+
+git diff --binary > "$out"
+
+if [ ! -s "$out" ]; then
+    echo "warning: wrote an empty solution patch to $out" >&2
+else
+    echo "wrote solution patch to $out"
+fi

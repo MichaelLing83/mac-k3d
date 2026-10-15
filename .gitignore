@@ -1,6 +1,8 @@
 /target
 **/*.rs.bk
 *.pdb
+__pycache__/
+*.pyc
 .DS_Store
 .idea/
 .vscode/
@@ -10,3 +12,32 @@
 
 # Local runtime state (managed by mac-k3d)
 .mac-k3d/
+eval-runs/
+eval-runs-*/
+eval-work/
+/output/
+iCode/
+
+# The evaluate phase writes these in the eval workdir; they contain DEEPSEEK_API_KEY.
+**/.pier-env
+**/.harbor-env
+
+# Debug-session NDJSON (never commit)
+.cursor/debug-*.log
+.tmp-eval-slots/
+
+# Written by `mac-k3d pipeline --extract-to`; never part of the source tree
+pipeline/BUILD.json
+
+# Copied iCode drops inside a workdir
+**/icode-bin/
+
+# Local secrets — never commit. Copy .env.example → .env (chmod 600).
+.env
+.env.local
+**/.env
+**/.env.local
+!.env.example
+
+# Personal copy-paste deploy runbook (local only)
+LOCAL_DEPLOY_CHEATSHEET.md

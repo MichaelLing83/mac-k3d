@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Every worker install and check must work on Linux and macOS; the release
+# ships both, so both run the same tests.
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # macOS /bin/bash is 3.2; the pipeline needs BASH_MIN (pipeline/config/toolchain.env),
+      # which `mac-k3d setup` installs the same way.
+      - name: Homebrew bash (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          # Only bash. $(brew --prefix)/bin also holds Homebrew's python3, which
+          # would hide the 3.11 this job just installed.
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
+      - name: Tool versions
+        run: |
+          bash --version | head -n 1
+          python3 --version
+          cargo --version
+      - name: cargo test
+        run: cargo test --locked
+      - name: Python unit tests
+        run: |
+          python3 -m pip install pyyaml
+          python3 -m unittest discover -s pipeline/lib -p 'test_*.py'
+      - name: bash -n on every script
+        run: |
+          set -euo pipefail
+          find . -name '*.sh' -not -path './target/*' -not -path './.git/*' -print0 \
+            | xargs -0 -n 1 bash -n
+      - name: Shell portability
+        run: bash scripts/check_shell_portability.sh
+      - name: Docs layout
+        run: bash scripts/check_docs.sh
+      - name: Old bash gets the clear error (macOS /bin/bash 3.2)
+        if: runner.os == 'macOS'
+        run: |
+          set -uo pipefail
+          /bin/bash -n pipeline/stages/run_all.sh
+          # GitHub runs this step with -e. The guard's exit 1 is the result we
+          # check, so capture it instead of aborting before the message is printed.
+          set +e
+          out="$(/bin/bash pipeline/stages/run_all.sh 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 1 ] || { echo "expected exit 1 from the bash guard, got $rc"; exit 1; }
+          echo "$out" | grep -q 'older than 4.4' || { echo "bash guard message missing"; exit 1; }
+          echo "$out" | grep -q 'brew install bash' || { echo "brew hint missing"; exit 1; }

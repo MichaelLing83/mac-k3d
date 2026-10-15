@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Install (once per clone): ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+"$ROOT/scripts/check_no_secrets.sh"
+exec "$ROOT/scripts/check_docs.sh"

@@ -1,0 +1,13 @@
+{
+  "schema": "mac-k3d-canary-probe-v1",
+  "tag": "pre",
+  "home": "/home/agent",
+  "icode_home_env": null,
+  "icode_home": "/home/agent/.icode",
+  "icode_home_exists": false,
+  "mcp_json": false,
+  "settings_json": false,
+  "agents_home": "/home/agent/.agents",
+  "agents_home_exists": false,
+  "research_subagent": false
+}

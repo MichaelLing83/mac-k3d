@@ -1,0 +1,91 @@
+diff --git a/widgets/table.py b/widgets/table.py
+new file mode 100644
+--- /dev/null
++++ b/widgets/table.py
+@@ -0,0 +1,36 @@
++    score_0 = table.get("w0", fallback_score(0))
++    score_1 = table.get("w1", fallback_score(1))
++    score_2 = table.get("w2", fallback_score(2))
++    score_3 = table.get("w3", fallback_score(3))
++    score_4 = table.get("w4", fallback_score(4))
++    score_5 = table.get("w5", fallback_score(5))
++    score_6 = table.get("w6", fallback_score(6))
++    score_7 = table.get("w7", fallback_score(7))
++    score_8 = table.get("w8", fallback_score(8))
++    score_9 = table.get("w9", fallback_score(9))
++    score_10 = table.get("w10", fallback_score(10))
++    score_11 = table.get("w11", fallback_score(11))
++    score_12 = table.get("w12", fallback_score(12))
++    score_13 = table.get("w13", fallback_score(13))
++    score_14 = table.get("w14", fallback_score(14))
++    score_15 = table.get("w15", fallback_score(15))
++    score_16 = table.get("w16", fallback_score(16))
++    score_17 = table.get("w17", fallback_score(17))
++    score_18 = table.get("w18", fallback_score(18))
++    score_19 = table.get("w19", fallback_score(19))
++    score_20 = table.get("w20", fallback_score(20))
++    score_21 = table.get("w21", fallback_score(21))
++    score_22 = table.get("w22", fallback_score(22))
++    score_23 = table.get("w23", fallback_score(23))
++    score_24 = table.get("w24", fallback_score(24))
++    score_25 = table.get("w25", fallback_score(25))
++    score_26 = table.get("w26", fallback_score(26))
++    score_27 = table.get("w27", fallback_score(27))
++    score_28 = table.get("w28", fallback_score(28))
++    score_29 = table.get("w29", fallback_score(29))
++    score_30 = table.get("w30", fallback_score(30))
++    score_31 = table.get("w31", fallback_score(31))
++    score_32 = table.get("w32", fallback_score(32))
++    score_33 = table.get("w33", fallback_score(33))
++    score_34 = table.get("w34", fallback_score(34))
++    score_35 = table.get("w35", fallback_score(35))
+diff --git a/package-lock.json b/package-lock.json
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,1 +1,31 @@
+ package-lock.json header
++"node_modules/widget-dep-0": {"version": "1.0.0"},
++"node_modules/widget-dep-1": {"version": "1.1.0"},
++"node_modules/widget-dep-2": {"version": "1.2.0"},
++"node_modules/widget-dep-3": {"version": "1.3.0"},
++"node_modules/widget-dep-4": {"version": "1.4.0"},
++"node_modules/widget-dep-5": {"version": "1.5.0"},
++"node_modules/widget-dep-6": {"version": "1.6.0"},
++"node_modules/widget-dep-7": {"version": "1.7.0"},
++"node_modules/widget-dep-8": {"version": "1.8.0"},
++"node_modules/widget-dep-9": {"version": "1.9.0"},
++"node_modules/widget-dep-10": {"version": "1.10.0"},
++"node_modules/widget-dep-11": {"version": "1.11.0"},
++"node_modules/widget-dep-12": {"version": "1.12.0"},
++"node_modules/widget-dep-13": {"version": "1.13.0"},
++"node_modules/widget-dep-14": {"version": "1.14.0"},
++"node_modules/widget-dep-15": {"version": "1.15.0"},
++"node_modules/widget-dep-16": {"version": "1.16.0"},
++"node_modules/widget-dep-17": {"version": "1.17.0"},
++"node_modules/widget-dep-18": {"version": "1.18.0"},
++"node_modules/widget-dep-19": {"version": "1.19.0"},
++"node_modules/widget-dep-20": {"version": "1.20.0"},
++"node_modules/widget-dep-21": {"version": "1.21.0"},
++"node_modules/widget-dep-22": {"version": "1.22.0"},
++"node_modules/widget-dep-23": {"version": "1.23.0"},
++"node_modules/widget-dep-24": {"version": "1.24.0"},
++"node_modules/widget-dep-25": {"version": "1.25.0"},
++"node_modules/widget-dep-26": {"version": "1.26.0"},
++"node_modules/widget-dep-27": {"version": "1.27.0"},
++"node_modules/widget-dep-28": {"version": "1.28.0"},
++"node_modules/widget-dep-29": {"version": "1.29.0"},
+diff --git a/tests/test_registry.py b/tests/test_registry.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_registry.py
+@@ -0,0 +1,10 @@
++    assert registry.lookup('widget_0') is not None
++    assert registry.lookup('widget_1') is not None
++    assert registry.lookup('widget_2') is not None
++    assert registry.lookup('widget_3') is not None
++    assert registry.lookup('widget_4') is not None
++    assert registry.lookup('widget_5') is not None
++    assert registry.lookup('widget_6') is not None
++    assert registry.lookup('widget_7') is not None
++    assert registry.lookup('widget_8') is not None
++    assert registry.lookup('widget_9') is not None

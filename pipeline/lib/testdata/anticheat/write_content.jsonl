@@ -1,0 +1,2 @@
+{"type": "ToolCallStart", "event_id": "c1Start", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "write_file", "tool_call_id": "c1", "tool_args": {"file_path": "/app/docs/install.md", "content": "Run `pip install widgets` or see https://github.com/example/widgets"}}
+{"type": "ToolCallResult", "event_id": "c1esult", "timestamp": 1790000000.0, "session_id": "cli-fixture", "tool_name": "write_file", "tool_call_id": "c1", "result": "ok"}

@@ -16,7 +16,10 @@ pub enum Error {
     #[error("setup cancelled by user")]
     Cancelled,
 
-    #[error("platform not supported: macOS required")]
+    #[error("some setup steps need root:\n{0}")]
+    NeedsRoot(String),
+
+    #[error("platform not supported: macOS or Linux required")]
     UnsupportedPlatform,
 
     #[error("command failed: {cmd}")]

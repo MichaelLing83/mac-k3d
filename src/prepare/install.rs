@@ -1,106 +1,58 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::{DependencyEntry, DependencySource};
 use crate::error::{Error, Result};
+use crate::platform;
 use crate::prepare::discovery::{self, DiscoveredTool};
-use crate::prepare::path_env;
+use crate::prepare::toolchain;
 
 /// Install a dependency and return the discovered entry afterward.
 pub fn install_and_discover(name: &str) -> Result<DependencyEntry> {
     match name {
-        "harbor" => install_harbor(),
-        "java" => install_via_brew(&["install", "--cask", "temurin"], "java"),
-        "docker" => install_via_brew(&["install", "--cask", "docker"], "docker"),
-        "k3d" => install_via_brew(&["install", "k3d"], "k3d"),
-        "kubectl" => install_via_brew(&["install", "kubectl"], "kubectl"),
-        "helm" => install_via_brew(&["install", "helm"], "helm"),
+        "harbor" => {
+            let binary = toolchain::ensure_harbor()?;
+            Ok(DependencyEntry {
+                source: DependencySource::Existing,
+                binary: Some(binary),
+                app: None,
+            })
+        }
+        "java" | "docker" | "k3d" | "kubectl" | "helm" | "git" | "uv" => {
+            platform::install_package(name)?;
+            discover_usable(name)
+                .map(|t| tool_to_entry(&t))
+                .ok_or_else(|| {
+                    if name == "java" {
+                        Error::DependencyMissing(format!(
+                            "java installed but no Java {} found (JAVA_HOME, PATH, /usr/lib/jvm)",
+                            toolchain::java_major()
+                        ))
+                    } else {
+                        Error::DependencyMissing(format!(
+                            "{name} installed but binary not found on PATH"
+                        ))
+                    }
+                })
+        }
         other => Err(Error::Config(format!(
             "unknown dependency for install: {other}"
         ))),
     }
 }
 
-fn install_harbor() -> Result<DependencyEntry> {
-    // uv installs shims into ~/.local/bin; put it on PATH for this process first.
-    path_env::ensure_user_local_bin_in_process()?;
-
-    if discovery::which("uv").is_some() {
-        tracing::info!("installing harbor via uv tool install");
-        run_cmd("uv", &["tool", "install", "harbor"])?;
-    } else if discovery::which("pipx").is_some() {
-        tracing::info!("installing harbor via pipx");
-        run_cmd("pipx", &["install", "harbor"])?;
-    } else if brew_available() {
-        tracing::info!("installing uv via Homebrew, then harbor");
-        run_cmd("brew", &["install", "uv"])?;
-        path_env::ensure_user_local_bin_in_process()?;
-        run_cmd("uv", &["tool", "install", "harbor"])?;
-    } else {
-        return Err(Error::DependencyMissing(
-            "harbor: need uv, pipx, or Homebrew to install".into(),
-        ));
-    }
-
-    // Persist PATH in shell RC only after a successful install (prompt once).
-    path_env::ensure_user_local_bin(true)?;
-
-    discover_harbor()
-        .map(|t| tool_to_entry(&t))
-        .ok_or_else(|| {
-            Error::DependencyMissing(
-                "harbor installed but binary not found (checked PATH and ~/.local/bin)".into(),
-            )
-        })
-}
-
-fn discover_harbor() -> Option<DiscoveredTool> {
-    discovery::discover_all().harbor.or_else(|| {
-        let bin = path_env::user_local_bin()?.join("harbor");
-        bin.exists().then(|| DiscoveredTool {
-            binary: bin,
-            app: None,
-            version_hint: None,
-        })
-    })
-}
-
-fn install_via_brew(brew_args: &[&str], name: &str) -> Result<DependencyEntry> {
-    if !brew_available() {
-        return Err(Error::DependencyMissing(format!(
-            "Homebrew not found; install {name} manually"
-        )));
-    }
-    tracing::info!(dependency = name, "installing via Homebrew");
-    run_cmd("brew", brew_args)?;
-    discover_single(name)
-        .map(|t| tool_to_entry(&t))
-        .ok_or_else(|| {
-            Error::DependencyMissing(format!("{name} installed but binary not found on PATH"))
-        })
-}
-
-fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program).args(args).status().map_err(|e| {
-        Error::CommandFailed {
-            cmd: format!("{program} {}", args.join(" ")),
-            source: e.into(),
-        }
-    })?;
-    if !status.success() {
-        return Err(Error::CommandFailed {
-            cmd: format!("{program} {}", args.join(" ")),
-            source: anyhow::anyhow!("exit code {:?}", status.code()),
-        });
-    }
-    Ok(())
-}
-
 pub fn brew_available() -> bool {
-    discovery::which("brew").is_some()
+    #[cfg(target_os = "macos")]
+    {
+        discovery::which("brew").is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
-fn discover_single(name: &str) -> Option<DiscoveredTool> {
+/// What is on this host now for `name`, if anything.
+pub fn discover_single(name: &str) -> Option<DiscoveredTool> {
     let deps = discovery::discover_all();
     match name {
         "docker" => deps.docker,
@@ -109,8 +61,20 @@ fn discover_single(name: &str) -> Option<DiscoveredTool> {
         "helm" => deps.helm,
         "harbor" => deps.harbor,
         "java" => deps.java,
+        "git" => deps.git,
         _ => None,
     }
+}
+
+/// Like `discover_single`, but a Java below the controller's major does not count.
+pub fn discover_usable(name: &str) -> Option<DiscoveredTool> {
+    let tool = discover_single(name)?;
+    if name == "java"
+        && toolchain::java_major_of(&tool.binary).map_or(true, |m| m < toolchain::java_major())
+    {
+        return None;
+    }
+    Some(tool)
 }
 
 pub fn tool_to_entry(tool: &DiscoveredTool) -> DependencyEntry {
@@ -140,7 +104,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn brew_available_on_macos_ci() {
+    fn package_manager_probe() {
+        let _ = platform::package_install_available();
         let _ = brew_available();
     }
 }

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::platform;
 
 /// A mounted volume with available space.
 #[derive(Debug, Clone)]
@@ -28,22 +29,16 @@ pub fn scan_volumes() -> Result<Vec<VolumeCandidate>> {
         }
     }
 
-    if let Ok(entries) = std::fs::read_dir("/Volumes") {
-        for entry in entries.flatten() {
-            let mount = entry.path();
-            if !mount.is_dir() {
-                continue;
-            }
-            let suggested = mount.join("mac-k3d");
-            if !seen_bases.insert(suggested.clone()) {
-                continue;
-            }
-            candidates.push(VolumeCandidate {
-                mount_point: mount.clone(),
-                available_bytes: available_bytes(&mount).unwrap_or(0),
-                suggested_base: suggested,
-            });
+    for mount in platform::scan_extra_mount_roots() {
+        let suggested = mount.join("mac-k3d");
+        if !seen_bases.insert(suggested.clone()) {
+            continue;
         }
+        candidates.push(VolumeCandidate {
+            mount_point: mount.clone(),
+            available_bytes: available_bytes(&mount).unwrap_or(0),
+            suggested_base: suggested,
+        });
     }
 
     candidates.sort_by(|a, b| b.available_bytes.cmp(&a.available_bytes));
