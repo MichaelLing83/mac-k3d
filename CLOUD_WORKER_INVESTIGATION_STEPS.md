@@ -590,6 +590,24 @@ head -n 5 low_numbered_dirs.txt
 
 - **Expected:** only the date `2026-10-12`, with times between 10:54 and 14:41, including folders 37 and 54. Any other date answers Q5 with "yes".
 - **Send me:** the output.
+- **Result on 15 Oct, 13:37:** the count was `0`, and `head` printed nothing. That is not the expected list, so 5.3b checks whether field 9 is really the folder name.
+
+### 5.3b Check the columns of `snapshot_dirs.txt` (Q5)
+
+- **Why:** step 5.3 printed 0. That is either true (no folder numbered under 1000) or a wrong column (field 9 is not the folder name, so every line was skipped). This prints one line field by field, counts names under 1000 using the last field, and lists the ten lowest folder numbers.
+- **Risk:** none. No sudo; it reads `snapshot_dirs.txt`.
+
+```bash
+cd ~/snapshot-audit/inventory
+awk 'NR==2 {print NF; for (i=1;i<=NF;i++) print i, $i}' snapshot_dirs.txt
+echo "---"
+awk 'NR>1 && $NF ~ /^[0-9]+$/ && $NF < 1000 {c++} END {print "under 1000:", c+0}' snapshot_dirs.txt
+awk 'NR>1 && $NF ~ /^[0-9]+$/ {print $NF}' snapshot_dirs.txt | sort -n | head
+```
+
+- **Expected:** 9 fields, with field 9 a folder number. `under 1000: 0`. The ten lowest numbers start at 152997.
+- **Send me:** the output.
+- **Result on 15 Oct, 13:39:** field 9 is the folder name (`152997`, dated `2026-09-10`). `under 1000: 0`. The lowest folders are 152997, 153000, 153120, 153125, 153126, 153127, 153129, 153130, 153132, 153133. The empty list from 5.3 is real. Folders 37 and 54 are gone, so Q5 cannot be answered from folder numbers.
 
 ## Step 6: what only root can read (20 minutes, sudo)
 

@@ -49,7 +49,7 @@
 </ul>
 </li>
 <li><strong>The commands are in a separate guide:</strong> <a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>. It has every step, with its purpose, risk, copy-paste command and expected result.</li>
-<li><strong>Status (15 Oct, 13:01):</strong> guide steps 0 to 4.2 passed. Q9 is answered: no memory crisis and no disk stall on 6 or 7 Oct. Next is step 4.3.</li>
+<li><strong>Status (15 Oct, 13:39):</strong> guide steps 0 to 5.3 passed. Q5 cannot be answered from folder numbers: none under 1000 remain, including the 12 Oct folders 37 and 54. Next is step 6.1.</li>
 </ul>
 <h2 id="summary">Summary</h2>
 <ul>
@@ -157,7 +157,7 @@
 <p>Host facts:</p>
 <ul>
 <li>Ubuntu 26.04 LTS, kernel 7.0.0-22, 96 CPUs, 182 GB of memory. Docker 29.6.2 with containerd 2.2.6 and the containerd image store.</li>
-<li>The store holds 7,089 images and 497 containers, 43 of them running. <code>live_restore</code> is false, so restarting Docker stops every container. Restarting containerd does not; it was restarted twice on 14 Oct with all containers still running.</li>
+<li>The store holds 7,089 images and 497 containers, 43 of them running. <code>live_restore</code> is false, so restarting Docker stops every container. Restarting containerd does not; it was restarted three times on 14 Oct with all containers still running.</li>
 <li>containerd keeps its data in <code>/data/containerd</code>. <code>/data</code> is a separate 14 TB ext4 disk, 88% used, with 1.7 TB free. The system disk is 66% used, with 165 GB free.</li>
 <li><code>toby</code> is in the <code>docker</code> group. Since 15 Oct he is also in <code>adm</code> and <code>systemd-journal</code>, so he can read the system journal and <code>/var/log</code> without sudo. He has no sudo yet, and his password is locked. containerd's socket is root-only (<code>root:root</code>, mode 0660).</li>
 <li><code>sudo</code> on this host is <code>sudo-rs</code> 0.2.13, Ubuntu's default. Password logins over SSH are off for every account (<code>/etc/ssh/sshd_config.d/00-disable-password.conf</code>). Root may log in with a key only (<code>PermitRootLogin prohibit-password</code>).</li>
@@ -310,8 +310,13 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>12:54:32</td>
-<td>containerd starts again. <code>/data</code> is already mounted, so this start is on the real database. Step 4.4 checks Docker</td>
-<td><code>logs/boots.txt</code></td>
+<td>containerd starts and is stopped one second later, at 12:54:34</td>
+<td><code>logs/day_1012.txt</code></td>
+</tr>
+<tr>
+<td>13:07:52</td>
+<td>containerd starts and stays up. Docker starts at 13:07:55 and is running at 13:09:24. This is the return to the real database</td>
+<td><code>logs/day_1012.txt</code></td>
 </tr>
 <tr>
 <td>14:41</td>
@@ -326,7 +331,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 354686   2026-10-12T06:41:54 fd19d30764d0
 354842   2026-10-12T16:26:34 755ae3d88b91
 </code></pre></div>
-<p>containerd was restarted again on 14 Oct at 11:11 and at 17:36. The store was unchanged afterwards (7,089 images).</p>
+<p>containerd was restarted again on 14 Oct at 11:11, 17:36 and 20:08. The container processes kept running. The store count afterwards was 7,089 images; it is 7,750 on 15 Oct.</p>
 <p>What the restart means:</p>
 <ul>
 <li><strong>&quot;Without a clean shutdown&quot;</strong> means the host was powered off or reset while it was hung. A normal shutdown unmounts the disks, and ext4 then has nothing to recover.</li>
@@ -384,7 +389,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <li>containerd and Docker had no rule to wait for <code>/data</code> then, so they started on the empty <code>/data</code> folder of the system disk. containerd created a new, empty database there and kept it open.</li>
 <li><code>/data</code> was mounted at 10:54 while containerd was running. From then on, containerd's new files and folders went to the real disk; folders 37 and 54 are there. Its records stayed in the empty database, now hidden under the mount.</li>
 <li>containerd's routine cleanup removes every layer folder that its database doesn't list. With an empty database, that is nearly every folder of the real store. The cleanup runs whenever a layer record is removed, for example when a container is removed. So anyone using Docker in that window could have triggered it without knowing.</li>
-<li>containerd was stopped at 11:48:51 and started again at 12:54:32, with <code>/data</code> already mounted, so it opened the real database. The real records pointed at deleted folders. The next container, at 14:41, got folder 354686.</li>
+<li>containerd and Docker were stopped at 11:48:51. containerd was started for one second at 12:54:32, then both were started for good at 13:07:52, with <code>/data</code> already mounted, so containerd opened the real database. The real records pointed at deleted folders. The next container, at 14:41, got folder 354686.</li>
 </ol>
 <p>This fits the evidence. The DeepSWE folders are gone while their downloaded files remain, folders 37 and 54 come from a second numbering, and everything pulled since 12 Oct works.</p>
 <p>The step that turned &quot;an empty store for 16 minutes&quot; into data loss was step 3: mounting <code>/data</code> under a running containerd. Had containerd and Docker been stopped first, the real store would have been untouched.</p>
@@ -407,7 +412,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tbody>
 <tr>
 <td>A clean-up that deleted files by age, for example <code>find … -mtime +30 -delete</code> run on <code>/data</code> to free space</td>
-<td>Missing files are all older than some age; files still present are younger</td>
+<td>Missing files are all older than some age; files still present are younger. Ruled out on 15 Oct: 1,861 files that are 2 months old are still present, while files only 2 to 3 weeks old are almost all missing (Q7)</td>
 <td>Q7, Q8</td>
 </tr>
 <tr>
@@ -417,7 +422,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Files lost in the forced restart on 12 Oct</td>
-<td>Only files written shortly before 12 Oct 10:38 are missing; the old images' files aren't</td>
+<td>Only files written shortly before 12 Oct 10:38 are missing; the old images' files aren't. Ruled out for the missing downloaded files on 15 Oct: most missing files are weeks or months old (Q7). The restart still explains the missing layer folders</td>
 <td>Q7, Q9</td>
 </tr>
 <tr>
@@ -427,7 +432,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>The same fstab problem at the 11 Sep boot</td>
-<td>Low-numbered layer folders dated 11 Sep. Unlikely: images pulled on 10 Sep still worked on 8 Oct</td>
+<td>Low-numbered layer folders dated 11 Sep. On 15 Oct none remain: the lowest folder is 152997, and the 12 Oct folders 37 and 54 are gone too, so this test cannot confirm or rule it out. Still unlikely, because images pulled on 10 Sep still worked on 8 Oct</td>
 <td>Q5</td>
 </tr>
 </tbody>
@@ -633,8 +638,8 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <td>Q5</td>
 <td>Did the 11 Sep boot also run containerd without <code>/data</code>?</td>
 <td>Would mean an earlier split brain</td>
-<td>4.1, 5.3</td>
-<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code></td>
+<td>4.1, 5.3, 5.3b</td>
+<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
 </tr>
 <tr>
 <td>Q6</td>
@@ -894,58 +899,66 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tr>
 <td>4.3</td>
 <td>Logins and sudo (Q2, Q8, Q11)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:13</td>
+<td>262,506 SSH logins, 5 sudo commands. Two root keys. On 12 Oct the active key is the same one as <code>root.pem</code>. No sudo command edited fstab or mounted <code>/data</code></td>
 <td><code>logs/logins.txt</code>, <code>logs/sudo_commands.txt</code>, <code>logs/root_logins_by_day.txt</code>, <code>logs/around_1012.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.4</td>
 <td>12 Oct in detail (Q4)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:17</td>
+<td>Services stopped 11:48:51. One-second containerd start at 12:54:32. Lasting start at 13:07:52; Docker running at 13:09:24. No systemd &quot;Mounted&quot; line</td>
 <td><code>logs/day_1012.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.5</td>
 <td>14 Oct restarts (Q11)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:22</td>
+<td>Three restarts, not two: 11:11:31, 17:36:00 and 20:08:52. Each stop left the container shims running. A root login from 178.15.100.199 at 11:01:59, nine minutes before the first. No root login in the 20 minutes around 17:36</td>
 <td><code>logs/restarts_1014.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.6</td>
 <td>Toby's own timers and crontab (Q8)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:24</td>
+<td>One timer, Ubuntu's <code>launchpadlib-cache-clean</code>, which cleans a package cache. The only crontab line is the hourly image canary</td>
 <td>session recording</td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>5.1</td>
 <td>containerd's lists</td>
-<td></td>
-<td></td>
+<td>15 Oct 13:26</td>
+<td>7,750 images: 507 complete and unpacked, 27 complete but not unpacked, 7,216 in error. 19,581 layer records and 10,164 layer folders. 46,179 file records and 3,361 files. No download in progress</td>
 <td><code>inventory/images_check.txt</code>, <code>inventory/snapshots_db.txt</code>, <code>inventory/content_records.txt</code>, <code>inventory/content_active.txt</code>, <code>inventory/snapshot_dirs.txt</code>, <code>inventory/blob_files.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>5.2</td>
 <td>Records against disk; ages (Q7)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:32</td>
+<td>42,915 file records have no file. 97 files are on disk but not recorded. Missing and present files share the same ages, so this was not an age-based deletion and not only the 12 Oct restart</td>
 <td><code>inventory/blobs_missing.txt</code>, <code>inventory/blobs_unrecorded.txt</code>, <code>inventory/blob_ages.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>5.3</td>
 <td>Low-numbered folders (Q5)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:37</td>
+<td>The count was 0. The guide expected folders 37 and 54 from 12 Oct, so this was not an answer on its own</td>
 <td><code>inventory/low_numbered_dirs.txt</code></td>
-<td></td>
+<td>yes</td>
+</tr>
+<tr>
+<td>5.3b</td>
+<td>Column check of <code>snapshot_dirs.txt</code> (Q5)</td>
+<td>15 Oct, about 13:39</td>
+<td>Field 9 is the folder name. Zero folders are numbered under 1000. The lowest folder still on disk is 152997, dated 2026-09-10. Folders 37 and 54 from the 12 Oct empty database are gone</td>
+<td>session recording; <code>inventory/snapshot_dirs.txt</code></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>6.1</td>
@@ -1052,6 +1065,12 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <td>The login banner reported 366 zombie processes, and the previous root login was 15 Oct 10:15:39 from 119.8.240.30</td>
 <td>Noted. The zombies are not part of this investigation. The earlier root login is a lead for Q2, to be matched in step 4.3</td>
 </tr>
+<tr>
+<td>15 Oct, about 13:37</td>
+<td>5.3</td>
+<td><code>low_numbered_dirs.txt</code> is empty. The guide expected folders 37 and 54 from 12 Oct</td>
+<td>Step 5.3b, run at 13:39, showed field 9 is the folder name. The empty list is real. The lowest folder is 152997. Q5 cannot be answered from these folders</td>
+</tr>
 </tbody>
 </table>
 <h2 id="7-investigation-result">7. Investigation result</h2>
@@ -1075,9 +1094,9 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q2</td>
-<td></td>
-<td><code>logs/around_1012.txt</code>, <code>logs/root_keys.txt</code>, <code>logs/root_history.txt</code>, root's answer</td>
-<td></td>
+<td>Partly answered. Root logins use two keys. <code>SHA256:QHhVAmPV…</code> is the same key as <code>root.pem</code>, used on almost every day since 14 Sep, including all 8 root logins in the 12 Oct repair window. <code>SHA256:Sw9bNRuC…</code> was used heavily on 29-30 Sep and 8-10 Oct, and not on 12 Oct. On 12 Oct: four logins at 10:38:40-47 from 178.15.100.199, then 10:41, 10:46, 10:50 and 11:28 from 119.8.178.37. No root login on 11 Oct, and none at the 12:54 containerd start, so that start came from a session already open. No sudo command edited fstab or mounted <code>/data</code>. Step 6.1 names the keys. Step 6.2 has to find the actual commands</td>
+<td><code>logs/around_1012.txt</code>, <code>logs/root_logins_by_day.txt</code>, <code>logs/sudo_commands.txt</code></td>
+<td>partly confirmed</td>
 </tr>
 <tr>
 <td>Q3</td>
@@ -1087,14 +1106,14 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q4</td>
-<td>Partly answered. containerd and Docker were both stopped at 11:48:51. containerd was started again at 12:54:32. Step 4.4 checks whether Docker came back then too. The split-brain window is 10:40 to 11:48, not until 14:41</td>
-<td><code>logs/boots.txt</code>; <code>logs/day_1012.txt</code> still to come</td>
-<td>partly confirmed</td>
+<td>containerd ran on the empty store from 10:40:15 until both services were stopped at 11:48:51. It started for one second at 12:54:32 and was stopped at 12:54:34. The lasting start is 13:07:52, and Docker was running at 13:09:24. <code>/data</code> was already mounted, and this start took one second, so it opened the real database. No new root login at these times, so an already-open root session did it. The journal has no systemd &quot;Mounted&quot; line; the 10:54 mount is in the kernel log, which fits a manual mount</td>
+<td><code>logs/day_1012.txt</code></td>
+<td>confirmed</td>
 </tr>
 <tr>
 <td>Q5</td>
-<td>The retained journal for the 11 Sep boot has no containerd or <code>/data</code> lines, and its oldest remaining entry moved from 11 Sep (seen at 10:48 today) to 17 Sep. It ends 11 Oct 15:24 with no shutdown. Step 5.3 still has to check the folder dates</td>
-<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code></td>
+<td>The retained journal for the 11 Sep boot has no containerd or <code>/data</code> lines, and its oldest remaining entry moved from 11 Sep (seen at 10:48 today) to 17 Sep. It ends 11 Oct 15:24 with no shutdown. No layer folder numbered under 1000 is still on disk. The lowest is 152997, dated 2026-09-10, and the 12 Oct empty-database folders 37 and 54 are gone as well. Their absence does not show whether an earlier split brain happened, because those folders would have been removed once the real database was back. Still unlikely: images pulled on 10 Sep worked on 8 Oct</td>
+<td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
 <td>open</td>
 </tr>
 <tr>
@@ -1105,9 +1124,9 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q7</td>
-<td></td>
+<td>42,915 of 46,179 file records have no file, and 97 files are on disk but not recorded. Missing files are 4 days to 2 months old. Present files cover the same range, including 1,861 files that are 2 months old. Files from the last 2 days are almost all present. Files aged 2 to 3 weeks are almost all missing (10,457 missing and 73 present at 2 weeks; 5,613 missing and 13 present at 3 weeks), while older files survived more often. An age-based deletion would have removed the older files first, and the 12 Oct restart would have removed only files a few days old. Neither fits. Step 6 looks for a delete by hand or by a job</td>
 <td><code>inventory/blob_ages.txt</code></td>
-<td></td>
+<td>confirmed</td>
 </tr>
 <tr>
 <td>Q8</td>
@@ -1129,9 +1148,9 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q11</td>
-<td></td>
-<td><code>logs/restarts_1014.txt</code>, root's answer</td>
-<td></td>
+<td>Three restarts on 14 Oct: 11:11:31 (back at 11:11:33), 17:36:00 (back at 17:36:01) and 20:08:52 (back at 20:09:22). Each was a clean stop. The &quot;unclean termination&quot; lines are the container shims, which stay running on purpose, so the containers kept running. Root key <code>SHA256:QHhV…</code> logged in from 178.15.100.199 at 11:01:59. No root login in the 20 minutes around 17:36. The 20:08 restart is just before the disk stalls at 20:21. Step 6.2 has to show the commands</td>
+<td><code>logs/restarts_1014.txt</code></td>
+<td>partly confirmed</td>
 </tr>
 <tr>
 <td>Q12</td>
@@ -1152,12 +1171,12 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tbody>
 <tr>
 <td>Images in the store</td>
-<td>(7,089 on 14 Oct)</td>
+<td>7,750 (7,089 on 14 Oct)</td>
 <td><code>inventory/images_list.txt</code></td>
 </tr>
 <tr>
-<td><code>images check</code>: complete / incomplete</td>
-<td></td>
+<td><code>images check</code>: complete and unpacked / complete, not unpacked / error</td>
+<td>507 / 27 / 7,216</td>
 <td><code>inventory/images_check.txt</code></td>
 </tr>
 <tr>
@@ -1167,13 +1186,13 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Layer records / layer folders</td>
-<td></td>
+<td>19,581 / 10,164</td>
 <td><code>inventory/snapshots_db.txt</code>, <code>inventory/snapshot_dirs.txt</code></td>
 </tr>
 <tr>
-<td>Downloaded-file records / recorded but missing / on disk but not recorded</td>
-<td></td>
-<td><code>inventory/blobs_*.txt</code></td>
+<td>Downloaded-file records / files on disk / recorded but missing / on disk but not recorded</td>
+<td>46,179 / 3,361 / 42,915 / 97</td>
+<td><code>inventory/content_records.txt</code>, <code>inventory/blob_files.txt</code>, <code>inventory/blobs_missing.txt</code>, <code>inventory/blobs_unrecorded.txt</code></td>
 </tr>
 <tr>
 <td>Repositories with broken images / containers on broken images</td>
@@ -1441,6 +1460,12 @@ for f in /var/log/syslog.4.gz /var/log/auth.log.4.gz /var/log/kern.log.4.gz; do 
 <td><code>inventory/</code></td>
 <td><code>low_numbered_dirs.txt</code></td>
 <td>5.3</td>
+<td>Q5</td>
+</tr>
+<tr>
+<td><code>inventory/</code></td>
+<td><code>snapshot_dirs.txt</code> (column check; output is in the session recording)</td>
+<td>5.3b</td>
 <td>Q5</td>
 </tr>
 <tr>
