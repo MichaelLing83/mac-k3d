@@ -14,28 +14,28 @@ The LoLBench and SWE-bench Pro jobs offer iCode only. `mac-k3d config` deletes `
 
 ## The job page
 
-The DeepSWE pages share one `MODE`, `RELEASE_FILE` and `GIT_*` with iCode. Choosing `HARNESS=jiuwenswarm` redraws those fields with JiuwenSwarm's defaults (`git` first, then `release`; git URL/ref/kind from `default_jiuwenswarm_git_*`). `JIUWENSWARM_AGENT_MODE` and `JIUWENSWARM_MAX_TURNS` stay editable; with `HARNESS=icode` those two rows are hidden entirely. The Active Choices plugin (`uno-choice`) redraws them. `mac-k3d start` installs it, and `mac-k3d config` pre-approves the fields' scripts on **Manage Jenkins > In-process Script Approval**. When `config` cannot pre-approve them it prints a warning. Until an administrator approves them there, those fields show `Could not draw this field. The build uses its default.`
+The DeepSWE pages carry both harnesses' named fields, and show only the ones of the `HARNESS` you pick. With `HARNESS=jiuwenswarm`, the `JIUWENSWARM_*` text and choice fields are drawn with their help, and each `ICODE_*` row (name included) is hidden; picking `icode` swaps them. The Active Choices plugin (`uno-choice`) redraws them. `mac-k3d start` installs it, and `mac-k3d config` pre-approves the fields' scripts on **Manage Jenkins > In-process Script Approval**. When `config` cannot pre-approve them it prints a warning. Until an administrator approves them there, those fields show `Could not draw this field. The build uses its default.`
 
-`RELEASE_FILE` is always on the page (Jenkins cannot redraw a file field). Upload a JiuwenSwarm wheel, wheelhouse or bundle when `MODE=release`; leave it empty in git mode. The Jenkinsfile copies it to `JIUWENSWARM_RELEASE_FILE` for the worker scripts. On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields with the preferred harness's defaults.
+Jenkins cannot redraw a file field, so `ICODE_RELEASE_FILE` and `JIUWENSWARM_RELEASE_FILE` stay as uploads; the visible `ICODE_MODE` or `JIUWENSWARM_MODE` row emits CSS that hides the other upload. On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each labelled `only (HARNESS=…)`.
 
 A field left out of a remote trigger (`buildWithParameters`) or of a dispatcher's call keeps the job's default, as a field left untouched on the page does.
 
 ## Two inputs
 
-`MODE` (with `HARNESS=jiuwenswarm`) picks one of two inputs, the same choice iCode offers ([icode-harness-inputs.md](icode-harness-inputs.md)):
+`JIUWENSWARM_MODE` picks one of two inputs, the same choice iCode offers ([icode-harness-inputs.md](icode-harness-inputs.md)):
 
-| `MODE` | What you provide | Fields to fill |
-|--------|------------------|----------------|
-| `git` (default for JiuwenSwarm) | An allow-listed `https://` URL on github.com or gitcode.com, and a ref | `GIT_URL`, `GIT_REF`, `GIT_REF_KIND` |
-| `release` | An uploaded file: a wheel, a wheelhouse or a mac-k3d bundle | `RELEASE_FILE` |
+| `JIUWENSWARM_MODE` | What you provide | Fields to fill |
+|--------------------|------------------|----------------|
+| `git` (default) | An allow-listed `https://` URL on github.com or gitcode.com, and a ref | `JIUWENSWARM_GIT_URL`, `JIUWENSWARM_GIT_REF`, `JIUWENSWARM_GIT_REF_KIND` |
+| `release` | An uploaded file: a wheel, a wheelhouse or a mac-k3d bundle | `JIUWENSWARM_RELEASE_FILE` |
 
-Fill only the fields of the mode you chose and leave the other group as it is. The pipeline still reads `JIUWENSWARM_MODE` / `JIUWENSWARM_GIT_*` / `JIUWENSWARM_RELEASE_FILE`; the job maps the shared names onto those.
+Fill only the fields of the mode you chose and leave the other group as it is.
 
-The defaults are pull request 2 of `https://gitcode.com/michaelling/jiuwenswarm`: `GIT_URL=https://gitcode.com/michaelling/jiuwenswarm`, `GIT_REF=2`, `GIT_REF_KIND=pr`. The controller config sets them ([Defaults](#defaults-on-the-controller)).
+The defaults are pull request 2 of `https://gitcode.com/michaelling/jiuwenswarm`: `JIUWENSWARM_GIT_URL=https://gitcode.com/michaelling/jiuwenswarm`, `JIUWENSWARM_GIT_REF=2`, `JIUWENSWARM_GIT_REF_KIND=pr`. The controller config sets them ([Defaults](#defaults-on-the-controller)).
 
-## Git (`MODE=git`)
+## Git (`JIUWENSWARM_MODE=git`)
 
-`GIT_REF_KIND` is `branch`, `tag`, `commit` or `pr`, with the same meaning as for iCode ([the kinds](icode-harness-inputs.md#2-git-clone-icode_modegit)). For `pr`, `GIT_REF` is the pull-request number; gitcode fetches `refs/merge-requests/<n>/head`. For `commit`, checkout fetches that SHA when the server allows it; otherwise the one branch, tag, or pull-request tip that points at it. A private repo uses the controller's `gitcode-pat` or `github-pat` credential (or `GITCODE_TOKEN` / `GITHUB_TOKEN` in a worker's gitignored `.env`). Never put a token in the URL.
+`JIUWENSWARM_GIT_REF_KIND` is `branch`, `tag`, `commit` or `pr`, with the same meaning as for iCode ([the kinds](icode-harness-inputs.md#2-git-clone-icode_modegit)). For `pr`, `JIUWENSWARM_GIT_REF` is the pull-request number; gitcode fetches `refs/merge-requests/<n>/head`. For `commit`, checkout fetches that SHA when the server allows it; otherwise the one branch, tag, or pull-request tip that points at it. A private repo uses the controller's `gitcode-pat` or `github-pat` credential (or `GITCODE_TOKEN` / `GITHUB_TOKEN` in a worker's gitignored `.env`). Never put a token in the URL.
 
 The build:
 
@@ -61,9 +61,9 @@ The build ends with two probes from an empty directory: `jiuwenswarm-run --help`
 
 A worker whose Docker bridge cannot reach PyPI (for example behind a VPN with a smaller MTU) can set `MAC_K3D_BUILD_NETWORK=host` in its environment. The build container then uses the host's network; trials keep their own network.
 
-## Release (`MODE=release`)
+## Release (`JIUWENSWARM_MODE=release`)
 
-Jenkins names the upload `RELEASE_FILE` on the page (copied to `JIUWENSWARM_RELEASE_FILE` for the worker), so the build tells the three formats apart by **content**, not by file name:
+Jenkins names the upload after its field, so the build tells the three formats apart by **content**, not by file name:
 
 | Format | How it is recognised | What the build does |
 |--------|----------------------|---------------------|

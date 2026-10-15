@@ -79,7 +79,9 @@ REMOTE
 
 echo
 echo "Done. In Jenkins UI confirm Build with Parameters on lolbench_one_task / deepswe_one_task:"
-echo "  TASK/TASKS empty, N_TASKS=1, N_ROLLOUTS=4; lolbench keeps ICODE_MODE=git and ICODE_GIT_*;"
-echo "  deepswe_* share MODE / RELEASE_FILE / GIT_* (icode: URL=jiuwenicode REF=2 KIND=pr;"
-echo "  HARNESS=jiuwenswarm redraws git defaults to jiuwenswarm PR 2 and shows AGENT_MODE / MAX_TURNS)."
+echo "  TASK/TASKS empty, N_TASKS=1, N_ROLLOUTS=4, ICODE_MODE=git,"
+echo "  URL=https://gitcode.com/michaelling/jiuwenicode, REF=2, KIND=pr"
+echo "and with HARNESS=jiuwenswarm on the deepswe_* jobs: JIUWENSWARM_MODE=git,"
+echo "  URL=https://gitcode.com/michaelling/jiuwenswarm, REF=2, KIND=pr"
+echo "  (ICODE_* rows hidden; AGENT_MODE / MAX_TURNS shown)."
 echo "Jenkins: http://43.107.42.252:17070"

@@ -16,20 +16,12 @@ const DESC_ICODE_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-req
 const DESC_ICODE_GIT_REF_KIND: &str = "Git: pick branch, tag, commit, or pr (no auto). For pr, REF is the pull-request number. Release: do not change this; leave it as it is. Vice versa: if you chose release, ignore this; if you chose git, pick the kind that matches REF.";
 const DESC_DISPATCH_ICODE_GIT_URL: &str = "iCode git URL (https on github.com or gitcode.com). Prepare harness builds it once; every shard runs that build.";
 const DESC_JIUWENSWARM_MODE: &str = "Choose git (clone URL + ref; built for the task containers' Linux) or release (upload a file). Fill only the fields for that choice; leave the other group as it is.";
-#[allow(dead_code)] // Kept for the worker-side name; DeepSWE pages use DESC_SHARED_RELEASE_FILE.
 const DESC_JIUWENSWARM_RELEASE_FILE: &str = "Release: a JiuwenSwarm wheel (.whl), a wheelhouse .tar.gz (wheelhouse/*.whl, installed offline), or the harness bundle.tar.gz an earlier run archived. mac-k3d tells them apart by content. Git: do not choose a file.";
 const DESC_JIUWENSWARM_GIT_URL: &str = "Git: JiuwenSwarm https URL on github.com or gitcode.com. A private gitcode repo uses the controller's gitcode-pat credential, never a token in the URL. Release: leave it as it is.";
 const DESC_JIUWENSWARM_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: leave it as it is.";
 const DESC_JIUWENSWARM_GIT_REF_KIND: &str = "Git: branch, tag, commit or pr. For pr, REF is the pull-request number. Release: leave it as it is.";
 const DESC_JIUWENSWARM_AGENT_MODE: &str = "The jiuwenswarm-process mode each rollout runs: agent.code.normal or agent.code.plan. Team mode does not run headless.";
 const DESC_JIUWENSWARM_MAX_TURNS: &str = "Most model calls one rollout may make: 1 to 1000 (JiuwenSwarm's own limit).";
-/// Shared DeepSWE fields: one MODE / RELEASE_FILE / GIT_* whose defaults follow HARNESS.
-const DESC_SHARED_MODE: &str = "Choose release (upload a file) or git (clone URL + ref). Fill only the fields for that choice; leave the other group as it is. Defaults follow HARNESS.";
-const DESC_SHARED_RELEASE_FILE: &str = "Release: upload the drop for the selected HARNESS (iCode *-full-* drop, or a JiuwenSwarm wheel / wheelhouse / bundle). Git: do not choose a file.";
-const DESC_SHARED_GIT_URL: &str = "Git: https URL on github.com or gitcode.com. Prepare harness builds it once; every shard runs that build. Release: leave it as it is. Defaults follow HARNESS.";
-const DESC_SHARED_GIT_REF: &str = "Git: branch name, tag, commit SHA, or pull-request number when KIND is pr. Release: leave it as it is. Defaults follow HARNESS.";
-const DESC_SHARED_GIT_REF_KIND: &str = "Git: branch, tag, commit or pr. For pr, REF is the pull-request number. Release: leave it as it is. Defaults follow HARNESS.";
-const DESC_SHARED_REACTIVE: &str = "Harness input. Defaults follow HARNESS.";
 const DESC_TASKS: &str = "Comma-separated question ids. This field wins over N_TASKS. Example: ruff_1,fastapi_1. Leave empty to run the first N_TASKS sorted ids.";
 const DESC_ICODE_RELEASE_SHA256: &str = "Set by some_task or full_suite_task: sha256 of the uploaded iCode release. The shard stops if its harness bundle records another.";
 const DESC_ICODE_GIT_SHA: &str = "Set by some_task or full_suite_task: the commit every shard checks out. Empty on a direct build, which resolves the git form itself.";
@@ -60,16 +52,11 @@ const DEVELOPER_PREFIX: &str = "Developer (testing): ";
 const DESC_DEEPSEEK_MODEL: &str = "DeepSeek Chat Completions model id (catalog).";
 
 /// Parameters a dispatcher hands to every shard unchanged.
-/// DeepSWE multi-harness pages use MODE / GIT_*; single-harness suites keep ICODE_*.
 const FORWARDED_PARAMS: &[&str] = &[
     "HARNESS",
     "LLM",
     "BENCHMARK",
     "AGENT_LABEL",
-    "MODE",
-    "GIT_URL",
-    "GIT_REF",
-    "GIT_REF_KIND",
     "ICODE_GIT_URL",
     "ICODE_GIT_REF",
     "ICODE_GIT_REF_KIND",
@@ -781,22 +768,12 @@ impl ParamKind {
     }
 }
 
-/// One harness's kind and help for a shared DeepSWE field.
-#[derive(Debug, Clone)]
-struct SharedVariant {
-    harness: &'static str,
-    kind: ParamKind,
-    description: String,
-}
-
 /// How a field reacts to HARNESS on a multi-harness page.
 #[derive(Debug, Clone)]
 enum Reactive {
     /// Show the control only while HARNESS is this; hide the Jenkins row
     /// (CSS `data-unused`) otherwise, keeping the default in a hidden value.
     Only(&'static str),
-    /// Always show; redraw choices and default from these variants.
-    Shared(Vec<SharedVariant>),
 }
 
 /// One job parameter. The Groovy `parameters {}` block and the XML
@@ -821,18 +798,6 @@ impl ParamSpec {
 
     fn default_value(&self) -> String {
         self.kind.default_value()
-    }
-
-    /// Default when HARNESS is `harness`, for shared fields; otherwise the field default.
-    fn default_for_harness(&self, harness: &str) -> String {
-        match &self.reactive {
-            Some(Reactive::Shared(variants)) => variants
-                .iter()
-                .find(|v| v.harness == harness)
-                .map(|v| v.kind.default_value())
-                .unwrap_or_else(|| self.default_value()),
-            _ => self.default_value(),
-        }
     }
 
     /// Whether this field redraws with Active Choices for the given profile.
@@ -880,34 +845,13 @@ fn only_for(mut spec: ParamSpec, harness: &'static str) -> ParamSpec {
     spec
 }
 
-fn shared_param(name: &'static str, description: &str, variants: Vec<SharedVariant>, show: Show) -> ParamSpec {
-    let kind = variants
-        .first()
-        .map(|v| v.kind.clone())
-        .unwrap_or(ParamKind::Text(String::new()));
-    ParamSpec {
-        name,
-        kind,
-        description: description.to_string(),
-        show,
-        reactive: Some(Reactive::Shared(variants)),
-    }
-}
-
-fn variant(harness: &'static str, kind: ParamKind, description: &str) -> SharedVariant {
-    SharedVariant {
-        harness,
-        kind,
-        description: description.to_string(),
-    }
-}
-
-fn choice_kind(choices: &[&str]) -> ParamKind {
-    ParamKind::Choice(choices.iter().map(|s| s.to_string()).collect())
-}
-
-fn text_kind(default: impl ToString) -> ParamKind {
-    ParamKind::Text(default.to_string())
+fn label_only(mut spec: ParamSpec, harness: &str) -> ParamSpec {
+    spec.description = format!(
+        "{} only (HARNESS={harness}). {}",
+        harness_label(harness),
+        spec.description
+    );
+    spec
 }
 
 /// iCode's inputs on a single-harness page: mode, release upload, git URL / ref / kind.
@@ -927,82 +871,74 @@ fn icode_params(opts: &JobOpts, shape: JobShape) -> Vec<ParamSpec> {
     ]
 }
 
-/// Shared MODE / RELEASE_FILE / GIT_* on a DeepSWE page that offers both harnesses.
-/// Active Choices redraws each choice and text field with that harness's defaults.
-fn shared_harness_inputs(opts: &JobOpts, shape: JobShape) -> Vec<ParamSpec> {
-    let icode_modes =
-        eval_catalog::choices_preferred_first(eval_catalog::ICODE_CI_MODES, jenkins_icode_mode(opts));
-    let icode_kinds = eval_catalog::choices_preferred_first(
-        eval_catalog::ICODE_GIT_REF_KINDS,
-        &opts.default_icode_git_ref_kind,
-    );
-    let jiuwen_kinds = eval_catalog::choices_preferred_first(
+/// JiuwenSwarm mode, release upload, and git URL / ref / kind.
+fn jiuwenswarm_input_params(opts: &JobOpts) -> Vec<ParamSpec> {
+    let kinds = eval_catalog::choices_preferred_first(
         eval_catalog::ICODE_GIT_REF_KINDS,
         &opts.default_jiuwenswarm_git_ref_kind,
     );
-    let icode_git_url_desc = if shape.is_dispatcher() {
-        DESC_DISPATCH_ICODE_GIT_URL
-    } else {
-        DESC_ICODE_GIT_URL
-    };
-    // Preferred harness first so a page without Active Choices keeps its defaults.
-    let preferred = opts.default_harness.trim().to_ascii_lowercase();
-    let order = if preferred == "jiuwenswarm" {
-        ["jiuwenswarm", "icode"]
-    } else {
-        ["icode", "jiuwenswarm"]
-    };
-    let mode_variants = order
-        .iter()
-        .map(|h| match *h {
-            "jiuwenswarm" => variant(
-                "jiuwenswarm",
-                choice_kind(eval_catalog::JIUWENSWARM_MODES),
-                DESC_JIUWENSWARM_MODE,
-            ),
-            _ => variant("icode", choice_kind(&icode_modes), DESC_ICODE_MODE),
-        })
-        .collect();
-    let git_url_variants = order
-        .iter()
-        .map(|h| match *h {
-            "jiuwenswarm" => variant(
-                "jiuwenswarm",
-                text_kind(opts.default_jiuwenswarm_git_url.trim()),
-                DESC_JIUWENSWARM_GIT_URL,
-            ),
-            _ => variant("icode", text_kind(opts.default_icode_git_url.trim()), icode_git_url_desc),
-        })
-        .collect();
-    let git_ref_variants = order
-        .iter()
-        .map(|h| match *h {
-            "jiuwenswarm" => variant(
-                "jiuwenswarm",
-                text_kind(&opts.default_jiuwenswarm_git_ref),
-                DESC_JIUWENSWARM_GIT_REF,
-            ),
-            _ => variant("icode", text_kind(&opts.default_icode_git_ref), DESC_ICODE_GIT_REF),
-        })
-        .collect();
-    let git_kind_variants = order
-        .iter()
-        .map(|h| match *h {
-            "jiuwenswarm" => variant(
-                "jiuwenswarm",
-                choice_kind(&jiuwen_kinds),
-                DESC_JIUWENSWARM_GIT_REF_KIND,
-            ),
-            _ => variant("icode", choice_kind(&icode_kinds), DESC_ICODE_GIT_REF_KIND),
-        })
-        .collect();
     vec![
-        shared_param("MODE", DESC_SHARED_MODE, mode_variants, Show::Always),
-        file_param("RELEASE_FILE", DESC_SHARED_RELEASE_FILE, Show::Always),
-        shared_param("GIT_URL", DESC_SHARED_GIT_URL, git_url_variants, Show::Always),
-        shared_param("GIT_REF", DESC_SHARED_GIT_REF, git_ref_variants, Show::Always),
-        shared_param("GIT_REF_KIND", DESC_SHARED_GIT_REF_KIND, git_kind_variants, Show::Always),
+        choice_param(
+            "JIUWENSWARM_MODE",
+            eval_catalog::JIUWENSWARM_MODES,
+            DESC_JIUWENSWARM_MODE,
+            Show::Always,
+        ),
+        file_param("JIUWENSWARM_RELEASE_FILE", DESC_JIUWENSWARM_RELEASE_FILE, Show::Always),
+        text_param(
+            "JIUWENSWARM_GIT_URL",
+            opts.default_jiuwenswarm_git_url.trim(),
+            DESC_JIUWENSWARM_GIT_URL,
+            Show::Always,
+        ),
+        text_param(
+            "JIUWENSWARM_GIT_REF",
+            &opts.default_jiuwenswarm_git_ref,
+            DESC_JIUWENSWARM_GIT_REF,
+            Show::Always,
+        ),
+        choice_param(
+            "JIUWENSWARM_GIT_REF_KIND",
+            &kinds,
+            DESC_JIUWENSWARM_GIT_REF_KIND,
+            Show::Always,
+        ),
     ]
+}
+
+/// Both harnesses' named inputs on a DeepSWE page. Text and choice rows hide
+/// when the other HARNESS is selected; release uploads stay file fields and
+/// are hidden by CSS emitted from the visible MODE row.
+fn multi_harness_inputs(opts: &JobOpts, shape: JobShape, reactive: bool) -> Vec<ParamSpec> {
+    let mut icode = icode_params(opts, shape);
+    let mut jiuwen = jiuwenswarm_input_params(opts);
+    if reactive {
+        icode = icode
+            .into_iter()
+            .map(|s| {
+                if matches!(s.kind, ParamKind::StashedFile) {
+                    s
+                } else {
+                    only_for(s, "icode")
+                }
+            })
+            .collect();
+        jiuwen = jiuwen
+            .into_iter()
+            .map(|s| {
+                if matches!(s.kind, ParamKind::StashedFile) {
+                    s
+                } else {
+                    only_for(s, "jiuwenswarm")
+                }
+            })
+            .collect();
+    } else {
+        icode = icode.into_iter().map(|s| label_only(s, "icode")).collect();
+        jiuwen = jiuwen.into_iter().map(|s| label_only(s, "jiuwenswarm")).collect();
+    }
+    icode.extend(jiuwen);
+    icode
 }
 
 /// JiuwenSwarm run settings: shown only while HARNESS is jiuwenswarm.
@@ -1022,7 +958,7 @@ fn jiuwenswarm_settings(reactive: bool) -> Vec<ParamSpec> {
         ),
     ];
     if !reactive {
-        return settings;
+        return settings.into_iter().map(|s| label_only(s, "jiuwenswarm")).collect();
     }
     settings.into_iter().map(|s| only_for(s, "jiuwenswarm")).collect()
 }
@@ -1064,24 +1000,7 @@ fn eval_params(job_benchmark: &str, shape: JobShape, opts: &JobOpts) -> Vec<Para
     }
     let reactive = opts.active_choices;
     if multi {
-        // One MODE / RELEASE_FILE / GIT_* whose defaults follow HARNESS.
-        let mut shared = shared_harness_inputs(opts, shape);
-        if !reactive {
-            // Without Active Choices the page cannot redraw; keep the preferred
-            // harness's defaults and say so in the help.
-            for spec in &mut shared {
-                if matches!(spec.kind, ParamKind::StashedFile) {
-                    continue;
-                }
-                spec.reactive = None;
-                spec.description = format!(
-                    "Defaults of HARNESS={}. Run mac-k3d start so the page redraws them when HARNESS changes. {}",
-                    harnesses.first().copied().unwrap_or("icode"),
-                    spec.description
-                );
-            }
-        }
-        p.extend(shared);
+        p.extend(multi_harness_inputs(opts, shape, reactive));
         p.push(choice_param("DEEPSEEK_MODEL", &model_choices, DESC_DEEPSEEK_MODEL, Always));
         p.extend(jiuwenswarm_settings(reactive));
     } else {
@@ -1182,8 +1101,23 @@ fn reactive_label(reactive: &Reactive) -> String {
         Reactive::Only(harness) => {
             format!("{} input. Shown while HARNESS is {harness}.", harness_label(harness))
         }
-        Reactive::Shared(_) => DESC_SHARED_REACTIVE.to_string(),
     }
+}
+
+/// The other harness's release upload, hidden by CSS from a visible MODE row
+/// (Jenkins cannot redraw a file parameter with Active Choices).
+fn other_release_file(mode_param: &str) -> Option<&'static str> {
+    match mode_param {
+        "ICODE_MODE" => Some("JIUWENSWARM_RELEASE_FILE"),
+        "JIUWENSWARM_MODE" => Some("ICODE_RELEASE_FILE"),
+        _ => None,
+    }
+}
+
+fn hide_release_file_style(name: &str) -> String {
+    format!(
+        r#"<style>.jenkins-form-item:has(input[name="name"][value="{name}"]){{display:none!important}}</style>"#
+    )
 }
 
 fn html_control(kind: &ParamKind) -> String {
@@ -1226,7 +1160,12 @@ fn reactive_script(spec: &ParamSpec) -> String {
     };
     match reactive {
         Reactive::Only(harness) => {
-            let shown = html_shown(&spec.kind, &spec.description);
+            let mut shown = html_shown(&spec.kind, &spec.description);
+            // A MODE row that is visible also hides the other harness's file
+            // upload, which Active Choices cannot redraw.
+            if let Some(other) = other_release_file(spec.name) {
+                shown.push_str(&hide_release_file_style(other));
+            }
             // Hide the whole Jenkins row (name included) while another harness
             // is selected; a hidden value keeps the default for API triggers.
             let kept = format!(
@@ -1239,22 +1178,6 @@ fn reactive_script(spec: &ParamSpec) -> String {
                 groovy_escape(&shown),
                 groovy_escape(&kept)
             )
-        }
-        Reactive::Shared(variants) => {
-            let mut arms = String::from("def h = binding.hasVariable('HARNESS') ? HARNESS : ''; ");
-            for v in variants {
-                arms.push_str(&format!(
-                    "if (h == '{}') {{ return '{}' }}; ",
-                    groovy_escape(v.harness),
-                    groovy_escape(&html_shown(&v.kind, &v.description))
-                ));
-            }
-            let fallback = variants
-                .first()
-                .map(|v| html_shown(&v.kind, &v.description))
-                .unwrap_or_else(|| html_shown(&spec.kind, &spec.description));
-            arms.push_str(&format!("return '{}'", groovy_escape(&fallback)));
-            arms
         }
     }
 }
@@ -1414,105 +1337,13 @@ fn env_pick(name: &str, fallback_expr: &str) -> String {
 /// A reactive field left out of an API trigger, a `build job:` call or a
 /// re-queue gets no dependable value from Active Choices. Every build reads
 /// these fields through this block: the value sent when it is one, else the
-/// job's default (for shared fields, the default of the chosen HARNESS).
-/// When the page uses shared MODE / GIT_*, also maps them onto ICODE_* /
-/// JIUWENSWARM_* so the worker pipeline keeps its existing names.
+/// job's default.
 fn reactive_env_block(params: &[ParamSpec], profile: UiProfile) -> String {
     let mut lines: Vec<String> = Vec::new();
     for p in params.iter().filter(|p| p.is_reactive(profile)) {
         let n = p.name;
-        let fallback = match &p.reactive {
-            Some(Reactive::Shared(variants)) => {
-                let mut expr = format!("'{}'", groovy_escape(&p.default_value()));
-                // Innermost is the preferred (first) variant; wrap others.
-                for v in variants.iter().rev() {
-                    expr = format!(
-                        "params.HARNESS == '{}' ? '{}' : ({expr})",
-                        groovy_escape(v.harness),
-                        groovy_escape(&v.kind.default_value())
-                    );
-                }
-                expr
-            }
-            _ => format!("'{}'", groovy_escape(&p.default_value())),
-        };
+        let fallback = format!("'{}'", groovy_escape(&p.default_value()));
         lines.push(format!("    {n} = \"${{{}}}\"", env_pick(n, &fallback)));
-    }
-    let shared = params.iter().any(|p| p.name == "MODE");
-    if shared {
-        // Worker scripts still read ICODE_* / JIUWENSWARM_*; fill them from MODE / GIT_*.
-        let mode_fb_icode = params
-            .iter()
-            .find(|p| p.name == "MODE")
-            .map(|p| p.default_for_harness("icode"))
-            .unwrap_or_else(|| "release".into());
-        let mode_fb_jiuwen = params
-            .iter()
-            .find(|p| p.name == "MODE")
-            .map(|p| p.default_for_harness("jiuwenswarm"))
-            .unwrap_or_else(|| "git".into());
-        let git_url_icode = params
-            .iter()
-            .find(|p| p.name == "GIT_URL")
-            .map(|p| p.default_for_harness("icode"))
-            .unwrap_or_default();
-        let git_url_jiuwen = params
-            .iter()
-            .find(|p| p.name == "GIT_URL")
-            .map(|p| p.default_for_harness("jiuwenswarm"))
-            .unwrap_or_default();
-        let git_ref_icode = params
-            .iter()
-            .find(|p| p.name == "GIT_REF")
-            .map(|p| p.default_for_harness("icode"))
-            .unwrap_or_else(|| "main".into());
-        let git_ref_jiuwen = params
-            .iter()
-            .find(|p| p.name == "GIT_REF")
-            .map(|p| p.default_for_harness("jiuwenswarm"))
-            .unwrap_or_else(|| "2".into());
-        let git_kind_icode = params
-            .iter()
-            .find(|p| p.name == "GIT_REF_KIND")
-            .map(|p| p.default_for_harness("icode"))
-            .unwrap_or_else(|| "branch".into());
-        let git_kind_jiuwen = params
-            .iter()
-            .find(|p| p.name == "GIT_REF_KIND")
-            .map(|p| p.default_for_harness("jiuwenswarm"))
-            .unwrap_or_else(|| "pr".into());
-        lines.push(format!(
-            "    ICODE_MODE = \"${{params.HARNESS == 'jiuwenswarm' ? 'git' : ({})}}\"",
-            env_pick("MODE", &format!("'{}'", groovy_escape(&mode_fb_icode)))
-        ));
-        lines.push(format!(
-            "    JIUWENSWARM_MODE = \"${{params.HARNESS == 'jiuwenswarm' ? ({}) : 'git'}}\"",
-            env_pick("MODE", &format!("'{}'", groovy_escape(&mode_fb_jiuwen)))
-        ));
-        lines.push(format!(
-            "    ICODE_GIT_URL = \"${{params.HARNESS == 'jiuwenswarm' ? '' : ({})}}\"",
-            env_pick("GIT_URL", &format!("'{}'", groovy_escape(&git_url_icode)))
-        ));
-        lines.push(format!(
-            "    JIUWENSWARM_GIT_URL = \"${{params.HARNESS == 'jiuwenswarm' ? ({}) : ''}}\"",
-            env_pick("GIT_URL", &format!("'{}'", groovy_escape(&git_url_jiuwen)))
-        ));
-        lines.push(format!(
-            "    ICODE_GIT_REF = \"${{params.HARNESS == 'jiuwenswarm' ? 'main' : ({})}}\"",
-            env_pick("GIT_REF", &format!("'{}'", groovy_escape(&git_ref_icode)))
-        ));
-        lines.push(format!(
-            "    JIUWENSWARM_GIT_REF = \"${{params.HARNESS == 'jiuwenswarm' ? ({}) : '2'}}\"",
-            env_pick("GIT_REF", &format!("'{}'", groovy_escape(&git_ref_jiuwen)))
-        ));
-        lines.push(format!(
-            "    ICODE_GIT_REF_KIND = \"${{params.HARNESS == 'jiuwenswarm' ? 'branch' : ({})}}\"",
-            env_pick("GIT_REF_KIND", &format!("'{}'", groovy_escape(&git_kind_icode)))
-        ));
-        lines.push(format!(
-            "    JIUWENSWARM_GIT_REF_KIND = \"${{params.HARNESS == 'jiuwenswarm' ? ({}) : 'pr'}}\"",
-            env_pick("GIT_REF_KIND", &format!("'{}'", groovy_escape(&git_kind_jiuwen)))
-        ));
     }
     if lines.is_empty() {
         return String::new();
@@ -1703,7 +1534,7 @@ done
             List again = []
             params.each {{ key, value ->
               String name = key.toString()
-              if (name in ['ATTEMPT', 'RELEASE_FILE', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) {{ return }}
+              if (name in ['ATTEMPT', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) {{ return }}
               again << string(name: name, value: value == null ? '' : value.toString())
             }}
             again << string(name: 'ATTEMPT', value: "${{attempt + 1}}")
@@ -1800,8 +1631,7 @@ set -euo pipefail
             {requester}
             // A shard gets its dispatcher's harness bundle in Tasks; only a
             // JiuwenSwarm release is handed on, for a shard that builds its own.
-            // DeepSWE pages stash RELEASE_FILE; single-harness pages stash ICODE_RELEASE_FILE.
-            String dest = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
+            String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
             if (params.JIUWENSWARM_RELEASE_FROM?.trim()) {{
               def from = params.JIUWENSWARM_RELEASE_FROM.split('#', 2)
               if (from.size() != 2 || !from[1].trim()) {{
@@ -1814,14 +1644,9 @@ set -euo pipefail
                 flatten: true
             }} else if (!params.HARNESS_BUNDLE_FROM?.trim()) {{
               try {{
-                unstash 'RELEASE_FILE'
-                sh "cp -f RELEASE_FILE ${{dest}}"
-              }} catch (Throwable ignored) {{
-                try {{
-                  unstash dest
-                }} catch (Throwable t) {{
-                  echo "No release upload stash (${{t}})"
-                }}
+                unstash upload
+              }} catch (Throwable t) {{
+                echo "No release upload stash (${{t}})"
               }}
             }}
           }}
@@ -1833,7 +1658,7 @@ set -euo pipefail
         (String::new(), "")
     };
     let announce = if first {
-        "\n            echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}${MODE:+ MODE=$MODE}\""
+        "\n            echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}\""
     } else {
         ""
     };
@@ -1916,18 +1741,13 @@ fn dispatcher_jenkinsfile(job_benchmark: &str, shape: JobShape, opts: &JobOpts) 
             node(where) {
               at.node = env.NODE_NAME
               deleteDir()
-              String mode = (env.MODE ?: (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE)) ?: 'git'
-              String dest = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
+              String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'
+              String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'
               if (mode == 'release') {
                 try {
-                  unstash 'RELEASE_FILE'
-                  sh "cp -f RELEASE_FILE ${dest}"
-                } catch (Throwable shared) {
-                  try {
-                    unstash dest
-                  } catch (Throwable t) {
-                    error "release mode needs an uploaded RELEASE_FILE (${t})"
-                  }
+                  unstash upload
+                } catch (Throwable t) {
+                  error "release mode needs an uploaded ${upload} (${t})"
                 }
               }
 __CRED_OPEN__              sh '''#!/bin/bash
@@ -2934,12 +2754,16 @@ mod tests {
             .replace("&amp;", "&")
     }
 
-    /// Shared + JiuwenSwarm-only fields that redraw when HARNESS changes.
-    const DEEPSWE_REACTIVE_FIELDS: [&str; 6] = [
-        "MODE",
-        "GIT_URL",
-        "GIT_REF",
-        "GIT_REF_KIND",
+    /// Fields that redraw when HARNESS changes (file uploads stay plain).
+    const DEEPSWE_REACTIVE_FIELDS: [&str; 10] = [
+        "ICODE_MODE",
+        "ICODE_GIT_URL",
+        "ICODE_GIT_REF",
+        "ICODE_GIT_REF_KIND",
+        "JIUWENSWARM_MODE",
+        "JIUWENSWARM_GIT_URL",
+        "JIUWENSWARM_GIT_REF",
+        "JIUWENSWARM_GIT_REF_KIND",
         "JIUWENSWARM_AGENT_MODE",
         "JIUWENSWARM_MAX_TURNS",
     ];
@@ -2968,10 +2792,9 @@ mod tests {
         assert!(!jf.contains("LLM_NAME"));
         assert!(jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
         assert!(jf.contains(
-            "String dest = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'"
+            "String upload = params.HARNESS == 'jiuwenswarm' ? 'JIUWENSWARM_RELEASE_FILE' : 'ICODE_RELEASE_FILE'"
         ));
-        assert!(jf.contains("unstash 'RELEASE_FILE'"));
-        assert!(jf.contains("unstash dest"));
+        assert!(jf.contains("unstash upload"));
         assert!(jf.contains("--force-rm"));
         assert!(jf.contains(r#"if [ "${ICODE_MODE}" = "git" ]"#));
         assert!(jf.contains("leave this control as it is"));
@@ -3038,12 +2861,17 @@ mod tests {
     }
 
     /// The harness fields every DeepSWE page shows to users, in page order.
-    const DEEPSWE_HARNESS_FIELDS: [&str; 8] = [
-        "MODE",
-        "RELEASE_FILE",
-        "GIT_URL",
-        "GIT_REF",
-        "GIT_REF_KIND",
+    const DEEPSWE_HARNESS_FIELDS: [&str; 13] = [
+        "ICODE_MODE",
+        "ICODE_RELEASE_FILE",
+        "ICODE_GIT_URL",
+        "ICODE_GIT_REF",
+        "ICODE_GIT_REF_KIND",
+        "JIUWENSWARM_MODE",
+        "JIUWENSWARM_RELEASE_FILE",
+        "JIUWENSWARM_GIT_URL",
+        "JIUWENSWARM_GIT_REF",
+        "JIUWENSWARM_GIT_REF_KIND",
         "DEEPSEEK_MODEL",
         "JIUWENSWARM_AGENT_MODE",
         "JIUWENSWARM_MAX_TURNS",
@@ -3281,7 +3109,7 @@ mod tests {
         // Environment stage only.
         assert_eq!(jf.matches("#!/bin/bash").count(), 10);
         assert_eq!(
-            jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}${MODE:+ MODE=$MODE}\"").count(),
+            jf.matches("echo \"MAC_K3D_ROOT=$MAC_K3D_ROOT BENCHMARK=$BENCHMARK HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}\"").count(),
             1
         );
 
@@ -3327,7 +3155,7 @@ mod tests {
         assert!(jf.contains("string(name: 'ROLLOUT', value: \"${unit.rollout}\")"));
         assert!(jf.contains("quietPeriod: 0"));
         assert!(jf.contains("string(name: 'SHARD', value: note)"));
-        assert!(jf.contains("string(name: 'MODE', value: env.MODE)"));
+        assert!(jf.contains("string(name: 'ICODE_MODE', value: env.ICODE_MODE)"));
         // One Prepare harness stage pins the harness and its bundle for every shard.
         assert!(!jf.contains("stage('iCode release')"));
         assert!(!jf.contains("stage('Pin iCode')"));
@@ -3542,7 +3370,7 @@ mod tests {
     fn a_direct_build_requeued_after_oom_sends_no_upload_as_a_string() {
         let one = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
         assert!(one.contains(
-            "if (name in ['ATTEMPT', 'RELEASE_FILE', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) { return }"
+            "if (name in ['ATTEMPT', 'ICODE_RELEASE_FILE', 'JIUWENSWARM_RELEASE_FILE']) { return }"
         ));
     }
 
@@ -3721,7 +3549,7 @@ mod tests {
             // The mode of the harness this build runs, as its page or trigger set it.
             assert!(
                 jf.contains(
-                    "String mode = (env.MODE ?: (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE)) ?: 'git'"
+                    "String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'"
                 ),
                 "{shape:?}"
             );
@@ -3753,7 +3581,7 @@ mod tests {
     }
 
     #[test]
-    fn deepswe_pages_draw_shared_harness_inputs() {
+    fn deepswe_pages_draw_named_harness_inputs() {
         for profile in [UiProfile::User, UiProfile::Developer] {
             let mut opts = deepswe_opts(Vec::new());
             opts.ui_profile = profile;
@@ -3763,11 +3591,11 @@ mod tests {
                 let xml = eval_job_xml("deepswe", *shape, "d", &opts);
                 for name in DEEPSWE_REACTIVE_FIELDS {
                     let line = param_line(&jf, name);
-                    let label = if name.starts_with("JIUWENSWARM_") {
-                        "JiuwenSwarm input. Shown while HARNESS is jiuwenswarm."
-                    } else {
-                        DESC_SHARED_REACTIVE
-                    };
+                    let harness = if name.starts_with("ICODE_") { "icode" } else { "jiuwenswarm" };
+                    let label = format!(
+                        "{} input. Shown while HARNESS is {harness}.",
+                        harness_label(harness)
+                    );
                     assert!(line.starts_with(&format!("    activeChoiceHtml(name: '{name}', ")), "{line}");
                     assert!(line.contains(&format!("description: '{label}'")), "{line}");
                     assert!(line.contains(&format!(
@@ -3779,7 +3607,6 @@ mod tests {
                     ));
                     assert!(line.contains("script: [classpath: [], sandbox: false, script: 'def h = "), "{line}");
                     assert!(line.contains("fallbackScript: [classpath: [], sandbox: true, script: 'return "), "{line}");
-                    // Every build reads it through the environment block.
                     assert!(jf.contains(&format!("    {name} = \"${{(params.{name} ?: '').trim()")), "{name}");
                 }
                 assert_eq!(params_block(&jf).matches("activeChoiceHtml(").count(), DEEPSWE_REACTIVE_FIELDS.len());
@@ -3788,26 +3615,21 @@ mod tests {
                     DEEPSWE_REACTIVE_FIELDS.len()
                 );
                 assert!(jf.find("  environment {\n").unwrap() < jf.find("  parameters {\n").unwrap());
-                // One release upload; Jenkins cannot redraw a file field.
-                assert!(param_line(&jf, "RELEASE_FILE")
-                    .starts_with("    stashedFile(name: 'RELEASE_FILE', description: '"));
-                assert!(!jf.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"), "{shape:?}");
-                assert!(!jf.contains("stashedFile(name: 'JIUWENSWARM_RELEASE_FILE'"), "{shape:?}");
+                // File uploads stay named; MODE rows hide the unused one via CSS.
+                assert!(param_line(&jf, "ICODE_RELEASE_FILE")
+                    .starts_with("    stashedFile(name: 'ICODE_RELEASE_FILE', description: '"));
+                assert!(param_line(&jf, "JIUWENSWARM_RELEASE_FILE")
+                    .starts_with("    stashedFile(name: 'JIUWENSWARM_RELEASE_FILE', description: '"));
                 for name in ["HARNESS", "DEEPSEEK_MODEL"] {
                     assert!(param_line(&jf, name).starts_with("    choice("), "{name}");
                 }
-                // Worker scripts still get ICODE_* / JIUWENSWARM_* from MODE / GIT_*.
-                assert!(jf.contains("    ICODE_MODE = \"${params.HARNESS == 'jiuwenswarm' ? 'git' : ("), "{shape:?}");
-                assert!(jf.contains("    JIUWENSWARM_GIT_URL = \"${params.HARNESS == 'jiuwenswarm' ? ("), "{shape:?}");
             }
         }
-        // An omitted field gets the job's default.
         let one = eval_jenkinsfile("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
         assert!(one.contains(
             "    JIUWENSWARM_MAX_TURNS = \"${(params.JIUWENSWARM_MAX_TURNS ?: '').trim() && !(params.JIUWENSWARM_MAX_TURNS ?: '').contains('<') ? params.JIUWENSWARM_MAX_TURNS.trim() : ('500')}\""
         ));
         assert!(one.contains("'https://gitcode.com/michaelling/jiuwenswarm'"));
-        // A suite with one harness keeps plain fields.
         let opts = deepswe_opts(Vec::new());
         for bench in ["lolbench", "swebenchpro"] {
             for shape in EVAL_SHAPES {
@@ -3821,30 +3643,34 @@ mod tests {
     }
 
     #[test]
-    fn reactive_script_redraws_shared_fields_and_hides_jiuwen_only() {
+    fn reactive_script_hides_the_other_harness_and_its_release_file() {
         let specs = eval_params("deepswe", JobShape::One, &deepswe_opts(Vec::new()));
         let spec = |n: &str| specs.iter().find(|p| p.name == n).unwrap();
-        let url = reactive_script(spec("GIT_URL"));
+        let url = reactive_script(spec("JIUWENSWARM_GIT_URL"));
         assert!(!url.contains('\n'));
-        assert!(url.starts_with("def h = binding.hasVariable('HARNESS') ? HARNESS : ''; "), "{url}");
-        assert!(url.contains("if (h == 'icode') { return '<input name=\"value\" type=\"text\""));
-        assert!(url.contains("if (h == 'jiuwenswarm') { return '<input name=\"value\" type=\"text\""));
-        assert!(url.contains("value=\"https://gitcode.com/michaelling/jiuwenswarm\""));
-        // The help's apostrophe is HTML, so it cannot end the Groovy string.
+        assert!(url.starts_with(
+            "def h = binding.hasVariable('HARNESS') ? HARNESS : ''; if (h == 'jiuwenswarm') { return '<input name=\"value\" type=\"text\" class=\"jenkins-input setting-input\" value=\"https://gitcode.com/michaelling/jiuwenswarm\"><div class=\"jenkins-form-description\">Git: JiuwenSwarm https URL"
+        ), "{url}");
         assert!(url.contains("the controller&#39;s gitcode-pat credential"));
-        let kind = reactive_script(spec("GIT_REF_KIND"));
+        assert!(url.contains("data-unused=\"1\""));
+        let icode_mode = reactive_script(spec("ICODE_MODE"));
+        assert!(icode_mode.contains("if (h == 'icode')"));
+        assert!(icode_mode.contains(
+            r#".jenkins-form-item:has(input[name="name"][value="JIUWENSWARM_RELEASE_FILE"]){display:none!important}"#
+        ));
+        let jiuwen_mode = reactive_script(spec("JIUWENSWARM_MODE"));
+        assert!(jiuwen_mode.contains(
+            r#".jenkins-form-item:has(input[name="name"][value="ICODE_RELEASE_FILE"]){display:none!important}"#
+        ));
+        let kind = reactive_script(spec("ICODE_GIT_REF_KIND"));
         assert!(kind.contains("if (h == 'icode')"));
-        assert!(kind.contains("if (h == 'jiuwenswarm')"));
         assert!(kind.contains(
             "<div class=\"jenkins-select\"><select name=\"value\" class=\"jenkins-select__input\"><option value=\"branch\" selected>branch</option><option value=\"tag\">tag</option>"
-        ) || kind.contains("<option value=\"pr\" selected>pr</option>"), "{kind}");
+        ), "{kind}");
         let agent = reactive_script(spec("JIUWENSWARM_AGENT_MODE"));
         assert!(agent.contains("if (h == 'jiuwenswarm')"));
         assert!(agent.contains("data-unused=\"1\""));
         assert!(agent.contains(".jenkins-form-item:has([data-unused]){display:none!important}"));
-        let turns = reactive_script(spec("JIUWENSWARM_MAX_TURNS"));
-        assert!(turns.contains("data-unused=\"1\""));
-        assert!(turns.contains("value=\"500\""));
     }
 
     #[test]
@@ -3872,18 +3698,17 @@ mod tests {
     }
 
     #[test]
-    fn without_active_choices_shared_fields_keep_preferred_defaults() {
+    fn without_active_choices_every_harness_input_is_labelled() {
         let mut opts = deepswe_opts(Vec::new());
         opts.active_choices = false;
         for shape in EVAL_SHAPES {
             let jf = eval_jenkinsfile("deepswe", *shape, &opts);
             assert!(!jf.contains("activeChoiceHtml("), "{shape:?}");
+            assert!(!jf.contains("  environment {\n"), "{shape:?}");
             assert!(!eval_job_xml("deepswe", *shape, "d", &opts).contains("unochoice"), "{shape:?}");
-            // Still maps MODE / GIT_* onto ICODE_* / JIUWENSWARM_* for the worker.
-            assert!(jf.contains("  environment {\n"), "{shape:?}");
-            assert!(param_line(&jf, "GIT_REF").contains("Defaults of HARNESS=icode."));
+            assert!(param_line(&jf, "ICODE_GIT_REF").contains("description: 'iCode only (HARNESS=icode). "));
             assert!(param_line(&jf, "JIUWENSWARM_MAX_TURNS").starts_with(
-                "    string(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500', description: '"
+                "    string(name: 'JIUWENSWARM_MAX_TURNS', defaultValue: '500', description: 'JiuwenSwarm only (HARNESS=jiuwenswarm). "
             ));
             assert_eq!(
                 visible_names("deepswe", *shape, &opts),
@@ -3892,9 +3717,9 @@ mod tests {
             );
         }
         let some = eval_jenkinsfile("deepswe", JobShape::Some_, &opts);
-        assert!(some.contains("string(name: 'MODE', value: params.MODE)"));
+        assert!(some.contains("string(name: 'ICODE_MODE', value: params.ICODE_MODE)"));
         assert!(some.contains(
-            "String mode = (env.MODE ?: (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE)) ?: 'git'"
+            "String mode = (params.HARNESS == 'jiuwenswarm' ? env.JIUWENSWARM_MODE : env.ICODE_MODE) ?: 'git'"
         ));
         assert!(reactive_scripts(&opts).is_empty());
     }
@@ -3902,7 +3727,7 @@ mod tests {
     #[test]
     fn config_preapproves_each_reactive_script_once() {
         let scripts = reactive_scripts(&deepswe_opts(Vec::new()));
-        // Six fields; GIT_URL's help differs on the dispatchers.
+        // Ten fields; ICODE_GIT_URL's help differs on the dispatchers.
         assert_eq!(scripts.len(), DEEPSWE_REACTIVE_FIELDS.len() + 1);
         let groovy = preapprove_groovy(&scripts);
         assert!(groovy.contains("ScriptApproval.get()"));
@@ -3937,7 +3762,7 @@ mod tests {
             }
             // The shard announces which harness and input it runs.
             assert!(jf.contains(
-                "HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}${MODE:+ MODE=$MODE}"
+                "HARNESS=$HARNESS ICODE_MODE=$ICODE_MODE${JIUWENSWARM_MODE:+ JIUWENSWARM_MODE=$JIUWENSWARM_MODE}"
             ));
         }
     }
@@ -4315,7 +4140,7 @@ mod tests {
         assert!(!xml.contains("file(name:"));
         assert!(xml.contains("stashedFile(name: 'ICODE_RELEASE_FILE'"));
         assert!(xml.contains("'ICODE_RELEASE_FILE'"));
-        assert!(xml.contains("unstash 'RELEASE_FILE'") || xml.contains("unstash dest"));
+        assert!(xml.contains("unstash upload"));
     }
 
     #[test]
