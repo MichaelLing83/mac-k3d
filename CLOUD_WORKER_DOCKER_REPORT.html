@@ -49,7 +49,7 @@
 </ul>
 </li>
 <li><strong>The commands are in a separate guide:</strong> <a href="CLOUD_WORKER_INVESTIGATION_STEPS.html"><code>CLOUD_WORKER_INVESTIGATION_STEPS.md</code></a>. It has every step, with its purpose, risk, copy-paste command and expected result.</li>
-<li><strong>Status (15 Oct, 11:10):</strong> guide step 0 (securing <code>root.pem</code>) is next.</li>
+<li><strong>Status (15 Oct, 13:01):</strong> guide steps 0 to 4.2 passed. Q9 is answered: no memory crisis and no disk stall on 6 or 7 Oct. Next is step 4.3.</li>
 </ul>
 <h2 id="summary">Summary</h2>
 <ul>
@@ -299,9 +299,9 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <td>Mount table, <code>docker inspect</code></td>
 </tr>
 <tr>
-<td>11:48</td>
-<td>Docker is stopped</td>
-<td><code>systemctl show docker.service</code></td>
+<td>11:48:51</td>
+<td>Docker and containerd are both stopped</td>
+<td><code>logs/boots.txt</code> (guide step 4.1)</td>
 </tr>
 <tr>
 <td>12:09:49</td>
@@ -309,9 +309,9 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <td>File times</td>
 </tr>
 <tr>
-<td>13:07</td>
-<td>Docker starts again</td>
-<td><code>systemctl show docker.service</code></td>
+<td>12:54:32</td>
+<td>containerd starts again. <code>/data</code> is already mounted, so this start is on the real database. Step 4.4 checks Docker</td>
+<td><code>logs/boots.txt</code></td>
 </tr>
 <tr>
 <td>14:41</td>
@@ -384,7 +384,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <li>containerd and Docker had no rule to wait for <code>/data</code> then, so they started on the empty <code>/data</code> folder of the system disk. containerd created a new, empty database there and kept it open.</li>
 <li><code>/data</code> was mounted at 10:54 while containerd was running. From then on, containerd's new files and folders went to the real disk; folders 37 and 54 are there. Its records stayed in the empty database, now hidden under the mount.</li>
 <li>containerd's routine cleanup removes every layer folder that its database doesn't list. With an empty database, that is nearly every folder of the real store. The cleanup runs whenever a layer record is removed, for example when a container is removed. So anyone using Docker in that window could have triggered it without knowing.</li>
-<li>When containerd restarted on the real database (between 11:41 and 14:41), the real records pointed at deleted folders.</li>
+<li>containerd was stopped at 11:48:51 and started again at 12:54:32, with <code>/data</code> already mounted, so it opened the real database. The real records pointed at deleted folders. The next container, at 14:41, got folder 354686.</li>
 </ol>
 <p>This fits the evidence. The DeepSWE folders are gone while their downloaded files remain, folders 37 and 54 come from a second numbering, and everything pulled since 12 Oct works.</p>
 <p>The step that turned &quot;an empty store for 16 minutes&quot; into data loss was step 3: mounting <code>/data</code> under a running containerd. Had containerd and Docker been stopped first, the real store would have been untouched.</p>
@@ -422,7 +422,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>An earlier memory crisis or hang, around 6 and 7 Oct</td>
-<td>Out-of-memory kills or hung tasks in the kernel log on those days</td>
+<td>Out-of-memory kills or hung tasks in the kernel log on those days. Ruled out on 15 Oct: none on either day (Q9)</td>
 <td>Q6, Q9</td>
 </tr>
 <tr>
@@ -549,19 +549,19 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tbody>
 <tr>
 <td>Fingerprint (guide step 0.2)</td>
-<td></td>
+<td><code>2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)</code></td>
 </tr>
 <tr>
 <td>Root's OK to use it for step 1 (who, when)</td>
-<td></td>
+<td>Not recorded in this chat. Toby started step 1 at 11:55</td>
 </tr>
 <tr>
 <td>Used for step 1 (from, to)</td>
-<td></td>
+<td>15 Oct 11:55:56 to 12:03. Logged out with <code>exit</code></td>
 </tr>
 <tr>
 <td>Rule installed, and <code>sudo -l -U toby</code> checked (time)</td>
-<td></td>
+<td>15 Oct, about 12:01. Exactly the 17 commands, each as <code>(root)</code>, and nothing else</td>
 </tr>
 </tbody>
 </table>
@@ -774,98 +774,122 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tr>
 <td>0.1</td>
 <td><code>root.pem</code> moved to <code>~/.ssh</code>, mode 600</td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td>15 Oct, before 11:54</td>
+<td><code>-rw------- … /home/Toby/.ssh/cloud-worker-root.pem</code></td>
+<td>the file itself</td>
+<td>yes</td>
 </tr>
 <tr>
 <td>0.2</td>
 <td>Key fingerprint</td>
-<td></td>
-<td></td>
+<td>15 Oct, before 11:54</td>
+<td><code>2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)</code></td>
 <td>section 4.3</td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>0.3</td>
 <td>Test login as root</td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td>15 Oct 11:54:36</td>
+<td><code>root</code>, <code>iZt4ndd2dff7gqjta7mppaZ</code></td>
+<td>terminal output</td>
+<td>yes</td>
 </tr>
 <tr>
-<td>1</td>
-<td>Sudo rule installed (1.1 to 1.8)</td>
-<td></td>
-<td></td>
-<td><code>sudo -l -U toby</code> output</td>
-<td></td>
+<td>1.1 to 1.6</td>
+<td>Root shell, password, rule written, checked, installed, and listed</td>
+<td>15 Oct 11:55 to about 12:01</td>
+<td><code>passwd: password updated successfully</code>; <code>parsed OK</code>; <code>sudo -l -U toby</code> lists the 17 commands as <code>(root)</code> only</td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>1.7</td>
+<td>Automatic removal after 3 days</td>
+<td>15 Oct, about 12:03</td>
+<td><code>Running timer as unit: toby-investigate-expire.timer</code></td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>1.8</td>
+<td>Leave the root shell</td>
+<td>15 Oct, about 12:03</td>
+<td><code>logout</code>, then the prompt of Toby's PC</td>
+<td>terminal output</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>2.1</td>
+<td>Logged in as <code>toby</code></td>
+<td>15 Oct 12:03</td>
+<td>Prompt <code>toby@iZt4ndd2dff7gqjta7mppaZ:~$</code></td>
+<td>terminal output</td>
+<td>yes</td>
 </tr>
 <tr>
 <td>2.2</td>
 <td>Groups and rule checked as <code>toby</code></td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td>15 Oct, about 12:05</td>
+<td>Groups <code>adm</code>, <code>docker</code>, <code>systemd-journal</code>. <code>sudo -l</code> lists the 17 commands. <code>sudo true</code> refused: <code>I'm sorry toby. I'm afraid I can't do that</code></td>
+<td>terminal output</td>
+<td>yes</td>
 </tr>
 <tr>
 <td>2.3</td>
 <td>Recording started</td>
-<td></td>
-<td></td>
-<td><code>sessions/&lt;date_time&gt;.log</code></td>
-<td></td>
+<td>15 Oct 12:05</td>
+<td>Prompt changed to <code>~/snapshot-audit/logs</code> with no other output</td>
+<td><code>sessions/2026-10-15_1205.log</code></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>2.4</td>
 <td>Scripts saved</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 12:10</td>
+<td><code>scripts OK</code></td>
 <td><code>long_scans.sh</code>, <code>layer_test.sh</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>3.1</td>
 <td>Logs copied</td>
-<td></td>
-<td></td>
+<td>15 Oct, finished 12:38</td>
+<td>165 GB free. 12 files, 3.3 GB: three <code>syslog</code>, three <code>auth.log</code> and three <code>kern.log</code> archives, <code>auth.log.1</code>, <code>kern.log.1</code>, and the journal export (341 MB). The 15 GB <code>syslog.1</code> was left in place, as planned</td>
 <td><code>logcopy/</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>3.2</td>
 <td>Slow log scans started</td>
-<td></td>
-<td></td>
-<td><code>logs/long_scans.log</code></td>
-<td></td>
+<td>15 Oct 12:42:12, process 3899174</td>
+<td>Finished at 12:45:28. Q6 at 12:44:43, Q10 at 12:45:28. awk warned about one non-text line in <code>syslog.1</code> and continued</td>
+<td><code>logs/long_scans.log</code>, <code>logs/damage_first_seen.txt</code>, <code>logs/syslog_volume.txt</code></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>3.3</td>
 <td>Image list; start test started</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 12:46, process 3954694</td>
+<td>7,750 images (7,089 on 14 Oct). Start test running: 1,043 of 7,750 done in the first 3 minutes</td>
 <td><code>inventory/images_list.txt</code>, <code>inventory/layer_test.log</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.1</td>
 <td>Boots (Q1, Q5)</td>
-<td></td>
-<td></td>
+<td>15 Oct 12:54</td>
+<td>Three boots: 24 Jul, the 11 Sep boot (journal now starts 17 Sep), and 12 Oct 10:38. Boot 0 confirms Q1. Boot -1 ends 11 Oct 15:24 with no shutdown</td>
 <td><code>logs/boots.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.2</td>
 <td>Memory, stuck processes, disk (Q9)</td>
-<td></td>
-<td></td>
+<td>15 Oct, about 13:01</td>
+<td>OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. None on 6 or 7 Oct. No disk errors. Disk stalls on 14-15 Sep, 18 Sep, 21 Sep, and 14-15 Oct</td>
 <td><code>logs/kernel.txt</code>, <code>logs/oom_per_day.txt</code>, <code>logs/oom_victims.txt</code>, <code>logs/hung_tasks.txt</code>, <code>logs/journald_watchdog.txt</code></td>
-<td></td>
+<td>yes</td>
 </tr>
 <tr>
 <td>4.3</td>
@@ -1017,10 +1041,16 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </thead>
 <tbody>
 <tr>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td>15 Oct, about 12:00</td>
+<td>1.5</td>
+<td>After <code>rm -f</code> (which printed nothing, as expected), the letter <code>z</code> was typed. The shell answered <code>z: command not found</code></td>
+<td>Harmless. No file was changed. Continue with 1.7</td>
+</tr>
+<tr>
+<td>15 Oct 11:55</td>
+<td>1.1</td>
+<td>The login banner reported 366 zombie processes, and the previous root login was 15 Oct 10:15:39 from 119.8.240.30</td>
+<td>Noted. The zombies are not part of this investigation. The earlier root login is a lead for Q2, to be matched in step 4.3</td>
 </tr>
 </tbody>
 </table>
@@ -1039,7 +1069,7 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 <tbody>
 <tr>
 <td>Q1</td>
-<td>containerd started at 10:38:15 and 10:40:15; <code>/data</code> was mounted at 10:54:05 (seen on 15 Oct; guide step 4.1 records it)</td>
+<td>Recorded. On 12 Oct containerd started at 10:38:15, timed out at 10:39:45, and started at 10:40:15. Docker started at 10:42:54. <code>/data</code> was mounted at 10:54:05, so both were already running</td>
 <td><code>logs/boots.txt</code></td>
 <td>confirmed</td>
 </tr>
@@ -1057,21 +1087,21 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q4</td>
-<td></td>
-<td><code>logs/day_1012.txt</code></td>
-<td></td>
+<td>Partly answered. containerd and Docker were both stopped at 11:48:51. containerd was started again at 12:54:32. Step 4.4 checks whether Docker came back then too. The split-brain window is 10:40 to 11:48, not until 14:41</td>
+<td><code>logs/boots.txt</code>; <code>logs/day_1012.txt</code> still to come</td>
+<td>partly confirmed</td>
 </tr>
 <tr>
 <td>Q5</td>
-<td></td>
+<td>The retained journal for the 11 Sep boot has no containerd or <code>/data</code> lines, and its oldest remaining entry moved from 11 Sep (seen at 10:48 today) to 17 Sep. It ends 11 Oct 15:24 with no shutdown. Step 5.3 still has to check the folder dates</td>
 <td><code>logs/boots.txt</code>, <code>inventory/low_numbered_dirs.txt</code></td>
-<td></td>
+<td>open</td>
 </tr>
 <tr>
 <td>Q6</td>
-<td></td>
+<td>First lines found so far: <code>blob not found</code> on 13 Sep 01:37 (the oldest log day, so it may be older), <code>missing parent</code> on 14 Sep 12:05, <code>no space left</code> on 18 Sep 17:27, <code>failed to stat parent</code> on 14 Oct 17:01. <code>already exists</code> does not appear in the daemon log. Read in full at step 7.1</td>
 <td><code>logs/damage_first_seen.txt</code></td>
-<td></td>
+<td>partly confirmed</td>
 </tr>
 <tr>
 <td>Q7</td>
@@ -1087,15 +1117,15 @@ failed to mount ... lowerdir=.../snapshots/154273/fs:...:.../snapshots/153120/fs
 </tr>
 <tr>
 <td>Q9</td>
-<td>Out of memory from 11 Oct 15:21 to 12 Oct 10:36; journal killed; restart without a clean shutdown at 10:38. <code>dockerd</code> stalled on disk writes on 14 Oct from 20:21 (both seen on 15 Oct). Still open: who restarted the host, and whether there were earlier episodes</td>
-<td><code>logs/kernel.txt</code>, <code>logs/oom_per_day.txt</code>, <code>logs/hung_tasks.txt</code>, root's answer</td>
-<td>partly confirmed</td>
+<td>OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. Victims are <code>java</code>, <code>python</code>, <code>python3</code>, <code>opencode</code>, <code>rg</code> and <code>harbor</code>, never containerd or Docker. The journal failed repeatedly on 11 Oct from 01:47 to 15:36. Disk stalls on 14, 15, 18 and 21 Sep, and from 14 Oct 13:00 to 15 Oct 00:00. No OOM kill and no disk stall on 6 or 7 Oct. No <code>I/O error</code>. The 12 Oct boot recovered both disks. Still open: who restarted the host</td>
+<td><code>logs/oom_per_day.txt</code>, <code>logs/oom_victims.txt</code>, <code>logs/hung_tasks.txt</code>, <code>logs/journald_watchdog.txt</code>, <code>logs/kernel.txt</code></td>
+<td>confirmed, except who restarted it</td>
 </tr>
 <tr>
 <td>Q10</td>
-<td></td>
+<td><code>dockerd</code> wrote 22,284,226 of the lines in <code>syslog.1</code>. Volume jumped from 41 MB on 5 Oct to 506 MB on 6 Oct, and peaked at 4,568 MB on 9 Oct. 11 Oct was only 55 MB</td>
 <td><code>logs/syslog_volume.txt</code></td>
-<td></td>
+<td>confirmed</td>
 </tr>
 <tr>
 <td>Q11</td>

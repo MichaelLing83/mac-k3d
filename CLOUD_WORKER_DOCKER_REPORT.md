@@ -12,7 +12,7 @@
   - the answers (section 7);
   - where each piece of evidence is (Appendix B).
 - **The commands are in a separate guide:** [`CLOUD_WORKER_INVESTIGATION_STEPS.md`](CLOUD_WORKER_INVESTIGATION_STEPS.md). It has every step, with its purpose, risk, copy-paste command and expected result.
-- **Status (15 Oct, 11:10):** guide step 0 (securing `root.pem`) is next.
+- **Status (15 Oct, 13:01):** guide steps 0 to 4.2 passed. Q9 is answered: no memory crisis and no disk stall on 6 or 7 Oct. Next is step 4.3.
 
 ## Summary
 
@@ -135,9 +135,9 @@ Ten tries named ten different missing files. Their digests are spread across the
 | 10:54:02 | `/etc/fstab.bak` is saved | File time |
 | 10:54:05 | `/data` is mounted. ext4 reports `recovery complete` and `1386 orphan inodes deleted`. It has not been unmounted since | Kernel log, `systemctl show data.mount` |
 | 11:33 and 11:41 | Two containers are created on the main Docker with layer folders 37 and 54. containerd is numbering from a new, empty database; the real one is past 350,000 | Mount table, `docker inspect` |
-| 11:48 | Docker is stopped | `systemctl show docker.service` |
+| 11:48:51 | Docker and containerd are both stopped | `logs/boots.txt` (guide step 4.1) |
 | 12:09:49 | `/etc/fstab` is rewritten as `UUID=25454905-… /data ext4 defaults 0 0`. Drop-ins `RequiresMountsFor=/data` and `AssertPathIsMountPoint=/data` are added to `containerd.service` and `docker.service` | File times |
-| 13:07 | Docker starts again | `systemctl show docker.service` |
+| 12:54:32 | containerd starts again. `/data` is already mounted, so this start is on the real database. Step 4.4 checks Docker | `logs/boots.txt` |
 | 14:41 | The next container gets layer folder 354686, so containerd is back on the real database | Mount table, `docker inspect` |
 
 The layer folder of each container mount on the main Docker, with the container's creation time (UTC, which is CST minus 8 hours):
@@ -187,7 +187,7 @@ Every failure has the same shape: containerd's records point at data that is gon
 2. containerd and Docker had no rule to wait for `/data` then, so they started on the empty `/data` folder of the system disk. containerd created a new, empty database there and kept it open.
 3. `/data` was mounted at 10:54 while containerd was running. From then on, containerd's new files and folders went to the real disk; folders 37 and 54 are there. Its records stayed in the empty database, now hidden under the mount.
 4. containerd's routine cleanup removes every layer folder that its database doesn't list. With an empty database, that is nearly every folder of the real store. The cleanup runs whenever a layer record is removed, for example when a container is removed. So anyone using Docker in that window could have triggered it without knowing.
-5. When containerd restarted on the real database (between 11:41 and 14:41), the real records pointed at deleted folders.
+5. containerd was stopped at 11:48:51 and started again at 12:54:32, with `/data` already mounted, so it opened the real database. The real records pointed at deleted folders. The next container, at 14:41, got folder 354686.
 
 This fits the evidence. The DeepSWE folders are gone while their downloaded files remain, folders 37 and 54 come from a second numbering, and everything pulled since 12 Oct works.
 
@@ -207,7 +207,7 @@ The candidates, and what each one predicts:
 | A clean-up that deleted files by age, for example `find … -mtime +30 -delete` run on `/data` to free space | Missing files are all older than some age; files still present are younger | Q7, Q8 |
 | Files deleted by hand in `/data/containerd`, for example to free space (only root can write there) | A deletion in root's history, a root login or a sudo command at that time | Q2, Q8 |
 | Files lost in the forced restart on 12 Oct | Only files written shortly before 12 Oct 10:38 are missing; the old images' files aren't | Q7, Q9 |
-| An earlier memory crisis or hang, around 6 and 7 Oct | Out-of-memory kills or hung tasks in the kernel log on those days | Q6, Q9 |
+| An earlier memory crisis or hang, around 6 and 7 Oct | Out-of-memory kills or hung tasks in the kernel log on those days. Ruled out on 15 Oct: none on either day (Q9) | Q6, Q9 |
 | The same fstab problem at the 11 Sep boot | Low-numbered layer folders dated 11 Sep. Unlikely: images pulled on 10 Sep still worked on 8 Oct | Q5 |
 
 ### 3.3 What it means on a shared host
@@ -265,10 +265,10 @@ Why this is safe:
 
 | Item | Value |
 |---|---|
-| Fingerprint (guide step 0.2) | |
-| Root's OK to use it for step 1 (who, when) | |
-| Used for step 1 (from, to) | |
-| Rule installed, and `sudo -l -U toby` checked (time) | |
+| Fingerprint (guide step 0.2) | `2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)` |
+| Root's OK to use it for step 1 (who, when) | Not recorded in this chat. Toby started step 1 at 11:55 |
+| Used for step 1 (from, to) | 15 Oct 11:55:56 to 12:03. Logged out with `exit` |
+| Rule installed, and `sudo -l -U toby` checked (time) | 15 Oct, about 12:01. Exactly the 17 commands, each as `(root)`, and nothing else |
 
 ### 4.4 Rules Toby follows
 
@@ -345,18 +345,21 @@ One row per guide step: when it was done, the result in one line, and where the 
 | Guide step | What | Done (date, time) | Result | Evidence | Sent |
 |---|---|---|---|---|---|
 | (before) | Read-only checks of 14 and 15 Oct (Appendix A) | 14 Oct; 15 Oct 10:48 to 11:00 | Sections 2 and 3 | `facts.txt`, `base_status.tsv`, `deepswe_status.tsv`, `cause_checks.txt` | yes |
-| 0.1 | `root.pem` moved to `~/.ssh`, mode 600 | | | | |
-| 0.2 | Key fingerprint | | | section 4.3 | |
-| 0.3 | Test login as root | | | | |
-| 1 | Sudo rule installed (1.1 to 1.8) | | | `sudo -l -U toby` output | |
-| 2.2 | Groups and rule checked as `toby` | | | | |
-| 2.3 | Recording started | | | `sessions/<date_time>.log` | |
-| 2.4 | Scripts saved | | | `long_scans.sh`, `layer_test.sh` | |
-| 3.1 | Logs copied | | | `logcopy/` | |
-| 3.2 | Slow log scans started | | | `logs/long_scans.log` | |
-| 3.3 | Image list; start test started | | | `inventory/images_list.txt`, `inventory/layer_test.log` | |
-| 4.1 | Boots (Q1, Q5) | | | `logs/boots.txt` | |
-| 4.2 | Memory, stuck processes, disk (Q9) | | | `logs/kernel.txt`, `logs/oom_per_day.txt`, `logs/oom_victims.txt`, `logs/hung_tasks.txt`, `logs/journald_watchdog.txt` | |
+| 0.1 | `root.pem` moved to `~/.ssh`, mode 600 | 15 Oct, before 11:54 | `-rw------- … /home/Toby/.ssh/cloud-worker-root.pem` | the file itself | yes |
+| 0.2 | Key fingerprint | 15 Oct, before 11:54 | `2048 SHA256:QHhVAmPVaTRus4W2bIv1v5ekDbwRct4041vLrXOJfuc no comment (RSA)` | section 4.3 | yes |
+| 0.3 | Test login as root | 15 Oct 11:54:36 | `root`, `iZt4ndd2dff7gqjta7mppaZ` | terminal output | yes |
+| 1.1 to 1.6 | Root shell, password, rule written, checked, installed, and listed | 15 Oct 11:55 to about 12:01 | `passwd: password updated successfully`; `parsed OK`; `sudo -l -U toby` lists the 17 commands as `(root)` only | terminal output | yes |
+| 1.7 | Automatic removal after 3 days | 15 Oct, about 12:03 | `Running timer as unit: toby-investigate-expire.timer` | terminal output | yes |
+| 1.8 | Leave the root shell | 15 Oct, about 12:03 | `logout`, then the prompt of Toby's PC | terminal output | yes |
+| 2.1 | Logged in as `toby` | 15 Oct 12:03 | Prompt `toby@iZt4ndd2dff7gqjta7mppaZ:~$` | terminal output | yes |
+| 2.2 | Groups and rule checked as `toby` | 15 Oct, about 12:05 | Groups `adm`, `docker`, `systemd-journal`. `sudo -l` lists the 17 commands. `sudo true` refused: `I'm sorry toby. I'm afraid I can't do that` | terminal output | yes |
+| 2.3 | Recording started | 15 Oct 12:05 | Prompt changed to `~/snapshot-audit/logs` with no other output | `sessions/2026-10-15_1205.log` | yes |
+| 2.4 | Scripts saved | 15 Oct, about 12:10 | `scripts OK` | `long_scans.sh`, `layer_test.sh` | yes |
+| 3.1 | Logs copied | 15 Oct, finished 12:38 | 165 GB free. 12 files, 3.3 GB: three `syslog`, three `auth.log` and three `kern.log` archives, `auth.log.1`, `kern.log.1`, and the journal export (341 MB). The 15 GB `syslog.1` was left in place, as planned | `logcopy/` | yes |
+| 3.2 | Slow log scans started | 15 Oct 12:42:12, process 3899174 | Finished at 12:45:28. Q6 at 12:44:43, Q10 at 12:45:28. awk warned about one non-text line in `syslog.1` and continued | `logs/long_scans.log`, `logs/damage_first_seen.txt`, `logs/syslog_volume.txt` | yes |
+| 3.3 | Image list; start test started | 15 Oct, about 12:46, process 3954694 | 7,750 images (7,089 on 14 Oct). Start test running: 1,043 of 7,750 done in the first 3 minutes | `inventory/images_list.txt`, `inventory/layer_test.log` | yes |
+| 4.1 | Boots (Q1, Q5) | 15 Oct 12:54 | Three boots: 24 Jul, the 11 Sep boot (journal now starts 17 Sep), and 12 Oct 10:38. Boot 0 confirms Q1. Boot -1 ends 11 Oct 15:24 with no shutdown | `logs/boots.txt` | yes |
+| 4.2 | Memory, stuck processes, disk (Q9) | 15 Oct, about 13:01 | OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. None on 6 or 7 Oct. No disk errors. Disk stalls on 14-15 Sep, 18 Sep, 21 Sep, and 14-15 Oct | `logs/kernel.txt`, `logs/oom_per_day.txt`, `logs/oom_victims.txt`, `logs/hung_tasks.txt`, `logs/journald_watchdog.txt` | yes |
 | 4.3 | Logins and sudo (Q2, Q8, Q11) | | | `logs/logins.txt`, `logs/sudo_commands.txt`, `logs/root_logins_by_day.txt`, `logs/around_1012.txt` | |
 | 4.4 | 12 Oct in detail (Q4) | | | `logs/day_1012.txt` | |
 | 4.5 | 14 Oct restarts (Q11) | | | `logs/restarts_1014.txt` | |
@@ -379,7 +382,8 @@ Anything that didn't go as the guide expected:
 
 | Time | Step | What happened | What was decided |
 |---|---|---|---|
-| | | | |
+| 15 Oct, about 12:00 | 1.5 | After `rm -f` (which printed nothing, as expected), the letter `z` was typed. The shell answered `z: command not found` | Harmless. No file was changed. Continue with 1.7 |
+| 15 Oct 11:55 | 1.1 | The login banner reported 366 zombie processes, and the previous root login was 15 Oct 10:15:39 from 119.8.240.30 | Noted. The zombies are not part of this investigation. The earlier root login is a lead for Q2, to be matched in step 4.3 |
 
 ## 7. Investigation result
 
@@ -389,16 +393,16 @@ Fill this in as the steps finish. Status is confirmed, ruled out or open.
 
 | # | Answer | Evidence | Status |
 |---|---|---|---|
-| Q1 | containerd started at 10:38:15 and 10:40:15; `/data` was mounted at 10:54:05 (seen on 15 Oct; guide step 4.1 records it) | `logs/boots.txt` | confirmed |
+| Q1 | Recorded. On 12 Oct containerd started at 10:38:15, timed out at 10:39:45, and started at 10:40:15. Docker started at 10:42:54. `/data` was mounted at 10:54:05, so both were already running | `logs/boots.txt` | confirmed |
 | Q2 | | `logs/around_1012.txt`, `logs/root_keys.txt`, `logs/root_history.txt`, root's answer | |
 | Q3 | | `logs/hidden_store.txt` | |
-| Q4 | | `logs/day_1012.txt` | |
-| Q5 | | `logs/boots.txt`, `inventory/low_numbered_dirs.txt` | |
-| Q6 | | `logs/damage_first_seen.txt` | |
+| Q4 | Partly answered. containerd and Docker were both stopped at 11:48:51. containerd was started again at 12:54:32. Step 4.4 checks whether Docker came back then too. The split-brain window is 10:40 to 11:48, not until 14:41 | `logs/boots.txt`; `logs/day_1012.txt` still to come | partly confirmed |
+| Q5 | The retained journal for the 11 Sep boot has no containerd or `/data` lines, and its oldest remaining entry moved from 11 Sep (seen at 10:48 today) to 17 Sep. It ends 11 Oct 15:24 with no shutdown. Step 5.3 still has to check the folder dates | `logs/boots.txt`, `inventory/low_numbered_dirs.txt` | open |
+| Q6 | First lines found so far: `blob not found` on 13 Sep 01:37 (the oldest log day, so it may be older), `missing parent` on 14 Sep 12:05, `no space left` on 18 Sep 17:27, `failed to stat parent` on 14 Oct 17:01. `already exists` does not appear in the daemon log. Read in full at step 7.1 | `logs/damage_first_seen.txt` | partly confirmed |
 | Q7 | | `inventory/blob_ages.txt` | |
 | Q8 | | `logs/root_history.txt`, `logs/crontabs.txt`, `logs/user_timers.txt` | |
-| Q9 | Out of memory from 11 Oct 15:21 to 12 Oct 10:36; journal killed; restart without a clean shutdown at 10:38. `dockerd` stalled on disk writes on 14 Oct from 20:21 (both seen on 15 Oct). Still open: who restarted the host, and whether there were earlier episodes | `logs/kernel.txt`, `logs/oom_per_day.txt`, `logs/hung_tasks.txt`, root's answer | partly confirmed |
-| Q10 | | `logs/syslog_volume.txt` | |
+| Q9 | OOM kills: 1 on 18 Sep, 20 on 11 Oct, 6 on 12 Oct. Victims are `java`, `python`, `python3`, `opencode`, `rg` and `harbor`, never containerd or Docker. The journal failed repeatedly on 11 Oct from 01:47 to 15:36. Disk stalls on 14, 15, 18 and 21 Sep, and from 14 Oct 13:00 to 15 Oct 00:00. No OOM kill and no disk stall on 6 or 7 Oct. No `I/O error`. The 12 Oct boot recovered both disks. Still open: who restarted the host | `logs/oom_per_day.txt`, `logs/oom_victims.txt`, `logs/hung_tasks.txt`, `logs/journald_watchdog.txt`, `logs/kernel.txt` | confirmed, except who restarted it |
+| Q10 | `dockerd` wrote 22,284,226 of the lines in `syslog.1`. Volume jumped from 41 MB on 5 Oct to 506 MB on 6 Oct, and peaked at 4,568 MB on 9 Oct. 11 Oct was only 55 MB | `logs/syslog_volume.txt` | confirmed |
 | Q11 | | `logs/restarts_1014.txt`, root's answer | |
 | Q12 | | `logs/split_brain_containers.txt` | |
 

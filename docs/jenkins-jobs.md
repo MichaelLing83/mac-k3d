@@ -12,17 +12,17 @@
 
 ## Harness fields on the DeepSWE pages
 
-A DeepSWE page has iCode's fields (`ICODE_*`) and JiuwenSwarm's (`JIUWENSWARM_*`), and shows the ones of the `HARNESS` you pick. The Active Choices plugin (`uno-choice`, installed by `mac-k3d start`) redraws each text and choice field when `HARNESS` changes:
+A DeepSWE page has one set of harness inputs after `N_ROLLOUTS`: `MODE`, `RELEASE_FILE`, `GIT_URL`, `GIT_REF`, and `GIT_REF_KIND`. The Active Choices plugin (`uno-choice`, installed by `mac-k3d start`) redraws each text and choice field when `HARNESS` changes, with that harness's defaults (iCode: `release` first, then `git`; JiuwenSwarm: `git` first, then `release`; git URL/ref/kind from `default_icode_git_*` or `default_jiuwenswarm_git_*`).
 
-| Field | With its harness | With the other harness |
-|-------|------------------|------------------------|
-| `ICODE_MODE`, the three `ICODE_GIT_*` | the input and its help | `Not used with this HARNESS. Pick HARNESS=icode to set it.` |
-| `JIUWENSWARM_MODE`, the three `JIUWENSWARM_GIT_*`, `JIUWENSWARM_AGENT_MODE`, `JIUWENSWARM_MAX_TURNS` | the input and its help | `Not used with this HARNESS. Pick HARNESS=jiuwenswarm to set it.` |
-| `ICODE_RELEASE_FILE`, `JIUWENSWARM_RELEASE_FILE` | always shown, labelled `iCode only (HARNESS=icode).` or `JiuwenSwarm only (HARNESS=jiuwenswarm).`, because Jenkins cannot redraw a file field | |
+| Field | Behaviour |
+|-------|-----------|
+| `MODE`, `GIT_URL`, `GIT_REF`, `GIT_REF_KIND` | Always shown; choices and defaults follow `HARNESS` |
+| `RELEASE_FILE` | Always shown (Jenkins cannot redraw a file field). Upload the drop for the selected harness; leave empty in git mode |
+| `JIUWENSWARM_AGENT_MODE`, `JIUWENSWARM_MAX_TURNS` | Shown while `HARNESS=jiuwenswarm`; with `HARNESS=icode` the whole row (name included) is hidden and the default is kept |
 
-A field of the other harness keeps its default. So does a field left out of a remote trigger (`buildWithParameters`) or a dispatcher's call: every build reads these fields through an `environment` block that falls back to the job's default.
+The Jenkinsfile maps `MODE` / `GIT_*` / `RELEASE_FILE` onto `ICODE_*` or `JIUWENSWARM_*` for the worker scripts. A field left out of a remote trigger (`buildWithParameters`) or a dispatcher's call falls back to that harness's default through an `environment` block. LoLBench and SWE-bench Pro keep `ICODE_*` only.
 
-The redraw runs a short Groovy script outside the sandbox, which Jenkins runs only once approved. `config` pre-approves exactly these scripts and prints a warning when it cannot. An administrator can then approve them on **Manage Jenkins > In-process Script Approval**; until then those fields read `Could not draw this field. The build uses its default.` On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields, each with the `only (HARNESS=…)` label.
+The redraw runs a short Groovy script outside the sandbox, which Jenkins runs only once approved. `config` pre-approves exactly these scripts and prints a warning when it cannot. An administrator can then approve them on **Manage Jenkins > In-process Script Approval**; until then those fields read `Could not draw this field. The build uses its default.` On a controller without the plugin, `config` says to run `mac-k3d start` and writes plain fields with the preferred harness's defaults.
 
 ```mermaid
 flowchart LR
